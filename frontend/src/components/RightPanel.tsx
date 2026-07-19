@@ -420,13 +420,17 @@ function SkillsTab() {
         </div>
       </div>
 
-      {/* 1. skill 卡片（默认展示） */}
-      <SectionHeader
-        icon={<Wrench size={13} className="text-jade" />}
-        title="对外技能"
-        count={topLevel.length}
-        hint="Agent 实际可调用"
-      />
+      {/* 1. skill 标题块（卡片化，跟三层模型 / 底层工具 视觉对齐） */}
+      <div className="flex items-center justify-between rounded-card border border-jade/30 bg-jade-soft/30 px-3 py-2.5 shadow-card">
+        <div className="flex items-center gap-2">
+          <Wrench size={13} className="text-jade" />
+          <span className="text-[12.5px] font-semibold text-ink">对外技能</span>
+          <span className="rounded-full bg-jade px-1.5 py-0.5 text-[10.5px] font-mono font-semibold text-card">
+            {topLevel.length}
+          </span>
+        </div>
+        <span className="text-[11px] text-faint">Agent 实际可调用</span>
+      </div>
       {topLevel.map((s) => (
         <SkillCard key={s.name} skill={s} />
       ))}
@@ -475,19 +479,6 @@ function SkillsTab() {
         </div>
       )}
       {skills.length === 0 && <p className="py-8 text-center text-[12.5px] text-faint">技能清单加载失败或后端未启动</p>}
-    </div>
-  );
-}
-
-function SectionHeader({
-  icon, title, count, hint,
-}: { icon: React.ReactNode; title: string; count: number; hint: string }) {
-  return (
-    <div className="flex items-center gap-1.5 px-1 pt-1 text-[11px] font-medium uppercase tracking-wide text-faint">
-      {icon}
-      <span className="text-ink">{title}</span>
-      <span>· {count}</span>
-      <span className="text-faint">/ {hint}</span>
     </div>
   );
 }
