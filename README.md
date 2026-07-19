@@ -105,6 +105,7 @@ skill/prompt 策略更新」的长期自进化闭环。
 
 ## 📋 更新日志
 
+- **3.8.1** · 2026-07-19 · 修补：SkillsTab「对外技能」SectionHeader 改为卡片化标题块（jade 边框 + jade-soft 背景 + 数量徽章 + Agent 实际可调用 hint），视觉权重对齐三层模型 / 底层工具；删除 SectionHeader 死代码。
 - **3.8.0** · 2026-07-19 · 功能：三层调度模型对齐：composite skill 改名为 skill（atomic 工具 = tool，对 LLM 不可见；skill 聚合多 atomic，对 LLM 可见；agent 只看 skill）。composite.py → skill.py。9 个 skill：event_study_skill / evidence_graph / financial_research / holder_research / macro_intel / market_research / news_intel / post_market_outlook / stock_overview。前端 SkillsTab 三层模型图示同步：tool(52) → skill(9) → agent(5) → team；CompositeSkillCard 改名为 SkillCard；types.ts 同步更新 category 类型。
 - **3.7.0** · 2026-07-19 · 功能：补全 3 个 skill 的美股分支：financial_research 走东财三大报表+财务指标+财报日历+雪球简介+yfinance 卖方研报；holder_research 走 yfinance 股东结构+内部人交易；market_research 在日K 之外追加美股实时行情和公司简介。新增 2 个 atomic tool：get_us_stock_holder（major/institutional/mutualfund holders+insider transactions）、get_us_stock_analyst（recommendations_summary+analyst_price_targets+earnings_estimate+earnings_history）。端到端 NVDA 实测：71% 机构持股、BlackRock 7.96% 持仓、61 位分析师看多、目标价均值 $302.31。
 - **3.6.0** · 2026-07-19 · 功能：美股信息查询补全：新增 7 个 atomic tool（实时行情/公司简介/三大报表/财务指标/个股新闻/财报日历/SEC 文件），通过 stock_overview 和 news_intel 暴露给 LLM；search_stock 加 ticker 强信号修复 NVDA 错配高伟达 bug；接 yfinance 提供 Yahoo Finance 个股新闻 + SEC 8-K/10-Q 原文；前端 LogicCard 订阅 store 修复消息流按钮不刷新、GraphView 列表默认 + 节点排序、隐藏 internal 工具、删除冗余「仅深度研究」按钮。
