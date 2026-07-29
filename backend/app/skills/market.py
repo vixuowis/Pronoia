@@ -35,6 +35,12 @@ def is_us_symbol(symbol: str) -> bool:
     return bool(US_SYMBOL_RE.match(s))
 
 
+def is_a_share_index_symbol(symbol: str) -> bool:
+    """判断是否为常见 A 股指数代码（如 sh000300 / sz399001 / sz399006）。"""
+    s = (symbol or "").strip().lower()
+    return bool(re.match(r"^(sh000\d{3}|sz399\d{3})$", s))
+
+
 def norm_us_symbol(symbol: str) -> str:
     return (symbol or "").strip().upper()
 
@@ -446,7 +452,7 @@ def _clean_ohlcv(df: pd.DataFrame, limit: int = 250) -> tuple[pd.DataFrame, bool
         "properties": {"keyword": {"type": "string", "description": "股票名称、简称或代码片段"}},
         "required": ["keyword"],
     },
-    internal=True,)
+    internal=False,)
 def search_stock(keyword: str) -> dict:
     # 1) A 股搜索：sina suggest3（网络失败也不算致命）
     a_items: list[dict] = []
@@ -1217,7 +1223,7 @@ def get_us_stock_analyst(symbol: str) -> dict:
     "get_current_date",
     "返回服务器当前日期与时间（用于对齐「最近/今天」等相对时间表述）。",
     {"type": "object", "properties": {}, "required": []},
-    internal=True,)
+    internal=False,)
 def get_current_date() -> dict:
     now = datetime.now().astimezone()
     weekdays = "一二三四五六日"

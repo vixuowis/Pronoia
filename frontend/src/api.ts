@@ -5,6 +5,7 @@ import type {
   CaseItem,
   Mode,
   SkillMeta,
+  SuggestionItem,
   SSEEvent,
 } from "./types";
 
@@ -31,6 +32,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   skills: () => req<SkillMeta[]>("/skills"),
   agents: () => req<AgentMeta[]>("/agents"),
+  suggestions: () => req<{ items: SuggestionItem[]; source: string; fallback: boolean }>("/suggestions"),
   cases: () => req<CaseItem[]>("/cases"),
   createCase: (title?: string) =>
     req<CaseItem>("/cases", { method: "POST", body: JSON.stringify(title ? { title } : {}) }),

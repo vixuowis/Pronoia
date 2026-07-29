@@ -78,15 +78,12 @@ export default function Composer() {
 
   const placeholder =
     mode === "team"
-      ? `研究团队 ${teamMembers.length} 人调度 · Planner 拆解 + 专家串行 + 复核…`
+      ? `研究团队 主理人 + ${teamMembers.length + 1} 专家调度 · Planner 拆解 + 专家串行 + 复核…`
       : mode === "agent" && currentAgent
         ? `直接问「${currentAgent.name}」· 单专家 ≤8 轮工具循环…`
         : "主理人调度 · 任何财经事件、行情、公告、宏观问题…";
 
-  // team 模式 chip 文案：0 选 = "仅深度研究"，否则 N 个专家
-  const teamChipText = teamMembers.length === 0
-    ? "仅深度研究"
-    : `${teamMembers.length} 个专家`;
+  const teamChipText = `${teamMembers.length + 1} 个专家`;
 
   return (
     <div className="border-t border-edge bg-paper/90 px-4 pb-4 pt-3 backdrop-blur">
@@ -135,7 +132,7 @@ export default function Composer() {
                 <button
                   onClick={() => setTeamPickerOpen(true)}
                   className="inline-flex items-center gap-1.5 rounded-full border border-jade/40 bg-jade-soft px-2 py-0.5 text-[11px] font-medium text-jade transition-all hover:bg-jade hover:text-card"
-                  title="选择团队成员"
+                  title="选择团队专家（深度研究者必派，主理人综合）"
                 >
                   <Users size={10} />
                   {teamChipText}

@@ -205,14 +205,6 @@ function ArtifactList() {
 
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 pb-4">
         {(() => {
-          // 分组：置顶 → 图表（kline/line）→ 表格（table）→ 证据（evidence）→ 报告/图谱（report/graph）→ 其它
-          const groups: Array<{ key: string; label: string; kinds: string[] }> = [
-            { key: "pinned", label: "已置顶", kinds: ["pinned"] },
-            { key: "chart", label: "图表", kinds: ["kline", "line"] },
-            { key: "table", label: "数据表", kinds: ["table"] },
-            { key: "evidence", label: "资讯证据", kinds: ["evidence"] },
-            { key: "study", label: "深度研究", kinds: ["graph", "report"] },
-          ];
           const pinned = artifacts.filter((a) => a.pinned);
           const byKind: Record<string, typeof artifacts> = { kline: [], line: [], table: [], evidence: [], graph: [], report: [] };
           for (const a of artifacts) {

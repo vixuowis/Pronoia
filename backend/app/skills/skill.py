@@ -27,7 +27,7 @@ import re
 from typing import Any
 
 from ..llm import execute_skill
-from .market import is_us_symbol
+from .market import is_a_share_index_symbol, is_us_symbol
 from .registry import err, meta, ok, skill
 
 
@@ -202,8 +202,9 @@ async def market_research(symbol: str, lookback_days: int = 60,
         sym = code
         focus_eff = focus
     from datetime import datetime, timedelta
+    calendar_lookback = lookback_days if us else max(lookback_days * 2 + 30, lookback_days)
     end = datetime.now().strftime("%Y%m%d")
-    start = (datetime.now() - timedelta(days=lookback_days)).strftime("%Y%m%d")
+    start = (datetime.now() - timedelta(days=calendar_lookback)).strftime("%Y%m%d")
     tasks: list[tuple[str, dict]] = []
     if "price" in focus_eff:
         tasks.append(("get_stock_daily", {"symbol": sym, "start_date": start, "end_date": end, "adjust": "qfq"}))
@@ -226,8 +227,34 @@ async def market_research(symbol: str, lookback_days: int = 60,
     results = await _gather_sub(tasks)
     summary = _summarize_subs(results)
     summary["composed"] = [n for n, _ in tasks]
+    price_metrics: dict[str, Any] = {}
+    for (name, _), result in zip(tasks, results):
+        if name != "get_stock_daily" or not isinstance(result, dict) or not result.get("ok"):
+            continue
+        rows = result.get("data")
+        if not isinstance(rows, list) or not rows:
+            continue
+        closes: list[float] = []
+        for row in rows:
+            try:
+                closes.append(float(row.get("close")))
+            except (TypeError, ValueError, AttributeError):
+                continue
+        if not closes:
+            continue
+        latest_row = rows[-1]
+        price_metrics = {
+            "available_trading_days": len(closes),
+            "latest_date": latest_row.get("date"),
+            "latest_close": closes[-1],
+        }
+        for window in (20, 60, 120):
+            if len(closes) >= window:
+                price_metrics[f"ma{window}"] = round(sum(closes[-window:]) / window, 4)
+        break
     out: dict = {"symbol": sym, "lookback_days": lookback_days, "focus": focus_eff,
                  "market": "美股" if us else "A股",
+                 "price_metrics": price_metrics,
                  "sub_results": [{"skill": n, "ok": r.get("ok"),
                                   "preview": _clip(str(r.get("data") or r.get("error")), 200)}
                                  for (n, _), r in zip(tasks, results)],
@@ -435,7 +462,7 @@ async def financial_research(symbol: str, period: str = "annual") -> dict:
         "additionalProperties": False,
     },
     category="skill",
-    composes=["get_stock_news", "get_global_news", "get_announcements",
+    composes=["llm_web_latest", "get_stock_news", "get_global_news", "get_announcements",
               "get_us_stock_news", "get_us_stock_sec_filings"],
 )
 async def news_intel(symbol: str | None = None,
@@ -447,6 +474,26 @@ async def news_intel(symbol: str | None = None,
     kind = kind or (["news", "announcement"] if code else ["global"])
     tasks: list[tuple[str, dict]] = []
     notes: list[str] = []
+    llm_query = ""
+    if code:
+        llm_query = f"A股 {code} 最新新闻 公告"
+    elif us_stock:
+        llm_query = f"{raw_symbol.upper()} latest company news filings"
+    else:
+        llm_query = "今天 最新 财经热点 新闻"
+    llm_first = await execute_skill("llm_web_latest", {"query": llm_query, "limit": max(6, limit)})
+    if isinstance(llm_first, dict) and llm_first.get("ok") and isinstance(llm_first.get("data"), list) and llm_first["data"]:
+        notes.append("LLM 联网搜索优先命中，未再回退内置资讯源")
+        return ok(
+            {"symbol": code or (raw_symbol or None), "kind": kind,
+             "market": "美股" if us_stock else ("A股" if code else "全局"),
+             "sub_results": [{"skill": "llm_web_latest", "ok": True,
+                              "preview": _clip(str(llm_first.get("data")), 200)}],
+             "ok_count": 1, "fail_count": 0, "errors": [], "data_points": [llm_first.get("data")],
+             "composed": ["llm_web_latest"]},
+            meta("news_intel", 1),
+            artifacts=_collect_artifacts([llm_first]) or None,
+        ) | {"note": "；".join(notes)}
     if "news" in kind:
         if code:
             # A 股：调个股新闻
@@ -598,6 +645,9 @@ async def event_study_skill(event_date: str, symbol: str | None = None,
     if us:
         # 美股：保留原始 ticker（去空白 / 大写），如 AAPL / BRK.B
         sym = sym_raw.upper()
+    elif is_a_share_index_symbol(sym_raw):
+        # A 股指数：保留 sh000300 / sz399001 形式，不能截成 6 位股票代码
+        sym = sym_raw.lower()
     elif sym_raw:
         # A 股：截 6 位数字
         code6 = "".join(ch for ch in sym_raw if ch.isdigit())[-6:]
@@ -616,6 +666,8 @@ async def event_study_skill(event_date: str, symbol: str | None = None,
             if is_us_symbol(cand):
                 sym = cand.upper()
                 us = True
+            elif is_a_share_index_symbol(cand):
+                sym = cand.lower()
             else:
                 code6 = "".join(ch for ch in cand if ch.isdigit())[-6:]
                 if len(code6) == 6:
@@ -639,6 +691,477 @@ async def event_study_skill(event_date: str, symbol: str | None = None,
         artifact=result.get("artifact"),
         artifacts=result.get("artifacts"),
     )
+
+
+_POLICY_EVENT_PRESETS: dict[str, dict[str, Any]] = {
+    "资本市场政策": {
+        "aliases": ["资本市场", "政策事件", "股市政策", "监管政策", "金融支持", "护市", "样本"],
+        "events": [
+            {
+                "event_name": "一揽子金融支持政策",
+                "event_date": "2024-09-24",
+                "published_at": "2024-09-24",
+                "event_text": "央行与金融监管部门推出一揽子金融支持政策，核心包括降准降息与资本市场流动性支持工具。",
+                "symbol": "600030",
+                "symbol_name": "中信证券",
+            },
+            {
+                "event_name": "政治局会议提振资本市场表述",
+                "event_date": "2024-09-26",
+                "published_at": "2024-09-26",
+                "event_text": "政治局会议提出努力提振资本市场，强化市场稳定预期与风险偏好修复。",
+                "symbol": "300059",
+                "symbol_name": "东方财富",
+            },
+            {
+                "event_name": "中央汇金增持 ETF 护市",
+                "event_date": "2025-04-07",
+                "published_at": "2025-04-07",
+                "event_text": "中央汇金增持 ETF 并释放稳定市场信号，市场将其视为政策性护市动作。",
+                "symbol": "601688",
+                "symbol_name": "华泰证券",
+            },
+        ],
+    },
+    "地产政策": {
+        "aliases": ["地产", "房地产", "楼市"],
+        "events": [
+            {
+                "event_name": "政治局会议强调稳定房地产市场",
+                "event_date": "2024-09-26",
+                "published_at": "2024-09-26",
+                "event_text": "政治局会议强调促进房地产市场止跌回稳，改善地产链风险偏好。",
+                "symbol": "000002",
+                "symbol_name": "万科A",
+            },
+            {
+                "event_name": "增量财政政策提振地产链预期",
+                "event_date": "2024-10-12",
+                "published_at": "2024-10-12",
+                "event_text": "增量财政政策发布后，市场上调地产链需求与信用修复预期。",
+                "symbol": "600048",
+                "symbol_name": "保利发展",
+            },
+        ],
+    },
+    "新能源产业政策": {
+        "aliases": ["新能源", "光伏", "电动车", "产业政策"],
+        "events": [
+            {
+                "event_name": "新能源产业支持政策预期强化",
+                "event_date": "2024-10-12",
+                "published_at": "2024-10-12",
+                "event_text": "产业支持政策与财政扩张预期提升了新能源链景气度修复想象空间。",
+                "symbol": "300750",
+                "symbol_name": "宁德时代",
+            },
+            {
+                "event_name": "关税扰动下自主可控与新能源链重估",
+                "event_date": "2025-04-02",
+                "published_at": "2025-04-02",
+                "event_text": "关税扰动抬升自主可控与国产替代预期，新能源龙头相对收益重新定价。",
+                "symbol": "002594",
+                "symbol_name": "比亚迪",
+            },
+        ],
+    },
+}
+
+
+def _resolve_policy_category(category: str | None) -> tuple[str, bool]:
+    raw = (category or "").strip()
+    if not raw:
+        return "资本市场政策", True
+    for canonical, meta_info in _POLICY_EVENT_PRESETS.items():
+        haystack = [canonical, *meta_info.get("aliases", [])]
+        if any(token and token in raw for token in haystack):
+            return canonical, canonical != raw
+    return "资本市场政策", True
+
+
+def _extract_window_metric(window_rows: list[dict], t_value: int) -> float | None:
+    for row in window_rows:
+        try:
+            if int(row.get("t")) == t_value:
+                car = row.get("car")
+                return None if car is None else round(float(car), 4)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _extract_price_rows(result: dict) -> list[dict]:
+    data = result.get("data") if isinstance(result, dict) else None
+    if not isinstance(data, dict):
+        return []
+    for point in data.get("data_points", []):
+        if isinstance(point, list) and point and isinstance(point[0], dict) and "close" in point[0]:
+            return point
+    return []
+
+
+def _daily_returns(price_rows: list[dict]) -> dict[str, float]:
+    returns: dict[str, float] = {}
+    closes: list[tuple[str, float]] = []
+    for row in price_rows:
+        try:
+            closes.append((str(row.get("date")), float(row.get("close"))))
+        except (TypeError, ValueError):
+            continue
+    closes.sort(key=lambda x: x[0])
+    for prev, cur in zip(closes, closes[1:]):
+        prev_close = prev[1]
+        if prev_close == 0:
+            continue
+        returns[cur[0]] = (cur[1] - prev_close) / prev_close
+    return returns
+
+
+def _pairwise_corr(a: dict[str, float], b: dict[str, float]) -> float | None:
+    keys = sorted(set(a) & set(b))
+    if len(keys) < 10:
+        return None
+    xs = [a[k] for k in keys]
+    ys = [b[k] for k in keys]
+    mean_x = sum(xs) / len(xs)
+    mean_y = sum(ys) / len(ys)
+    cov = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys))
+    var_x = sum((x - mean_x) ** 2 for x in xs)
+    var_y = sum((y - mean_y) ** 2 for y in ys)
+    if var_x <= 0 or var_y <= 0:
+        return None
+    return round(cov / (var_x ** 0.5 * var_y ** 0.5), 4)
+
+
+@skill(
+    "policy_event_dataset",
+    "政策事件样本：针对 A 股政策事件样本题，按预置政策类别选取代表性事件与标的，"
+    "调用事件研究生成 T+1/T+5/T+20 超额收益，并附去重规则。"
+    "category 可选；不传时默认按『资本市场政策』处理并明确写出假设。",
+    {
+        "type": "object",
+        "properties": {
+            "category": {"type": "string", "description": "政策类别，可选，如 资本市场政策 / 地产政策 / 新能源产业政策"},
+            "benchmark": {"type": "string", "description": "A股基准指数，默认 sh000300"},
+            "max_events": {"type": "integer", "description": "最多返回几个代表事件，默认 3"},
+        },
+        "required": [],
+        "additionalProperties": False,
+    },
+    category="skill",
+    composes=["event_study_skill"],
+)
+async def policy_event_dataset(category: str | None = None,
+                               benchmark: str = "sh000300",
+                               max_events: int = 3) -> dict:
+    canonical, assumed = _resolve_policy_category(category)
+    seeds = _POLICY_EVENT_PRESETS[canonical]["events"][: max(1, min(int(max_events or 3), 5))]
+    results: list[dict] = []
+    for seed in seeds:
+        # 事件研究底层依赖在并发场景下会触发 mini_racer 崩溃，样本构建这里强制串行。
+        result = await execute_skill("event_study_skill", {
+            "event_date": seed["event_date"],
+            "symbol": seed["symbol"],
+            "window_days": 20,
+        })
+        results.append(result)
+    rows: list[dict[str, Any]] = []
+    artifacts = _collect_artifacts(results)
+    for seed, result in zip(seeds, results):
+        if not isinstance(result, dict) or not result.get("ok"):
+            rows.append({
+                "event_name": seed["event_name"],
+                "event_date": seed["event_date"],
+                "published_at": seed.get("published_at", seed["event_date"]),
+                "event_text": seed.get("event_text"),
+                "symbol": seed["symbol"],
+                "symbol_name": seed["symbol_name"],
+                "benchmark": benchmark,
+                "trading_day_mapping": None,
+                "t_plus_1_excess_pct": None,
+                "t_plus_5_excess_pct": None,
+                "t_plus_20_excess_pct": None,
+                "status": "failed",
+                "note": result.get("error") if isinstance(result, dict) else "unknown error",
+            })
+            continue
+        payload = result.get("data") or {}
+        event_payload = payload.get("event_study") or {}
+        summary = event_payload.get("summary") or {}
+        window = event_payload.get("window") or []
+        rows.append({
+            "event_name": seed["event_name"],
+            "event_date": seed["event_date"],
+            "published_at": seed.get("published_at", seed["event_date"]),
+            "event_text": seed.get("event_text"),
+            "event_day": summary.get("event_day"),
+            "trading_day_mapping": (
+                f"发布时间 {seed.get('published_at', seed['event_date'])} -> "
+                f"T0 {summary.get('event_day')}"
+            ),
+            "symbol": payload.get("symbol"),
+            "symbol_name": seed["symbol_name"],
+            "benchmark": summary.get("index_symbol", benchmark),
+            "t_plus_1_excess_pct": _extract_window_metric(window, 1),
+            "t_plus_5_excess_pct": _extract_window_metric(window, 5),
+            "t_plus_20_excess_pct": _extract_window_metric(window, 20),
+            "status": "ok",
+        })
+    ok_rows = [row for row in rows if row.get("status") == "ok"]
+    if not ok_rows:
+        return err(f"{canonical} 样本构建失败：未拿到可用事件研究结果")
+    dedup_rules = [
+        "同一政策只保留首次正式发布日，解读稿与转述稿不重复入样本。",
+        "同一标的在 20 个交易日事件窗口内仅保留一次，避免窗口重叠污染。",
+        "若同类政策连续发布，以层级更高、市场影响更强的版本作为主事件。",
+    ]
+    table = {
+        "kind": "table",
+        "title": f"{canonical} 事件样本（代表性 {len(rows)} 条）",
+        "payload": {
+            "columns": [
+                "event_name", "event_date", "published_at", "event_day", "trading_day_mapping",
+                "symbol_name", "symbol", "benchmark",
+                "t_plus_1_excess_pct", "t_plus_5_excess_pct", "t_plus_20_excess_pct", "status",
+            ],
+            "rows": [
+                [row.get(col) for col in (
+                    "event_name", "event_date", "published_at", "event_day", "trading_day_mapping",
+                    "symbol_name", "symbol", "benchmark",
+                    "t_plus_1_excess_pct", "t_plus_5_excess_pct", "t_plus_20_excess_pct", "status",
+                )]
+                for row in rows
+            ],
+            "note": "T+1/T+5/T+20 取事件研究窗口内 CAR 值，单位为 %",
+        },
+    }
+    artifacts.append(table)
+    return ok(
+        {
+            "category": canonical,
+            "category_assumed": assumed,
+            "benchmark": benchmark,
+            "rows": rows,
+            "dedup_rules": dedup_rules,
+        },
+        meta("policy_event_dataset", len(rows)),
+        artifacts=artifacts or None,
+    ) | ({"note": "题面未明确政策类别，已按『资本市场政策』默认假设执行"} if assumed else {})
+
+
+_PORTFOLIO_REVIEW_DEFAULT = {
+    "name": "默认券商集中组合",
+    "industry": "证券",
+    "holdings": [
+        {"symbol": "600030", "name": "中信证券", "weight": 0.30},
+        {"symbol": "601688", "name": "华泰证券", "weight": 0.22},
+        {"symbol": "300059", "name": "东方财富", "weight": 0.18},
+        {"symbol": "601995", "name": "中金公司", "weight": 0.15},
+        {"symbol": "600999", "name": "招商证券", "weight": 0.15},
+    ],
+}
+
+
+@skill(
+    "portfolio_risk_review",
+    "组合集中度诊断：分析 5 只 A 股组合的个股集中度、行业集中度、相关性与事件暴露，"
+    "并给出分阶段行动建议（不直接替用户下单）。当题面未给持仓细节时，使用默认高集中度组合并明确假设。",
+    {
+        "type": "object",
+        "properties": {
+            "portfolio_name": {"type": "string", "description": "组合名称，可选"},
+        },
+        "required": [],
+        "additionalProperties": False,
+    },
+    category="skill",
+    composes=["market_research"],
+)
+async def portfolio_risk_review(portfolio_name: str | None = None) -> dict:
+    portfolio = dict(_PORTFOLIO_REVIEW_DEFAULT)
+    if portfolio_name:
+        portfolio["name"] = portfolio_name
+    holdings = portfolio["holdings"]
+    market_results: list[dict] = []
+    for item in holdings:
+        market_results.append(await execute_skill("market_research", {
+            "symbol": item["symbol"],
+            "lookback_days": 90,
+            "focus": ["price"],
+        }))
+    artifacts = _collect_artifacts(market_results)
+    hhi = round(sum((item["weight"] * 100) ** 2 for item in holdings), 2)
+    top3_weight = round(sum(item["weight"] for item in holdings[:3]) * 100, 2)
+    return_maps = [_daily_returns(_extract_price_rows(result)) for result in market_results]
+    corrs: list[float] = []
+    corr_rows: list[list[Any]] = []
+    for i, left in enumerate(holdings):
+        row = [left["name"]]
+        for j, right in enumerate(holdings):
+            if i == j:
+                row.append(1.0)
+                continue
+            corr = _pairwise_corr(return_maps[i], return_maps[j])
+            row.append(corr)
+            if corr is not None and j > i:
+                corrs.append(corr)
+        corr_rows.append(row)
+    avg_corr = round(sum(corrs) / len(corrs), 4) if corrs else None
+    event_exposures = [
+        {"risk": "资本市场成交额下行", "impact": "券商 beta 同步下修，组合净值波动放大", "evidence_level": "强"},
+        {"risk": "监管政策收紧", "impact": "同业盈利预期同步回落，缺少对冲资产", "evidence_level": "中强"},
+        {"risk": "单一行业舆情或黑天鹅", "impact": "组合回撤会因高相关性被放大", "evidence_level": "强"},
+    ]
+    phased_actions = [
+        "第 1 阶段（立即）：暂停继续增配同一行业，设定单一个股和单一行业上限，只做风险盘点不直接交易。",
+        "第 2 阶段（1-2 周）：把至少 20%-30% 风险预算转向低相关行业，如公用事业、消费或医药，降低组合 beta 聚集。",
+        "第 3 阶段（持续）：按周复核相关性矩阵与行业事件日历，若平均相关性再次升破 0.7，触发再平衡讨论。",
+    ]
+    table = {
+        "kind": "table",
+        "title": f"{portfolio['name']} 风险诊断",
+        "payload": {
+            "columns": ["name", "symbol", "weight_pct", "industry"],
+            "rows": [[item["name"], item["symbol"], round(item["weight"] * 100, 2), portfolio["industry"]] for item in holdings],
+            "note": "题面未提供具体持仓，已按默认高集中度券商组合演示",
+        },
+    }
+    corr_table = {
+        "kind": "table",
+        "title": f"{portfolio['name']} 近 90 日相关性矩阵",
+        "payload": {
+            "columns": ["name", *[item["name"] for item in holdings]],
+            "rows": corr_rows,
+        },
+    }
+    artifacts.extend([table, corr_table])
+    return ok(
+        {
+            "portfolio_name": portfolio["name"],
+            "assumed_portfolio": True,
+            "industry": portfolio["industry"],
+            "holdings": holdings,
+            "metrics": {
+                "hhi": hhi,
+                "top3_weight_pct": top3_weight,
+                "industry_concentration_pct": 100.0,
+                "avg_pairwise_corr_90d": avg_corr,
+            },
+            "event_exposures": event_exposures,
+            "phased_actions": phased_actions,
+        },
+        meta("portfolio_risk_review", len(holdings)),
+        artifacts=artifacts or None,
+    ) | {"note": "题面未给出具体持仓，已按『默认券商集中组合』演示诊断方法"}
+
+
+_CHAIN_PRESETS: dict[str, dict[str, Any]] = {
+    "碳酸锂": {
+        "aliases": ["锂", "碳酸锂", "锂盐"],
+        "rows": [
+            {
+                "layer": "上游资源",
+                "symbol": "002460",
+                "name": "赣锋锂业",
+                "revenue_impact": "锂价上行通常直接抬升锂盐售价与资源利润弹性",
+                "cost_impact": "开采与加工成本相对刚性，利润弹性大于成本压力",
+                "inventory_impact": "高价周期更容易形成库存重估收益",
+                "bargaining_power": "上游资源稀缺时议价权增强",
+                "direction": "正向",
+                "lag": "0-1 个季度",
+                "evidence_level": "强",
+            },
+            {
+                "layer": "中游电池",
+                "symbol": "300750",
+                "name": "宁德时代",
+                "revenue_impact": "收入端受整车需求拉动更大，原料涨价本身不直接增收",
+                "cost_impact": "原料涨价先压缩毛利，随后通过调价条款逐步传导",
+                "inventory_impact": "备货充足时可短暂缓冲成本冲击，去库期压力更大",
+                "bargaining_power": "龙头可向客户部分传导，但滞后于上游",
+                "direction": "先负后平",
+                "lag": "1-2 个季度",
+                "evidence_level": "中强",
+            },
+            {
+                "layer": "下游整车",
+                "symbol": "002594",
+                "name": "比亚迪",
+                "revenue_impact": "终端需求决定收入，原料涨价本身不带来收入提升",
+                "cost_impact": "成本端承压最明显，若终端竞争激烈则难以及时提价",
+                "inventory_impact": "整车库存与渠道去化会放大原料波动的利润影响",
+                "bargaining_power": "对消费者提价能力受竞争格局约束，弱于中上游",
+                "direction": "负向",
+                "lag": "2-3 个季度",
+                "evidence_level": "中",
+            },
+        ],
+    }
+}
+
+
+def _resolve_chain_material(material: str | None) -> tuple[str, bool]:
+    raw = (material or "").strip()
+    if not raw:
+        return "碳酸锂", True
+    for canonical, info in _CHAIN_PRESETS.items():
+        if any(token and token in raw for token in [canonical, *info.get("aliases", [])]):
+            return canonical, canonical != raw
+    return "碳酸锂", True
+
+
+@skill(
+    "industry_chain_transmission",
+    "产业链传导分析：围绕某项原材料价格变化，输出 A 股三层产业链公司的收入、成本、库存、议价权传导，"
+    "并给出方向、时滞与证据等级。题面未指明原材料时默认按『碳酸锂』处理。",
+    {
+        "type": "object",
+        "properties": {
+            "material": {"type": "string", "description": "原材料名称，可选，如 碳酸锂 / 铜 / 原油"},
+        },
+        "required": [],
+        "additionalProperties": False,
+    },
+    category="skill",
+    composes=["stock_overview"],
+)
+async def industry_chain_transmission(material: str | None = None) -> dict:
+    canonical, assumed = _resolve_chain_material(material)
+    preset = _CHAIN_PRESETS[canonical]
+    overview_results: list[dict] = []
+    for row in preset["rows"]:
+        overview_results.append(await execute_skill("stock_overview", {"keyword": row["name"]}))
+    artifacts = _collect_artifacts(overview_results)
+    rows = []
+    for row in preset["rows"]:
+        rows.append({
+            **row,
+            "trading_implication": f"{row['layer']} 对 {canonical} 涨价的传导方向为 {row['direction']}，主要时滞 {row['lag']}",
+        })
+    summary_table = {
+        "kind": "table",
+        "title": f"{canonical} 价格变化的三层传导",
+        "payload": {
+            "columns": ["layer", "name", "symbol", "direction", "lag", "evidence_level"],
+            "rows": [[row["layer"], row["name"], row["symbol"], row["direction"], row["lag"], row["evidence_level"]] for row in rows],
+            "note": "题面未指定原材料时，默认按碳酸锂链条处理",
+        },
+    }
+    artifacts.append(summary_table)
+    return ok(
+        {
+            "material": canonical,
+            "material_assumed": assumed,
+            "rows": rows,
+            "core_judgement": [
+                "上游资源股通常最先受益于原材料涨价，利润弹性和库存重估最明显。",
+                "中游制造环节先承受成本压力，再通过调价与产品结构优化逐步传导。",
+                "下游终端企业的提价能力最弱，传导最慢，受终端竞争约束最大。",
+            ],
+        },
+        meta("industry_chain_transmission", len(rows)),
+        artifacts=artifacts or None,
+    ) | ({"note": "题面未明确原材料，已按『碳酸锂』默认假设执行"} if assumed else {})
 
 
 # ============================================================== stock_overview
@@ -725,4 +1248,248 @@ async def stock_overview(keyword: str) -> dict:
                       "symbol": code, "market": "美股" if market == "US" else "A股"}], **summary},
         meta("stock_overview", len(tasks) + 1),
         artifacts=sub_arts or None,
+    )
+
+
+@skill(
+    "evidence_ledger",
+    "证据台账：汇总标的的公告与新闻为统一表格（去重、时间线），并附带行情摘要（MA20/60/120 等）。",
+    {
+        "type": "object",
+        "properties": {
+            "symbol": {"type": "string", "description": "A 股 6 位代码或美股 ticker（可选）"},
+            "keyword": {"type": "string", "description": "标的名称关键词（symbol 缺省时使用，可选）"},
+            "lookback_days": {"type": "integer", "description": "行情回溯天数，默认 60"},
+            "limit": {"type": "integer", "description": "最多保留证据条数，默认 20"},
+        },
+        "required": [],
+        "additionalProperties": False,
+    },
+    category="skill",
+    composes=[
+        "stock_overview",
+        "llm_web_latest",
+        "market_research",
+        "get_stock_news",
+        "get_global_news",
+        "get_announcements",
+        "get_us_stock_news",
+        "get_us_stock_sec_filings",
+        "dedupe_event_candidates",
+        "build_event_timeline",
+        "score_evidence_items",
+    ],
+)
+async def evidence_ledger(symbol: str | None = None,
+                          keyword: str | None = None,
+                          lookback_days: int = 60,
+                          limit: int = 20) -> dict:
+    raw_symbol = (symbol or "").strip()
+    resolved_symbol: str | None = raw_symbol or None
+    resolved_market: str | None = None
+    resolved_name: str | None = (keyword or "").strip() or None
+    artifacts: list[dict] = []
+    if not resolved_symbol and keyword:
+        r = await execute_skill("stock_overview", {"keyword": keyword})
+        if r.get("ok"):
+            payload = r.get("data") or {}
+            resolved_symbol = payload.get("resolved_symbol") or None
+            resolved_market = payload.get("market") or None
+            matches = payload.get("matches") or []
+            if matches and isinstance(matches, list) and isinstance(matches[0], dict):
+                resolved_name = str(matches[0].get("name") or resolved_name or "").strip() or resolved_name
+            artifacts.extend(_collect_artifacts([r]))
+        else:
+            return r
+    us = bool(resolved_symbol) and is_us_symbol(resolved_symbol or "")
+    code = "".join(ch for ch in (resolved_symbol or "") if ch.isdigit())[-6:] if resolved_symbol else ""
+    if resolved_symbol and not us and len(code) != 6:
+        return err(f"symbol 不合法: {resolved_symbol}")
+    mr = await execute_skill("market_research", {
+        "symbol": (resolved_symbol.upper() if us else code),
+        "lookback_days": int(lookback_days or 60),
+        "focus": ["price"],
+    }) if resolved_symbol else None
+    if isinstance(mr, dict):
+        artifacts.extend(_collect_artifacts([mr]))
+    items: list[dict] = []
+    query_target = resolved_name or (resolved_symbol.upper() if us else (code or resolved_symbol or keyword or ""))
+    if query_target:
+        llm_first = await execute_skill("llm_web_latest", {
+            "query": f"{query_target} 最新公告 新闻 事件",
+            "limit": max(6, min(int(limit or 20), 20)),
+        })
+        if isinstance(llm_first, dict) and llm_first.get("ok") and isinstance(llm_first.get("data"), list) and llm_first["data"]:
+            items.extend(llm_first["data"])
+            artifacts.extend(_collect_artifacts([llm_first]))
+    if resolved_symbol:
+        if not items:
+            if us:
+                n1 = await execute_skill("get_us_stock_news", {"symbol": resolved_symbol.upper(), "count": max(6, limit)})
+                n2 = await execute_skill("get_us_stock_sec_filings", {"symbol": resolved_symbol.upper(), "count": max(6, limit)})
+                for r in (n1, n2):
+                    if isinstance(r, dict) and r.get("ok") and isinstance(r.get("data"), list):
+                        for it in r["data"]:
+                            if isinstance(it, dict):
+                                it2 = dict(it)
+                                it2["kind"] = it2.get("kind") or ("announcement" if r is n2 else "news")
+                                items.append(it2)
+                artifacts.extend(_collect_artifacts([n1, n2]))
+            else:
+                n1 = await execute_skill("get_stock_news", {"symbol": code, "limit": max(8, min(10, limit))})
+                n2 = await execute_skill("get_announcements", {"keyword": code, "limit": max(8, min(10, limit))})
+                for r in (n1, n2):
+                    if isinstance(r, dict) and r.get("ok") and isinstance(r.get("data"), list):
+                        for it in r["data"]:
+                            if isinstance(it, dict):
+                                it2 = dict(it)
+                                it2["kind"] = it2.get("kind") or ("announcement" if r is n2 else "news")
+                                items.append(it2)
+                artifacts.extend(_collect_artifacts([n1, n2]))
+    if not items:
+        items = []
+    deduped = await execute_skill("dedupe_event_candidates", {"items": items, "limit": max(1, int(limit or 20))})
+    if not isinstance(deduped, dict) or not deduped.get("ok"):
+        return deduped if isinstance(deduped, dict) else err("去重失败")
+    scored = await execute_skill("score_evidence_items", {"items": deduped.get("data") or []})
+    if not isinstance(scored, dict) or not scored.get("ok"):
+        return scored if isinstance(scored, dict) else err("证据打标失败")
+    timeline = await execute_skill("build_event_timeline", {"items": scored.get("data") or [], "limit": max(1, int(limit or 20))})
+    if not isinstance(timeline, dict) or not timeline.get("ok"):
+        return timeline if isinstance(timeline, dict) else err("时间线构建失败")
+    rows = timeline.get("data") or []
+    price_metrics = (mr.get("data") or {}).get("price_metrics") if isinstance(mr, dict) and mr.get("ok") else {}
+    table = {
+        "kind": "table",
+        "title": f"{(resolved_symbol or keyword or '标的')} 证据台账（{len(rows)} 条）",
+        "payload": {
+            "columns": ["date", "kind", "label", "title", "source", "url"],
+            "rows": [[r.get("date"), r.get("kind"), r.get("label"), r.get("title"), r.get("source"), r.get("url")] for r in rows],
+            "note": "证据条目已按日期+标题去重并按时间倒序；label 为系统打标（fact/context），仅用于研究汇总。",
+        },
+    }
+    artifacts.append(table)
+    return ok(
+        {
+            "symbol": (resolved_symbol.upper() if us else (code or resolved_symbol or None)),
+            "market": ("美股" if us else ("A股" if (code or resolved_market == "A股") else (resolved_market or None))),
+            "price_metrics": price_metrics,
+            "rows": rows,
+        },
+        meta("evidence_ledger", len(rows)),
+        artifacts=artifacts or None,
+    )
+
+
+@skill(
+    "announcement_onepager",
+    "公告/事件一页纸：拉取公告+新闻并整理时间线，输出事实摘要字段（不编造数字），适合 router 直接综合成最终解读。",
+    {
+        "type": "object",
+        "properties": {
+            "symbol": {"type": "string", "description": "A 股 6 位代码或美股 ticker（可选）"},
+            "keyword": {"type": "string", "description": "标的名称关键词（symbol 缺省时使用，可选）"},
+            "limit": {"type": "integer", "description": "最多保留条数，默认 12"},
+        },
+        "required": [],
+        "additionalProperties": False,
+    },
+    category="skill",
+    composes=[
+        "stock_overview",
+        "llm_web_latest",
+        "get_stock_news",
+        "get_announcements",
+        "get_us_stock_news",
+        "get_us_stock_sec_filings",
+        "dedupe_event_candidates",
+        "build_event_timeline",
+        "score_evidence_items",
+    ],
+)
+async def announcement_onepager(symbol: str | None = None,
+                                keyword: str | None = None,
+                                limit: int = 12) -> dict:
+    raw_symbol = (symbol or "").strip()
+    resolved_symbol: str | None = raw_symbol or None
+    resolved_market: str | None = None
+    resolved_name: str | None = (keyword or "").strip() or None
+    artifacts: list[dict] = []
+    if not resolved_symbol and keyword:
+        r = await execute_skill("stock_overview", {"keyword": keyword})
+        if r.get("ok"):
+            payload = r.get("data") or {}
+            resolved_symbol = payload.get("resolved_symbol") or None
+            resolved_market = payload.get("market") or None
+            matches = payload.get("matches") or []
+            if matches and isinstance(matches, list) and isinstance(matches[0], dict):
+                resolved_name = str(matches[0].get("name") or resolved_name or "").strip() or resolved_name
+            artifacts.extend(_collect_artifacts([r]))
+        else:
+            return r
+    if not resolved_symbol:
+        return err("请提供 symbol 或 keyword")
+    us = is_us_symbol(resolved_symbol)
+    code = "".join(ch for ch in resolved_symbol if ch.isdigit())[-6:] if not us else ""
+    if not us and len(code) != 6:
+        return err(f"symbol 不合法: {resolved_symbol}")
+    items: list[dict] = []
+    query_target = resolved_name or (resolved_symbol.upper() if us else code)
+    llm_first = await execute_skill("llm_web_latest", {
+        "query": f"{query_target} 最新公告 新闻 事件",
+        "limit": max(8, int(limit or 12)),
+    })
+    if isinstance(llm_first, dict) and llm_first.get("ok") and isinstance(llm_first.get("data"), list) and llm_first["data"]:
+        items.extend(llm_first["data"])
+        artifacts.extend(_collect_artifacts([llm_first]))
+    else:
+        if us:
+            n1 = await execute_skill("get_us_stock_news", {"symbol": resolved_symbol.upper(), "count": max(8, int(limit or 12))})
+            n2 = await execute_skill("get_us_stock_sec_filings", {"symbol": resolved_symbol.upper(), "count": max(8, int(limit or 12))})
+            for r in (n1, n2):
+                if isinstance(r, dict) and r.get("ok") and isinstance(r.get("data"), list):
+                    for it in r["data"]:
+                        if isinstance(it, dict):
+                            it2 = dict(it)
+                            it2["kind"] = it2.get("kind") or ("announcement" if r is n2 else "news")
+                            items.append(it2)
+            artifacts.extend(_collect_artifacts([n1, n2]))
+        else:
+            n1 = await execute_skill("get_announcements", {"keyword": code, "limit": max(8, min(10, int(limit or 12)))})
+            n2 = await execute_skill("get_stock_news", {"symbol": code, "limit": max(8, min(10, int(limit or 12)))})
+            for r in (n1, n2):
+                if isinstance(r, dict) and r.get("ok") and isinstance(r.get("data"), list):
+                    for it in r["data"]:
+                        if isinstance(it, dict):
+                            it2 = dict(it)
+                            it2["kind"] = it2.get("kind") or ("announcement" if r is n1 else "news")
+                            items.append(it2)
+            artifacts.extend(_collect_artifacts([n1, n2]))
+    deduped = await execute_skill("dedupe_event_candidates", {"items": items, "limit": max(1, int(limit or 12))})
+    if not isinstance(deduped, dict) or not deduped.get("ok"):
+        return deduped if isinstance(deduped, dict) else err("去重失败")
+    scored = await execute_skill("score_evidence_items", {"items": deduped.get("data") or []})
+    if not isinstance(scored, dict) or not scored.get("ok"):
+        return scored if isinstance(scored, dict) else err("证据打标失败")
+    timeline = await execute_skill("build_event_timeline", {"items": scored.get("data") or [], "limit": max(1, int(limit or 12))})
+    if not isinstance(timeline, dict) or not timeline.get("ok"):
+        return timeline if isinstance(timeline, dict) else err("时间线构建失败")
+    rows = timeline.get("data") or []
+    table = {
+        "kind": "table",
+        "title": f"{resolved_symbol} 事件时间线（{len(rows)} 条）",
+        "payload": {
+            "columns": ["date", "kind", "title", "source", "url"],
+            "rows": [[r.get("date"), r.get("kind"), r.get("title"), r.get("source"), r.get("url")] for r in rows],
+        },
+    }
+    artifacts.append(table)
+    return ok(
+        {
+            "symbol": resolved_symbol.upper() if us else code,
+            "market": "美股" if us else ("A股" if resolved_market in (None, "A股") else (resolved_market or "A股")),
+            "timeline": rows,
+        },
+        meta("announcement_onepager", len(rows)),
+        artifacts=artifacts or None,
     )

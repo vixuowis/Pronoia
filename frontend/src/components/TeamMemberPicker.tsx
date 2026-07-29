@@ -70,7 +70,7 @@ export default function TeamMemberPicker({ open, onClose, agents, selectedIds, o
     }
   };
 
-  const selectAll = () => onChange(agents.map((a) => a.id));
+  const selectAll = () => onChange(agents.filter((a) => a.id !== "deep_researcher").map((a) => a.id));
   const clearAll = () => onChange([]); // deep_researcher 仍在硬规则里
 
   return createPortal(
@@ -96,7 +96,7 @@ export default function TeamMemberPicker({ open, onClose, agents, selectedIds, o
             <div>
               <div className="text-[13.5px] font-semibold text-ink">选择团队成员</div>
               <div className="text-[11px] text-faint">
-                勾选要调度的专家；「深度研究者」始终参与（硬规则）
+                勾选要调度的专家；「深度研究者」始终参与（硬规则）；「主理人」负责最终综合与复核调度
               </div>
             </div>
           </div>
@@ -196,7 +196,7 @@ export default function TeamMemberPicker({ open, onClose, agents, selectedIds, o
 
         {/* 底部 */}
         <div className="flex items-center justify-between border-t border-edge bg-page/40 px-5 py-2.5 text-[11px] text-faint">
-          <span>已选 {selectedIds.length + 1} / {agents.length}（含必选）</span>
+          <span>已选 {selectedIds.length + 1} 位专家（含「深度研究者」必选）</span>
           <button
             onClick={onClose}
             className="rounded-md bg-jade px-3 py-1.5 text-[12px] font-medium text-card hover:bg-jade-hover"

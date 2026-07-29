@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# FEVER 一键启动（开发模式）：后端 :8000 + 前端 :5173
+# Pronoia 一键启动（开发模式）：后端 :8000 + 前端 :5173
 set -e
 cd "$(dirname "$0")"
 

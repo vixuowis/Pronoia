@@ -89,7 +89,7 @@ export function agentColor(agentId: string | undefined, agents: AgentMeta[]): st
 }
 
 export function agentName(agentId: string | undefined, agents: AgentMeta[]): string {
-  if (!agentId) return "FEVER";
+  if (!agentId) return "Pronoia";
   return agents.find((a) => a.id === agentId)?.name ?? agentId;
 }
 

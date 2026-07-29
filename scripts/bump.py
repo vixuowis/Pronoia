@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""bump.py —— FEVER 单点版本号管理。
+"""bump.py —— Pronoia 单点版本号管理。
 
 按 SemVer 规范：
   patch: 3.0.0 -> 3.0.1  (bug 修复 / 文案 / 重构)
@@ -11,7 +11,7 @@
   - frontend/src/version.ts
   - frontend/package.json
   - backend/app/main.py (FastAPI app.version)
-  - frontend/src/components/Sidebar.tsx  (FEVER logo 旁角标)
+  - frontend/src/components/Sidebar.tsx  (Pronoia logo 旁角标)
 
 附加：
   - --changelog "..."  在 README.md 的 ## 📋 更新日志 追加一行
@@ -76,7 +76,7 @@ def write_all(new_ver: str) -> None:
 
     # 2) frontend/src/version.ts
     FRONTEND_VERSION_TS.write_text(
-        f"// FEVER 前端版本号（脚本自动维护：scripts/bump.py）\n"
+        f"// Pronoia 前端版本号（脚本自动维护：scripts/bump.py）\n"
         f"// 单一来源：VERSION.py；前端只读这里。\nexport const VERSION = \"{new_ver}\";\n",
         encoding="utf-8",
     )
@@ -92,7 +92,7 @@ def write_all(new_ver: str) -> None:
     # 4) backend/app/main.py
     main_src = BACKEND_MAIN_PY.read_text(encoding="utf-8")
     main_src = re.sub(
-        r'(FastAPI\(\s*title="FEVER",\s*version=)"[^"]*"',
+        r'(FastAPI\(\s*title="Pronoia",\s*version=)"[^"]*"',
         rf'\1"{new_ver}"',
         main_src,
         count=1,
@@ -166,7 +166,7 @@ def git(*args: str, check: bool = True) -> subprocess.CompletedProcess:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="FEVER 单点版本号管理（SemVer patch/minor/major）")
+    ap = argparse.ArgumentParser(description="Pronoia 单点版本号管理（SemVer patch/minor/major）")
     ap.add_argument("kind", choices=["patch", "minor", "major"], help="升级类型")
     ap.add_argument("-m", "--message", required=True, help="本次更新说明（用于 changelog 与 commit）")
     ap.add_argument("--changelog", help="额外写入 README 更新日志的简述（默认 = -m）")

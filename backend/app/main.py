@@ -1,4 +1,4 @@
-"""FEVER backend entry: FastAPI app (CORS, routes, static SPA mount)."""
+"""Pronoia backend entry: FastAPI app (CORS, routes, static SPA mount)."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from . import config, db
 from .routes import cases, chat, logic, meta
 
-app = FastAPI(title="FEVER", version="3.8.1", docs_url="/api/docs")
+app = FastAPI(title="Pronoia", version="3.8.2", docs_url="/api/docs")
 
 app.add_middleware(
     CORSMiddleware,

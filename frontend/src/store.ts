@@ -31,6 +31,7 @@ interface UIPrefs {
   selectedAgent?: string;
   /** team 模式时调度的专家白名单（不含 deep_researcher，硬规则） */
   teamMembers?: string[];
+  teamMembersSet?: boolean;
 }
 
 function loadUIPrefs(): UIPrefs {
@@ -256,6 +257,7 @@ interface FeverState {
   /** team 模式时可调度的专家白名单（不含 deep_researcher，硬规则）；
    *  空数组 = 仅 deep_researcher 跑（"只留深度研究"）。 */
   teamMembers: string[];
+  teamMembersSet: boolean;
   loadingCase: boolean;
   generatingReport: boolean;
   initialized: boolean;
@@ -320,6 +322,10 @@ if (typeof window !== "undefined") {
 }
 
 export const useStore = create<FeverState>((set, get) => {
+  const prefs = loadUIPrefs();
+  const initialTeamMembersSet =
+    prefs.teamMembersSet === true ||
+    (prefs.teamMembersSet == null && Object.prototype.hasOwnProperty.call(prefs, "teamMembers"));
   /** 更新流式中的 assistant 消息 */
   const patchPending = (fn: (m: Message) => Message) => {
     set((s) => {
@@ -451,17 +457,18 @@ export const useStore = create<FeverState>((set, get) => {
     artifacts: [],
     skills: [],
     agents: [],
-    rightTab: loadUIPrefs().rightTab ?? "artifacts",
+    rightTab: prefs.rightTab ?? "artifacts",
     // 默认折叠右栏；上一次状态持久化到 localStorage（用户主动展开/收起后记住）
-    rightOpen: loadUIPrefs().rightOpen ?? false,
+    rightOpen: prefs.rightOpen ?? false,
     // 左栏默认展开（案例列表是主入口）；持久化记忆
-    leftOpen: loadUIPrefs().leftOpen ?? true,
+    leftOpen: prefs.leftOpen ?? true,
     selectedArtifactId: null,
     streaming: false,
-    mode: loadUIPrefs().mode ?? "auto",
-    selectedAgent: loadUIPrefs().selectedAgent ?? "predictor",
+    mode: prefs.mode ?? "auto",
+    selectedAgent: prefs.selectedAgent ?? "predictor",
     // 默认全选（首次进站无缓存时=空数组 → 在 setSkills 拉完 agents 后再补全）
-    teamMembers: loadUIPrefs().teamMembers ?? [],
+    teamMembers: Array.isArray(prefs.teamMembers) ? prefs.teamMembers : [],
+    teamMembersSet: initialTeamMembersSet,
     promptSeed: "",
     loadingCase: false,
     generatingReport: false,
@@ -482,17 +489,24 @@ export const useStore = create<FeverState>((set, get) => {
       // 首次加载：把 teamMembers 默认填成"全部可调度专家"
       // 内部调度辅助（router / planner / synthesizer / verifier / report_writer）不参与
       const teamableIds = loadedAgents
-        .filter((a) => !["router", "planner", "synthesizer", "verifier", "report_writer"].includes(a.id))
+        .filter((a) => !["router", "planner", "synthesizer", "verifier", "report_writer"].includes(a.id) && a.id !== "deep_researcher")
         .map((a) => a.id);
-      const persisted = get().teamMembers;
-      const teamMembers = persisted.length > 0
-        ? persisted
-        : teamableIds;
+      const persisted = loadUIPrefs();
+      const teamMembersSet =
+        persisted.teamMembersSet === true ||
+        (persisted.teamMembersSet == null && Object.prototype.hasOwnProperty.call(persisted, "teamMembers"));
+      const rawMembers = Array.isArray(persisted.teamMembers) ? persisted.teamMembers : [];
+      const allow = new Set(teamableIds);
+      const filteredMembers = rawMembers.filter((id) => allow.has(id));
+      const teamMembers = !teamMembersSet
+        ? teamableIds
+        : (rawMembers.length > 0 && filteredMembers.length === 0 ? teamableIds : filteredMembers);
       set({
         cases: cases.status === "fulfilled" ? sortCases(cases.value) : [],
         skills: skills.status === "fulfilled" ? skills.value : [],
         agents: loadedAgents,
         teamMembers,
+        teamMembersSet,
       });
     },
 
@@ -705,7 +719,7 @@ export const useStore = create<FeverState>((set, get) => {
       set({ selectedArtifactId: id, rightTab: "artifacts", rightOpen: true });
       const s = get();
       saveUIPrefs({ rightTab: "artifacts", rightOpen: true, leftOpen: s.leftOpen,
-                    mode: s.mode, selectedAgent: s.selectedAgent, teamMembers: s.teamMembers });
+                    mode: s.mode, selectedAgent: s.selectedAgent, teamMembers: s.teamMembers, teamMembersSet: s.teamMembersSet });
     },
 
     /** 通用持久化：传入要修改的字段，回填其它字段当前值后整体保存 */
@@ -713,37 +727,37 @@ export const useStore = create<FeverState>((set, get) => {
       set({ rightTab: t, rightOpen: true });
       const s = get();
       saveUIPrefs({ rightTab: t, rightOpen: true, leftOpen: s.leftOpen,
-                    mode: s.mode, selectedAgent: s.selectedAgent, teamMembers: s.teamMembers });
+                    mode: s.mode, selectedAgent: s.selectedAgent, teamMembers: s.teamMembers, teamMembersSet: s.teamMembersSet });
     },
     setRightOpen: (v) => {
       set({ rightOpen: v });
       const s = get();
       saveUIPrefs({ rightTab: s.rightTab, rightOpen: v, leftOpen: s.leftOpen,
-                    mode: s.mode, selectedAgent: s.selectedAgent, teamMembers: s.teamMembers });
+                    mode: s.mode, selectedAgent: s.selectedAgent, teamMembers: s.teamMembers, teamMembersSet: s.teamMembersSet });
     },
     setLeftOpen: (v) => {
       set({ leftOpen: v });
       const s = get();
       saveUIPrefs({ rightTab: s.rightTab, rightOpen: s.rightOpen, leftOpen: v,
-                    mode: s.mode, selectedAgent: s.selectedAgent, teamMembers: s.teamMembers });
+                    mode: s.mode, selectedAgent: s.selectedAgent, teamMembers: s.teamMembers, teamMembersSet: s.teamMembersSet });
     },
     setMode: (m) => {
       set({ mode: m });
       const s = get();
       saveUIPrefs({ rightTab: s.rightTab, rightOpen: s.rightOpen, leftOpen: s.leftOpen,
-                    mode: m, selectedAgent: s.selectedAgent, teamMembers: s.teamMembers });
+                    mode: m, selectedAgent: s.selectedAgent, teamMembers: s.teamMembers, teamMembersSet: s.teamMembersSet });
     },
     setSelectedAgent: (id) => {
       set({ selectedAgent: id });
       const s = get();
       saveUIPrefs({ rightTab: s.rightTab, rightOpen: s.rightOpen, leftOpen: s.leftOpen,
-                    mode: s.mode, selectedAgent: id, teamMembers: s.teamMembers });
+                    mode: s.mode, selectedAgent: id, teamMembers: s.teamMembers, teamMembersSet: s.teamMembersSet });
     },
     setTeamMembers: (ids) => {
-      set({ teamMembers: ids });
+      set({ teamMembers: ids, teamMembersSet: true });
       const s = get();
       saveUIPrefs({ rightTab: s.rightTab, rightOpen: s.rightOpen, leftOpen: s.leftOpen,
-                    mode: s.mode, selectedAgent: s.selectedAgent, teamMembers: ids });
+                    mode: s.mode, selectedAgent: s.selectedAgent, teamMembers: ids, teamMembersSet: true });
     },
 
     setPromptSeed: (s) => {

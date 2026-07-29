@@ -90,14 +90,12 @@ function AgentEnvelope({
   agent,
   texts,
   indexes,
-  endIdx,
   pending,
   lastTextIdx,
 }: {
   agent?: string;
   texts: TextPart[];
   indexes: number[];
-  endIdx: number;
   pending: boolean;
   lastTextIdx: number;
 }) {
@@ -239,9 +237,11 @@ export default function MessageItem({ message }: { message: Message }) {
   const isTeam =
     message.mode === "team" ||
     parts.some(
-      (p) =>
-        (p.type === "agent_step" && (p.phase === "plan" || (!!p.agent && p.agent !== "router"))) ||
-        (!!p.agent && p.agent !== "router"),
+      (p) => {
+        const agent = "agent" in p ? p.agent : undefined;
+        return (p.type === "agent_step" && (p.phase === "plan" || (!!agent && agent !== "router"))) ||
+               (!!agent && agent !== "router");
+      },
     );
   let lastTextIdx = -1;
   parts.forEach((p, i) => {
@@ -255,7 +255,7 @@ export default function MessageItem({ message }: { message: Message }) {
     <div className="animate-fadeUp">
       <div className="space-y-2.5">
         {useParts ? (
-          renderItems.map((it, i) => {
+          renderItems.map((it) => {
             if (it.kind === "thinking") {
               const key = `${message.id}_think_${it.endIdx}`;
               return (
@@ -274,8 +274,7 @@ export default function MessageItem({ message }: { message: Message }) {
                   agent={it.agent}
                   texts={it.texts}
                   indexes={it.indexes}
-                  endIdx={it.endIdx}
-                  pending={message.pending}
+                  pending={!!message.pending}
                   lastTextIdx={lastTextIdx}
                 />
               );

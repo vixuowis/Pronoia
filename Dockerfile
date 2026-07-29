@@ -1,4 +1,4 @@
-# FEVER all-in-one 镜像：前端构建 + 后端运行（后端静态托管前端）
+# Pronoia all-in-one 镜像：前端构建 + 后端运行（后端静态托管前端）
 FROM node:20-slim AS fe
 WORKDIR /fe
 COPY frontend/package.json frontend/package-lock.json* ./

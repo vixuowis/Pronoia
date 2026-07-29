@@ -52,3 +52,7 @@ archive/
 
 # Runtime pids / logs (created by scripts/dev.sh)
 .run/
+
+# Local technical reports
+tech-report/
+test-report/

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 一键拉起 FEVER 后端 (8000) + 前端 (5173)
+# 一键拉起 Pronoia 后端 (8000) + 前端 (5173)
 # 用法: ./scripts/dev.sh
 set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

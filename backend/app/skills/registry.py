@@ -219,6 +219,7 @@ def ensure_skills_loaded() -> None:
     from . import (
         analysis, fundamentals, market, news,
         fundamentals_detail, boards, flows, holders, global_markets,
+        research_methods,
         evidence_graph,  # 9 个 _eg_* sub-tool（被 skill evidence_graph 内部 dispatch）
         skill,            # 8 个高层 skill（composite 改名为 skill，对 LLM 可见）
     )  # noqa: F401

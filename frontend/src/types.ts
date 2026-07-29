@@ -46,6 +46,15 @@ export interface AgentMeta {
   skills: string[];
 }
 
+export interface SuggestionItem {
+  text: string;
+  mode: Mode;
+  icon_hint: "newspaper" | "sparkles" | "trending" | "landmark" | "candlestick" | "users";
+  desc: string;
+  query?: string;
+  agent?: string;
+}
+
 /** team 模式 Planner 拆解的子任务 */
 export interface PlanItem {
   agent: string;

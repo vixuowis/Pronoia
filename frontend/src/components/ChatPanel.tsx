@@ -9,20 +9,17 @@ import {
   Users,
 } from "lucide-react";
 import { useStore } from "../store";
-import type { Mode } from "../types";
+import { api } from "../api";
+import type { SuggestionItem } from "../types";
 import Composer from "./Composer";
 import MessageItem from "./MessageItem";
 
-type Suggestion = {
-  text: string;
-  mode: Mode;
-  /** 字符串 hint，渲染时再用 ICON_BY_HINT 查 icon（避免 React element 被 JSON.stringify 损坏） */
-  icon_hint: "newspaper" | "sparkles" | "trending" | "landmark" | "candlestick" | "users";
-  desc: string;
-  query?: string;
-  /** mode="agent" 时指定调度的具体专家 */
-  agent?: string;
-};
+type Suggestion = SuggestionItem;
+
+function suggestionPrompt(s: Suggestion): string {
+  const prompt = (s.query ?? s.text).trim();
+  return prompt || s.text.trim();
+}
 
 /* ---------- 静态推荐池：每池 ≥4 条，「换一批」时随机抽 2 条/池，凑成 6 条 ---------- */
 
@@ -199,12 +196,22 @@ function Hero() {
   // 每次点击换一批时切换的「翻页标记」，仅用于触发图标旋转动画
   const [refreshing, setRefreshing] = useState(false);
 
-  const refresh = () => {
+  const refresh = async () => {
     if (refreshing) return;
     setRefreshing(true);
-    setSuggestions(pickSix());
-    // 让旋转动画跑完一圈后复位
-    window.setTimeout(() => setRefreshing(false), 600);
+    try {
+      const res = await api.suggestions();
+      if (Array.isArray(res.items) && res.items.length > 0) {
+        setSuggestions(res.items);
+      } else {
+        setSuggestions(pickSix());
+      }
+    } catch {
+      setSuggestions(pickSix());
+    } finally {
+      // 让旋转动画跑完一圈后复位
+      window.setTimeout(() => setRefreshing(false), 600);
+    }
   };
 
   return (
@@ -227,11 +234,11 @@ function Hero() {
         <div className="mt-7 grid grid-cols-1 gap-2.5 sm:grid-cols-2">
           {suggestions.map((s, i) => (
             <button
-              key={`${s.text}-${i}`}
+              key={`${suggestionPrompt(s)}-${i}`}
               disabled={streaming}
               onClick={() => {
                 setMode(s.mode);
-                void sendMessage(s.query ?? s.text, s.mode, s.agent);
+                void sendMessage(suggestionPrompt(s), s.mode, s.agent);
               }}
               className="group flex items-start gap-3 rounded-card border border-edge bg-card px-4 py-3.5 text-left shadow-card transition-all duration-200 hover:-translate-y-0.5 hover:border-brand/40 hover:shadow-pop disabled:opacity-50"
             >
@@ -244,7 +251,9 @@ function Hero() {
                 )}
               </span>
               <span className="min-w-0">
-                <span className="block text-[13.5px] font-medium leading-snug text-ink">{s.text}</span>
+                <span className="block text-[13.5px] font-medium leading-snug text-ink">
+                  {suggestionPrompt(s)}
+                </span>
                 <span className="mt-1 block text-[11.5px] text-faint">{s.desc}</span>
               </span>
             </button>

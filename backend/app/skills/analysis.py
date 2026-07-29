@@ -14,7 +14,14 @@ from typing import Optional
 import akshare as ak
 import pandas as pd
 
-from .market import _clean_ohlcv, is_us_symbol, norm_date, norm_index_symbol, norm_symbol
+from .market import (
+    _clean_ohlcv,
+    is_a_share_index_symbol,
+    is_us_symbol,
+    norm_date,
+    norm_index_symbol,
+    norm_symbol,
+)
 from .registry import err, meta, ok, skill
 
 
@@ -36,6 +43,21 @@ def _fetch_stock_close(sym: str, start8: str, end8: str) -> tuple[pd.DataFrame, 
         raise ValueError(f"{sym} 在 {start8}~{end8} 无行情数据（可能代码不存在）")
     df, _ = _clean_ohlcv(df, limit=100000)
     return df[["date", "close"]], src
+
+
+def _fetch_a_share_index_close(sym: str, start8: str) -> tuple[pd.DataFrame, str]:
+    """A 股指数日K。返回 [date, close] + 数据源。"""
+    try:
+        df = ak.stock_zh_index_daily(symbol=sym)
+    except Exception as e:  # noqa: BLE001
+        raise ValueError(f"指数 {sym} 获取失败: {type(e).__name__}: {e}")
+    if df is None or len(df) == 0:
+        raise ValueError(f"指数 {sym} 无数据")
+    df, _ = _clean_ohlcv(df, limit=100000)
+    df = df[df["date"] >= f"{start8[:4]}-{start8[4:6]}-{start8[6:]}"]
+    if len(df) == 0:
+        raise ValueError(f"指数 {sym} 在 {start8} 之后无数据")
+    return df[["date", "close"]], "akshare.stock_zh_index_daily"
 
 
 def _fetch_us_close(sym: str) -> tuple[pd.DataFrame, str]:
@@ -89,12 +111,17 @@ def event_study(symbol: str, event_date: str, pre: int = 20, post: int = 20,
             stock_df, src_stock = _fetch_us_close(sym)
             idx_df, src_idx = _fetch_us_index_close(idx_sym)
         else:
-            sym = norm_symbol(symbol)
+            raw_symbol = (symbol or "").strip().lower()
+            is_index_target = is_a_share_index_symbol(raw_symbol)
+            sym = norm_index_symbol(raw_symbol) if is_index_target else norm_symbol(symbol)
             idx_sym = norm_index_symbol(index_symbol or "sh000300")
             # 向前多取 60 天缓冲保证 pre 窗口；向后取到 min(今天, 事件+缓冲)
             start8 = (ev - timedelta(days=pre * 2 + 60)).strftime("%Y%m%d")
             end8 = min(date.today(), ev + timedelta(days=post * 2 + 15)).strftime("%Y%m%d")
-            stock_df, src_stock = _fetch_stock_close(sym, start8, end8)
+            if is_index_target:
+                stock_df, src_stock = _fetch_a_share_index_close(sym, start8)
+            else:
+                stock_df, src_stock = _fetch_stock_close(sym, start8, end8)
             try:
                 idx_raw = ak.stock_zh_index_daily(symbol=idx_sym)
             except Exception as e:  # noqa: BLE001
@@ -102,6 +129,7 @@ def event_study(symbol: str, event_date: str, pre: int = 20, post: int = 20,
             if idx_raw is None or len(idx_raw) == 0:
                 return err(f"基准指数 {idx_sym} 无数据")
             idx_df, _ = _clean_ohlcv(idx_raw, limit=100000)
+            src_idx = "akshare.stock_zh_index_daily"
             idx_df = idx_df[["date", "close"]].rename(columns={"close": "idx_close"})
             idx_df = idx_df[(idx_df["date"] >= f"{start8[:4]}-{start8[4:6]}-{start8[6:]}")]
 

@@ -43,9 +43,9 @@ export default function Sidebar() {
         {/* logo 缩写 */}
         <div
           className="font-serif text-[15px] font-bold text-ink"
-          title={`FEVER · ${VERSION}`}
+          title={`Pronoia · ${VERSION}`}
         >
-          F
+          P
         </div>
         {/* 新研究 */}
         <button
@@ -111,10 +111,10 @@ export default function Sidebar() {
       <div className="flex items-start justify-between px-5 pb-4 pt-5">
         <div>
           <div className="flex items-baseline gap-2">
-            <h1 className="font-serif text-[22px] font-bold tracking-wide text-ink">FEVER</h1>
+            <h1 className="font-serif text-[22px] font-bold tracking-wide text-ink">Pronoia</h1>
             <span className="rounded bg-jade-soft px-1.5 py-px text-[10px] font-semibold text-jade">{VERSION}</span>
           </div>
-          <p className="mt-0.5 font-serif text-[11.5px] italic text-mute">Financial Event Research</p>
+          <p className="mt-0.5 font-serif text-[11.5px] italic text-mute">Financial Research Workbench</p>
         </div>
         <button
           onClick={() => setLeftOpen(false)}

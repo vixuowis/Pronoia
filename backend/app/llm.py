@@ -101,6 +101,7 @@ async def run_agent(
     # skill 走 LLM 可见
     tools = tools_for_agent(agent_def.get("skills", []) or agent_id)
     client = get_client()
+    consecutive_failures: dict[str, int] = {}
 
     for round_no in range(1, max_rounds + 1):
         state["rounds"] = round_no
@@ -115,6 +116,7 @@ async def run_agent(
 
         tc_acc: dict[int, dict] = {}
         saw_content = False
+        round_content = ""
         finish_reason = None
         async for chunk in stream:
             if not chunk.choices:
@@ -126,8 +128,7 @@ async def run_agent(
                 yield {"type": "thinking", "agent": agent_id, "delta": rc}
             if delta.content:
                 saw_content = True
-                state["content"] += delta.content
-                yield {"type": "token", "agent": agent_id, "delta": delta.content}
+                round_content += delta.content
             if delta.tool_calls:
                 for tc in delta.tool_calls:
                     slot = tc_acc.setdefault(tc.index, {"id": "", "name": "", "arguments": ""})
@@ -144,6 +145,9 @@ async def run_agent(
         tool_calls = [tc_acc[i] for i in sorted(tc_acc)]
         if not tool_calls:
             # 最终答复轮（token 已流式发出）
+            if round_content:
+                state["content"] += round_content
+                yield {"type": "token", "agent": agent_id, "delta": round_content}
             break
 
         # 有 tool_calls：执行技能并继续循环
@@ -190,11 +194,41 @@ async def run_agent(
                 "args": args, "ok": bool(result.get("ok")), "preview": preview,
                 "artifact_ids": artifact_ids,
             })
+            if result.get("ok"):
+                consecutive_failures[name] = 0
+            else:
+                consecutive_failures[name] = consecutive_failures.get(name, 0) + 1
+            serialized_result = serialize_tool_result(result, config.TOOL_RESULT_MAX_CHARS)
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc_id,
-                "content": serialize_tool_result(result, config.TOOL_RESULT_MAX_CHARS),
+                "content": serialized_result,
             })
+        repeated_failure_skill = next((skill for skill, count in consecutive_failures.items() if count >= 3), None)
+        if repeated_failure_skill:
+            summary_kwargs: dict[str, Any] = {
+                "model": config.ARK_MODEL,
+                "messages": messages + [{
+                    "role": "user",
+                    "content": (
+                        f"技能 {repeated_failure_skill} 已连续失败 {consecutive_failures[repeated_failure_skill]} 次。"
+                        "请停止重复调用失败技能，明确说明当前缺失的数据与限制，只基于已获得的信息给出最优回答。"
+                    ),
+                }],
+                "stream": True,
+            }
+            summary_stream = await client.chat.completions.create(**summary_kwargs)
+            async for chunk in summary_stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                rc = getattr(delta, "reasoning_content", None)
+                if rc and emit_thinking:
+                    yield {"type": "thinking", "agent": agent_id, "delta": rc}
+                if delta.content:
+                    state["content"] += delta.content
+                    yield {"type": "token", "agent": agent_id, "delta": delta.content}
+            break
         # 继续下一轮
     else:
         # 达到最大轮数仍有 tool_calls —— 让模型做一次无工具总结
@@ -250,6 +284,60 @@ async def complete_json(system: str, user: str, *, max_tokens: int = 3000) -> Op
         return json.loads(text)
     except json.JSONDecodeError:
         m = text[text.find("{"): text.rfind("}") + 1]
+        try:
+            return json.loads(m)
+        except Exception:  # noqa: BLE001
+            return None
+
+
+def _response_output_text(resp: Any) -> str:
+    text = getattr(resp, "output_text", None)
+    if isinstance(text, str) and text.strip():
+        return text.strip()
+    try:
+        dump = resp.model_dump()
+    except Exception:
+        dump = {}
+    output = dump.get("output") or []
+    chunks: list[str] = []
+    for item in output:
+        if not isinstance(item, dict):
+            continue
+        for content in item.get("content") or []:
+            if not isinstance(content, dict):
+                continue
+            for key in ("text", "output_text"):
+                val = content.get(key)
+                if isinstance(val, str) and val.strip():
+                    chunks.append(val.strip())
+    return "\n".join(chunks).strip()
+
+
+async def complete_json_with_web_search(
+    system: str,
+    user: str,
+    *,
+    max_keywords: int = 3,
+    max_output_tokens: int = 2500,
+) -> Optional[dict]:
+    """Responses API + Ark web_search, returning parsed JSON or None."""
+    client = get_client()
+    resp = await client.responses.create(
+        model=config.ARK_MODEL,
+        instructions=system,
+        input=user,
+        tools=[{"type": "web_search", "max_keyword": max(1, min(int(max_keywords or 3), 10))}],
+        max_output_tokens=max_output_tokens,
+    )
+    text = _response_output_text(resp)
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        m = text[text.find("{"): text.rfind("}") + 1]
+        if not m:
+            return None
         try:
             return json.loads(m)
         except Exception:  # noqa: BLE001

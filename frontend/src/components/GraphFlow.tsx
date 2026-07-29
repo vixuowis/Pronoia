@@ -49,12 +49,6 @@ const EDGE_LABEL: Record<string, string> = {
   addresses: "对应",
 };
 
-const KIND_LABEL: Record<string, string> = {
-  evidence: "证据",
-  claim: "推论",
-  missing: "缺口",
-};
-
 /** 节点：按 kind 分类（category 字段），并按 status 着色（itemStyle.color） */
 function buildOption(payload: any) {
   const nodes: any[] = (payload?.nodes || []).map((n: any) => {
@@ -306,7 +300,7 @@ export default function GraphFlow({ payload, height = 420 }: { payload: any; hei
   useEffect(() => {
     if (!ref.current) return;
     const chart = echarts.init(ref.current);
-    chart.setOption(buildOption(payload));
+    chart.setOption(buildOption(payload) as any);
 
     const ro = new ResizeObserver(() => chart.resize());
     ro.observe(ref.current);

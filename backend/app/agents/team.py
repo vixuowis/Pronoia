@@ -103,11 +103,63 @@ def _short_summary(text: str, max_chars: int = 120) -> str:
     return truncated.rstrip() + "…"
 
 
+def _seed_graph_from_findings(
+    graph: EvidenceGraph,
+    findings: dict[str, str],
+    tool_trace: list[dict],
+) -> int:
+    """把前序专家产出预灌进 evidence graph，确保 deep_researcher 有图可继承。"""
+    added = 0
+    for aid, text in findings.items():
+        if not text.strip():
+            continue
+        graph.add_evidence(
+            source_kind="expert_finding",
+            source_ref=f"{aid}.findings",
+            title=f"{aid} 研究摘要",
+            summary=text.strip()[:1600],
+            raw={"agent": aid, "kind": "finding"},
+        )
+        added += 1
+    seen: set[tuple[str, str, str]] = set()
+    for t in tool_trace:
+        if t.get("type") != "tool":
+            continue
+        agent = str(t.get("agent") or "").strip()
+        skill = str(t.get("skill") or "").strip()
+        preview = str(t.get("preview") or "").strip()
+        if not agent or not skill or not preview:
+            continue
+        key = (agent, skill, preview[:120])
+        if key in seen:
+            continue
+        seen.add(key)
+        graph.add_evidence(
+            source_kind="tool_trace",
+            source_ref=f"{agent}.{skill}",
+            title=f"{agent} · {skill}",
+            summary=preview[:1200],
+            raw={
+                "agent": agent,
+                "skill": skill,
+                "ok": bool(t.get("ok")),
+                "args": t.get("args") or {},
+            },
+        )
+        added += 1
+        if added >= 12:
+            break
+    return added
+
+
 async def _run_expert_serial(
     agent_id: str,
     task_text: str,
     question: str,
     artifact_store: ArtifactStore,
+    *,
+    prior_findings: dict[str, str] | None = None,
+    prior_tool_trace: list[dict] | None = None,
 ) -> AsyncIterator[dict]:
     """单 expert 串行执行：agent_start → events → agent_done 收尾。失败也收尾。
 
@@ -122,12 +174,30 @@ async def _run_expert_serial(
     if agent_id == "deep_researcher":
         graph = EvidenceGraph(question=question, scope=task_text[:200])
         token = eg_attach(graph)
+        _seed_graph_from_findings(graph, prior_findings or {}, prior_tool_trace or [])
     try:
+        evidence_context = ""
+        if agent_id == "deep_researcher":
+            digest_blocks: list[str] = []
+            for aid, txt in (prior_findings or {}).items():
+                if txt.strip():
+                    digest_blocks.append(f"【{aid} 既有发现】\n{txt[:800]}")
+            tool_digest = _evidence_digest(prior_tool_trace or [], max_chars=1800)
+            if tool_digest:
+                digest_blocks.append(f"【已有工具证据摘要】\n{tool_digest}")
+            if digest_blocks:
+                evidence_context = (
+                    "\n\n【你必须先继承这些既有证据并补全证据图】\n"
+                    "当前 evidence graph 已经预载入前序专家的 findings / tool trace，"
+                    "你必须优先围绕这张图工作：先补 claim / link / status / missing，再决定是否继续取数。\n\n"
+                    + "\n\n".join(digest_blocks)
+                )
         messages = [
             {"role": "system", "content": system_prompt(agent_id)},
             {"role": "user", "content":
                 f"【用户原始问题】{question}\n\n【你的子任务】{task_text}\n\n"
-                "请调用你的技能获取真实数据后作答；最后用不超过600字总结发现（含关键数字+来源）。"},
+                "请调用你的技能获取真实数据后作答；最后用不超过600字总结发现（含关键数字+来源）。"
+                + evidence_context},
         ]
         async for ev in run_agent(agent_id, messages, agent_def=get_agent(agent_id),
                                   state=expert_state, artifact_store=artifact_store,
@@ -138,7 +208,7 @@ async def _run_expert_serial(
         if agent_id == "deep_researcher" and graph is not None:
             try:
                 cur = get_current_graph()
-                if cur is not None and (cur.nodes or cur.edges):
+                if cur is not None:
                     payload = cur.to_payload()
                     row = await artifact_store("graph", "证据图", payload)
                     yield {"type": "artifact", "agent": agent_id, "artifact": row}
@@ -234,6 +304,7 @@ async def run_team(
             plan = [{"agent": "deep_researcher", "task":
                      f"围绕「{question}」直接沉淀到证据图：每条关键数字作为 evidence，"
                      f"每条可证伪推断作为 claim，最后 export"}]
+    plan = [p for p in plan if p["agent"] != "deep_researcher"] + [p for p in plan if p["agent"] == "deep_researcher"]
     plan = plan[:4]
     plan_public = [{**p, "agent_name": AGENTS[p["agent"]]["name"]} for p in plan]
     yield {"type": "agent_step", "phase": "plan", "note": f"拆解为 {len(plan)} 个子任务",
@@ -243,7 +314,11 @@ async def run_team(
     # -------------------------------------------------------- 2) serial fan
     findings: dict[str, str] = {}
     for p in plan:
-        async for ev in _run_expert_serial(p["agent"], p["task"], question, artifact_store):
+        async for ev in _run_expert_serial(
+            p["agent"], p["task"], question, artifact_store,
+            prior_findings=findings if p["agent"] == "deep_researcher" else None,
+            prior_tool_trace=state["tool_trace"] if p["agent"] == "deep_researcher" else None,
+        ):
             # 提取 agent_findings 写入 state + findings；其余原样 yield
             if ev.get("type") == "agent_findings":
                 aid = ev["agent"]

@@ -1,6 +1,6 @@
-# FEVER v3 — 对话式 AI 金融事件分析工作台 · 架构蓝图（唯一事实来源）
+# Pronoia v3 — 对话式 AI 金融事件分析工作台 · 架构蓝图（唯一事实来源）
 
-> FEVER = Fin EVEnt Research。Tagline: **Hunt events. Trace echoes.**
+> Pronoia。Tagline: **Hunt events. Trace echoes.**
 > v3 重做：从「平行模块仪表盘」改为「对话式研究工作台」。对话即研究，产出即资产。
 
 ## 0. 产品形态
@@ -183,7 +183,7 @@ artifacts(id TEXT PK, case_id TEXT, message_id TEXT, kind TEXT, title TEXT, payl
 
 **设计语言**（严格遵守）：暖纸感研究工作台。背景 `#FAF9F7`，卡片 `#FFFFFF` + 1px `#E8E5E0` 边框 + 圆角 12px；主文字 `#1C1B1A`，次要 `#6B6862`；强调色琥珀 `#B45309`（用户/高亮）与青 `#0F766E`（agent/数据）；红涨绿跌（A股习惯，K线用 `#D14343`/`#2E9E5B`）。标题用 serif（`"Noto Serif SC", "Songti SC", serif`），正文 sans。禁止蓝紫渐变、禁止大面积高饱和色。hover 微交互即可，不要重动画。
 
-**布局**：左栏 260px（logo「FEVER」+ tagline、+ 新研究按钮、case 列表按更新时间倒序、底部技能/团队入口）；中栏 flex-1（消息流 max-w-3xl 居中，空态 hero：标题 + 4 个建议问题卡片 + 能力 chips）；右栏 400px 可折叠（tabs：产出物/技能/团队）。顶部不放多余 header。
+**布局**：左栏 260px（logo「Pronoia」+ tagline、+ 新研究按钮、case 列表按更新时间倒序、底部技能/团队入口）；中栏 flex-1（消息流 max-w-3xl 居中，空态 hero：标题 + 4 个建议问题卡片 + 能力 chips）；右栏 400px 可折叠（tabs：产出物/技能/团队）。顶部不放多余 header。
 
 **消息渲染**：assistant 消息按时间序由 parts 组成：ThinkingBlock（「思考过程」默认折叠）、ToolCallCard（skill 中文名 + 状态点 + 参数摘要，点击展开 args/preview，team 模式带 agent 色条头像）、ArtifactCard（图标+标题，点击右栏定位打开）、Markdown 正文。agent 分组：team 模式下不同 agent 的发言带 name badge（各自颜色）。
 
