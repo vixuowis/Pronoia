@@ -56,6 +56,42 @@ cp .env.example .env        # 填入你的 ARK_API_KEY（或任意 OpenAI 兼容
 ./start.sh                  # 后端 :8000 + 前端 :5173
 ```
 
+## 💻 CLI
+
+仓库现在内置了一套 `Pronoia` CLI，默认直接调用现有后端 API。
+
+```bash
+./pronoia health
+./p h
+./pronoia agents
+./pronoia skills
+./pronoia case list
+./pronoia case create --title "CLI 测试"
+./pronoia chat "分析贵州茅台近一个月走势"
+./pronoia chat "对英伟达做深度研究" --mode team --team-members event_scout,predictor
+./pronoia case report <case_id>
+```
+
+常用说明：
+- `./pronoia serve`：启动后端服务
+- 简写入口：`./p`
+- 常用简写：`h=health`、`ag=agents`、`sk=skills`、`sg=suggestions`、`q=chat`、`c=case`
+- 二级简写：`./p c ls`、`./p c new --title "测试"`、`./p c get <case_id>`、`./p c rm <case_id>`、`./p c rpt <case_id>`
+- `./pronoia --json ...`：JSON 输出，方便脚本集成
+- `./pronoia --base-url http://127.0.0.1:8000/api ...`：指定远端或本地 API
+- `./pronoia chat --verbose`：输出 tool/agent 事件
+- `./pronoia chat --show-thinking`：连 thinking 片段一起打印
+
+CLI 覆盖的子命令：
+- `serve`
+- `health`
+- `agents`
+- `skills`
+- `suggestions`
+- `chat`
+- `case list|create|show|delete|report`
+- `cache stats|clear|toggle`
+
 Docker（单容器，后端托管前端构建产物）：
 
 ```bash
@@ -105,6 +141,7 @@ skill/prompt 策略更新」的长期自进化闭环。
 
 ## 📋 更新日志
 
+- **3.8.3** · 2026-08-05 · 修补：新增 Pronoia CLI（含 ./p 简写）并增强首页推荐超时兜底
 - **3.8.2** · 2026-07-29 · 修补：品牌更名为 Pronoia，并统一首页推荐与团队研究体验
 - **3.8.1** · 2026-07-19 · 修补：SkillsTab「对外技能」SectionHeader 改为卡片化标题块（jade 边框 + jade-soft 背景 + 数量徽章 + Agent 实际可调用 hint），视觉权重对齐三层模型 / 底层工具；删除 SectionHeader 死代码。
 - **3.8.0** · 2026-07-19 · 功能：三层调度模型对齐：composite skill 改名为 skill（atomic 工具 = tool，对 LLM 不可见；skill 聚合多 atomic，对 LLM 可见；agent 只看 skill）。composite.py → skill.py。9 个 skill：event_study_skill / evidence_graph / financial_research / holder_research / macro_intel / market_research / news_intel / post_market_outlook / stock_overview。前端 SkillsTab 三层模型图示同步：tool(52) → skill(9) → agent(5) → team；CompositeSkillCard 改名为 SkillCard；types.ts 同步更新 category 类型。

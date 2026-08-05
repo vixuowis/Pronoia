@@ -1,6 +1,8 @@
 """Meta endpoints: /api/health · /api/skills · /api/agents · /api/cache/* (design.md §8)."""
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Query
 
 from .. import config
@@ -128,18 +130,21 @@ def agents():
 async def suggestions_refresh():
     fallback = _fallback_suggestions()
     try:
-        obj = await complete_json_with_web_search(
-            "你是 Pronoia 的推荐生成器。请先用联网搜索获取最新财经/市场热点，再生成 6 条适合金融研究工作台首页展示的推荐问题。"
-            "必须只输出 JSON 对象，格式为 {\"items\": [ ... ]}。"
-            "要求："
-            "1) 恰好 6 条；"
-            "2) mode 分布必须为 2 条 auto、2 条 agent、2 条 team；"
-            "3) agent 只能是 event_scout / market_analyst / fundamentals_analyst / predictor；"
-            "4) 每条必须包含 text/mode/icon_hint/desc/query，agent 仅 agent 模式需要；"
-            "5) 内容要尽量贴合最新热点，不要输出空泛模板。",
-            "请根据最近的中国市场、美股科技、宏观与政策热点，生成一组新的首页推荐问题。",
-            max_keywords=4,
-            max_output_tokens=2600,
+        obj = await asyncio.wait_for(
+            complete_json_with_web_search(
+                "你是 Pronoia 的推荐生成器。请先用联网搜索获取最新财经/市场热点，再生成 6 条适合金融研究工作台首页展示的推荐问题。"
+                "必须只输出 JSON 对象，格式为 {\"items\": [ ... ]}。"
+                "要求："
+                "1) 恰好 6 条；"
+                "2) mode 分布必须为 2 条 auto、2 条 agent、2 条 team；"
+                "3) agent 只能是 event_scout / market_analyst / fundamentals_analyst / predictor；"
+                "4) 每条必须包含 text/mode/icon_hint/desc/query，agent 仅 agent 模式需要；"
+                "5) 内容要尽量贴合最新热点，不要输出空泛模板。",
+                "请根据最近的中国市场、美股科技、宏观与政策热点，生成一组新的首页推荐问题。",
+                max_keywords=4,
+                max_output_tokens=2600,
+            ),
+            timeout=2.5,
         )
         normalized = _normalize_suggestions((obj or {}).get("items") if isinstance(obj, dict) else None)
         if len(normalized) == 6:
