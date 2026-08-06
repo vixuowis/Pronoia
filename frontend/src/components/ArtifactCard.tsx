@@ -1,4 +1,4 @@
-import { CandlestickChart, LineChart, Newspaper, ScrollText, Table2, ArrowUpRight, Network } from "lucide-react";
+import { CandlestickChart, LineChart, Newspaper, ScrollText, Table2, ArrowUpRight, Network, GitBranch } from "lucide-react";
 import type { ArtifactKind } from "../types";
 import { KIND_CN } from "../names";
 import { cls } from "../utils";
@@ -19,6 +19,8 @@ export function KindIcon({ kind, size = 16 }: { kind: ArtifactKind; size?: numbe
       return <ScrollText size={size} className={clsName} />;
     case "graph":
       return <Network size={size} className={clsName} />;
+    case "simulation":
+      return <GitBranch size={size} className={clsName} />;
     default:
       return <Table2 size={size} className={clsName} />;
   }

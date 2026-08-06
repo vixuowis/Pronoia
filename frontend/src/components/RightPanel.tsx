@@ -33,6 +33,8 @@ import CarChart from "./CarChart";
 import DataTable from "./DataTable";
 import Markdown from "./Markdown";
 import GraphView from "./GraphView";
+import SimulationLaunch from "./SimulationLaunch";
+import SimulationView from "./SimulationView";
 import LogicLibraryTab from "./LogicLibraryTab";
 
 /* ---------------- 证据卡列表 ---------------- */
@@ -163,7 +165,8 @@ function ArtifactDetail({ artifact }: { artifact: Artifact }) {
         {artifact.kind === "table" && <DataTable payload={artifact.payload} />}
         {artifact.kind === "evidence" && <EvidenceView payload={artifact.payload} />}
         {artifact.kind === "report" && <ReportView payload={artifact.payload} />}
-        {artifact.kind === "graph" && <GraphView payload={artifact.payload} />}
+        {artifact.kind === "graph" && <><SimulationLaunch artifact={artifact} /><GraphView payload={artifact.payload} /></>}
+        {artifact.kind === "simulation" && <SimulationView payload={artifact.payload} />}
       </div>
     </div>
   );
@@ -205,8 +208,9 @@ function ArtifactList() {
 
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 pb-4">
         {(() => {
+          // 分组：置顶 → 图表 → 表格 → 证据 → 报告/图谱/推演 → 其它
           const pinned = artifacts.filter((a) => a.pinned);
-          const byKind: Record<string, typeof artifacts> = { kline: [], line: [], table: [], evidence: [], graph: [], report: [] };
+          const byKind: Record<string, typeof artifacts> = { kline: [], line: [], table: [], evidence: [], graph: [], report: [], simulation: [] };
           for (const a of artifacts) {
             if (a.pinned) continue;
             (byKind[a.kind] ||= []).push(a);
@@ -253,12 +257,12 @@ function ArtifactList() {
               <GroupSection
                 label="深度研究"
                 icon={<Network size={12} className="text-brand" />}
-                count={(byKind.graph.length || 0) + (byKind.report.length || 0)}
+                count={(byKind.graph.length || 0) + (byKind.report.length || 0) + (byKind.simulation.length || 0)}
                 defaultOpen={true}
               >
-                {[...byKind.graph, ...byKind.report].map(renderCard)}
-                {byKind.graph.length + byKind.report.length === 0 && (
-                  <EmptyHint text="证据图与研究报告（团队模式自动产出）" />
+                {[...byKind.simulation, ...byKind.graph, ...byKind.report].map(renderCard)}
+                {byKind.graph.length + byKind.report.length + byKind.simulation.length === 0 && (
+                  <EmptyHint text="证据图、情景推演与研究报告" />
                 )}
               </GroupSection>
 
