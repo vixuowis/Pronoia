@@ -70,8 +70,27 @@ def init_db() -> None:
                 created_at TEXT NOT NULL,
                 FOREIGN KEY(case_id) REFERENCES cases(id) ON DELETE CASCADE
             );
+            CREATE TABLE IF NOT EXISTS simulation_jobs(
+                id TEXT PRIMARY KEY,
+                case_id TEXT NOT NULL,
+                graph_artifact_id TEXT NOT NULL,
+                gateway_job_id TEXT NOT NULL UNIQUE,
+                status TEXT NOT NULL,
+                stage TEXT NOT NULL,
+                progress REAL NOT NULL DEFAULT 0,
+                request_payload TEXT NOT NULL,
+                error TEXT,
+                artifact_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                finished_at TEXT,
+                FOREIGN KEY(case_id) REFERENCES cases(id) ON DELETE CASCADE,
+                FOREIGN KEY(graph_artifact_id) REFERENCES artifacts(id) ON DELETE CASCADE,
+                FOREIGN KEY(artifact_id) REFERENCES artifacts(id) ON DELETE SET NULL
+            );
             CREATE INDEX IF NOT EXISTS idx_messages_case ON messages(case_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_artifacts_case ON artifacts(case_id, pinned DESC, created_at);
+            CREATE INDEX IF NOT EXISTS idx_simulation_jobs_case ON simulation_jobs(case_id, created_at);
             """
         )
         conn.commit()
@@ -129,6 +148,7 @@ def touch_case(case_id: str) -> None:
 def delete_case(case_id: str) -> bool:
     with _lock:
         conn = _get_conn()
+        conn.execute("DELETE FROM simulation_jobs WHERE case_id=?", (case_id,))
         conn.execute("DELETE FROM messages WHERE case_id=?", (case_id,))
         conn.execute("DELETE FROM artifacts WHERE case_id=?", (case_id,))
         cur = conn.execute("DELETE FROM cases WHERE id=?", (case_id,))
@@ -264,3 +284,82 @@ def toggle_pin(case_id: str, artifact_id: str) -> Optional[dict]:
         )
         conn.commit()
     return get_artifact(case_id, artifact_id)
+
+
+# ------------------------------------------------------ simulation jobs ----
+
+def _decode_simulation_job(row: sqlite3.Row | None) -> Optional[dict]:
+    if row is None:
+        return None
+    data = dict(row)
+    data["request_payload"] = json.loads(data["request_payload"])
+    return data
+
+
+def create_simulation_job(
+    case_id: str,
+    graph_artifact_id: str,
+    gateway_job: dict[str, Any],
+    request_payload: dict[str, Any],
+) -> dict:
+    job_id, ts = new_id(), now_iso()
+    with _lock:
+        conn = _get_conn()
+        existing = conn.execute(
+            "SELECT * FROM simulation_jobs WHERE gateway_job_id=?",
+            (str(gateway_job["job_id"]),),
+        ).fetchone()
+        if existing:
+            return _decode_simulation_job(existing) or {}
+        conn.execute(
+            """
+            INSERT INTO simulation_jobs(
+                id,case_id,graph_artifact_id,gateway_job_id,status,stage,progress,
+                request_payload,error,artifact_id,created_at,updated_at,finished_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                job_id, case_id, graph_artifact_id, str(gateway_job["job_id"]),
+                str(gateway_job.get("status") or "queued"),
+                str(gateway_job.get("stage") or "queued"),
+                float(gateway_job.get("progress") or 0),
+                json.dumps(request_payload, ensure_ascii=False, default=str),
+                gateway_job.get("error"), None, ts, ts, gateway_job.get("finished_at"),
+            ),
+        )
+        conn.commit()
+    return get_simulation_job(job_id) or {}
+
+
+def get_simulation_job(job_id: str) -> Optional[dict]:
+    with _lock:
+        row = _get_conn().execute(
+            "SELECT * FROM simulation_jobs WHERE id=?", (job_id,)
+        ).fetchone()
+    return _decode_simulation_job(row)
+
+
+def list_simulation_jobs(case_id: str) -> list[dict]:
+    with _lock:
+        rows = _get_conn().execute(
+            "SELECT * FROM simulation_jobs WHERE case_id=? ORDER BY created_at DESC",
+            (case_id,),
+        ).fetchall()
+    return [_decode_simulation_job(row) or {} for row in rows]
+
+
+def update_simulation_job(job_id: str, **values: Any) -> Optional[dict]:
+    allowed = {"status", "stage", "progress", "error", "artifact_id", "finished_at"}
+    fields = {key: value for key, value in values.items() if key in allowed}
+    if not fields:
+        return get_simulation_job(job_id)
+    fields["updated_at"] = now_iso()
+    assignments = ",".join(f"{key}=?" for key in fields)
+    with _lock:
+        conn = _get_conn()
+        conn.execute(
+            f"UPDATE simulation_jobs SET {assignments} WHERE id=?",
+            (*fields.values(), job_id),
+        )
+        conn.commit()
+    return get_simulation_job(job_id)
