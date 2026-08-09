@@ -21,7 +21,7 @@ class StartSimulationRequest(BaseModel):
     as_of: str | None = None
     horizon_days: int = Field(default=30, ge=1, le=365)
     mode: Literal["quick"] = "quick"
-    max_actors: int = Field(default=6, ge=4, le=8)
+    max_actors: int | None = Field(default=None, ge=4, le=10)
     market: dict[str, Any] | None = None
 
 
@@ -46,6 +46,23 @@ def _gateway(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
 
 def _public(job: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in job.items() if key != "request_payload"}
+
+
+def _build_gateway_payload(
+    case_id: str, request: StartSimulationRequest
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    if not db.get_case(case_id):
+        raise HTTPException(status_code=404, detail="case not found")
+    graph = db.get_artifact(case_id, request.source_graph_artifact_id)
+    if not graph or graph.get("kind") != "graph":
+        raise HTTPException(status_code=404, detail="source evidence graph not found")
+    payload = request.model_dump()
+    payload["case_id"] = case_id
+    payload["evidence_graph"] = graph["payload"]
+    # Stable default is essential for idempotency: the same immutable graph
+    # and parameters must compile to the same spec hash on repeated clicks.
+    payload["as_of"] = request.as_of or graph["created_at"]
+    return payload, graph
 
 
 def _sync(job: dict[str, Any]) -> dict[str, Any]:
@@ -77,17 +94,7 @@ def _sync(job: dict[str, Any]) -> dict[str, Any]:
 
 @router.post("/cases/{case_id}/simulations", status_code=202)
 def start_simulation(case_id: str, request: StartSimulationRequest):
-    if not db.get_case(case_id):
-        raise HTTPException(status_code=404, detail="case not found")
-    graph = db.get_artifact(case_id, request.source_graph_artifact_id)
-    if not graph or graph.get("kind") != "graph":
-        raise HTTPException(status_code=404, detail="source evidence graph not found")
-    payload = request.model_dump()
-    payload["case_id"] = case_id
-    payload["evidence_graph"] = graph["payload"]
-    # Stable default is essential for idempotency: the same immutable graph
-    # and parameters must compile to the same spec hash on repeated clicks.
-    payload["as_of"] = request.as_of or graph["created_at"]
+    payload, _ = _build_gateway_payload(case_id, request)
     remote = _gateway("POST", "/v1/simulations", json=payload)
     job = db.create_simulation_job(
         case_id,
@@ -96,6 +103,12 @@ def start_simulation(case_id: str, request: StartSimulationRequest):
         {key: value for key, value in payload.items() if key != "evidence_graph"},
     )
     return _public(_sync(job))
+
+
+@router.post("/cases/{case_id}/simulations/preview")
+def preview_simulation(case_id: str, request: StartSimulationRequest):
+    payload, _ = _build_gateway_payload(case_id, request)
+    return _gateway("POST", "/v1/simulations/preview", json=payload)
 
 
 @router.get("/simulations/{job_id}")

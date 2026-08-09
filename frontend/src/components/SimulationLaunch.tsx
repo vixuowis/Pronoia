@@ -23,6 +23,8 @@ export default function SimulationLaunch({ artifact }: { artifact: Artifact }) {
   const selectArtifact = useStore((s) => s.selectArtifact);
   const [job, setJob] = useState<SimulationJob | null>(null);
   const [error, setError] = useState("");
+  const [actorCap, setActorCap] = useState<"auto" | "4" | "6" | "8" | "10">("auto");
+  const [preview, setPreview] = useState<Awaited<ReturnType<typeof api.simulationPreview>> | null>(null);
   const alive = useRef(true);
 
   useEffect(() => {
@@ -41,6 +43,22 @@ export default function SimulationLaunch({ artifact }: { artifact: Artifact }) {
     }).catch(() => { /* gateway may be offline while browsing old artifacts */ });
     return () => { active = false; };
   }, [artifact.id, caseId]);
+  useEffect(() => {
+    if (!caseId) return;
+    let active = true;
+    setPreview(null);
+    const body = {
+      source_graph_artifact_id: artifact.id,
+      question: artifact.payload?.question,
+      horizon_days: 30,
+      mode: "quick" as const,
+      ...(actorCap === "auto" ? {} : { max_actors: Number(actorCap) }),
+    };
+    void api.simulationPreview(caseId, body).then((result) => {
+      if (active) setPreview(result);
+    }).catch(() => { /* 正式启动时仍会显示可操作的错误 */ });
+    return () => { active = false; };
+  }, [actorCap, artifact.id, artifact.payload?.question, caseId]);
   useEffect(() => {
     if (!job || !["queued", "running", "cancelling"].includes(job.status)) return;
     const timer = window.setTimeout(async () => {
@@ -68,7 +86,7 @@ export default function SimulationLaunch({ artifact }: { artifact: Artifact }) {
         question: artifact.payload?.question,
         horizon_days: 30,
         mode: "quick",
-        max_actors: 6,
+        ...(actorCap === "auto" ? {} : { max_actors: Number(actorCap) }),
       });
       setJob(next);
       if (next.artifact_id) {
@@ -98,6 +116,40 @@ export default function SimulationLaunch({ artifact }: { artifact: Artifact }) {
         <div className="min-w-0 flex-1">
           <p className="text-[13px] font-semibold text-ink">多智能体事件推演</p>
           <p className="mt-1 text-[11.5px] leading-relaxed text-mute">将证据图中的事实编译为参与方、约束与行动空间，异步生成未来情景。当前快速模式输出情景，不输出校准概率。</p>
+          {!busy && (
+            <div className="mt-3 rounded-lg border border-jade/20 bg-white/60 p-2.5">
+              <div className="flex items-center justify-between gap-3">
+                <label htmlFor={`actor-cap-${artifact.id}`} className="text-[11px] font-medium text-ink">参与方预算</label>
+                <select
+                  id={`actor-cap-${artifact.id}`}
+                  value={actorCap}
+                  onChange={(event) => setActorCap(event.target.value as typeof actorCap)}
+                  className="rounded-md border border-edge bg-card px-2 py-1 text-[11px] text-ink outline-none focus:border-jade"
+                >
+                  <option value="auto">自动推荐</option>
+                  <option value="4">最多 4 个</option>
+                  <option value="6">最多 6 个</option>
+                  <option value="8">最多 8 个</option>
+                  <option value="10">最多 10 个</option>
+                </select>
+              </div>
+              {preview && (
+                <div className="mt-2 text-[10.5px] leading-relaxed text-mute">
+                  <p>
+                    {actorCap === "auto" ? `本次自动推荐最多 ${preview.actor_selection.recommended_count} 个，实际选中 ${preview.actors.length} 个` : `本次最多 ${preview.actor_selection.applied_limit} 个，实际选中 ${preview.actors.length} 个`}
+                  </p>
+                  <div className="mt-1.5 flex flex-wrap gap-1">
+                    {preview.actors.map((actor) => (
+                      <span key={actor.id} title={actor.selection_reason} className="rounded-full bg-jade-soft px-2 py-0.5 text-jade">{actor.label}</span>
+                    ))}
+                  </div>
+                  <ul className="mt-1.5 space-y-0.5">
+                    {preview.actors.map((actor) => <li key={actor.id}>• {actor.label}：{actor.selection_reason}</li>)}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
           {busy ? (
             <div className="mt-3">
               <div className="mb-1.5 flex items-center justify-between text-[11px] text-mute">
