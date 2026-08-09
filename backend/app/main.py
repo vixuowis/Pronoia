@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import config, db
-from .routes import cases, chat, logic, meta
+from .routes import cases, chat, logic, meta, simulations
 
 app = FastAPI(title="Pronoia", version="3.8.3", docs_url="/api/docs")
 
@@ -25,6 +25,7 @@ app.include_router(meta.router)
 app.include_router(cases.router)
 app.include_router(chat.router)
 app.include_router(logic.router)
+app.include_router(simulations.router)
 
 
 @app.on_event("startup")

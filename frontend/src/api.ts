@@ -7,6 +7,7 @@ import type {
   SkillMeta,
   SuggestionItem,
   SSEEvent,
+  SimulationJob,
 } from "./types";
 
 const BASE = "/api";
@@ -46,6 +47,47 @@ export const api = {
     }),
   genReport: (caseId: string) =>
     req<Artifact>(`/cases/${caseId}/report`, { method: "POST", body: "{}" }),
+  startSimulation: (
+    caseId: string,
+    body: {
+      source_graph_artifact_id: string;
+      question?: string;
+      horizon_days?: number;
+      mode?: "quick" | "calibrated";
+      max_actors?: number;
+    },
+  ) => req<SimulationJob>(`/cases/${caseId}/simulations`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  }),
+  simulationPreview: (
+    caseId: string,
+    body: {
+      source_graph_artifact_id: string;
+      question?: string;
+      horizon_days?: number;
+      mode?: "quick";
+      max_actors?: number;
+    },
+  ) => req<{
+    actor_selection: {
+      mode: "auto" | "manual_cap";
+      recommended_count: number;
+      applied_limit: number;
+      configured_count: number;
+      rationale: string;
+    };
+    actors: Array<{ id: string; label: string; kind: string; selection_reason: string }>;
+  }>(`/cases/${caseId}/simulations/preview`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  }),
+  simulation: (jobId: string) => req<SimulationJob>(`/simulations/${jobId}`),
+  simulations: (caseId: string) => req<SimulationJob[]>(`/cases/${caseId}/simulations`),
+  cancelSimulation: (jobId: string) => req<SimulationJob>(`/simulations/${jobId}/cancel`, {
+    method: "POST",
+    body: "{}",
+  }),
   logicAutoCheck: (item: {
     hypothesis: string;
     category?: string;

@@ -24,6 +24,14 @@ ARK_MODEL: str = os.getenv("ARK_MODEL", "deepseek-v4-flash")
 
 DB_PATH: str = os.getenv("FEVER_DB_PATH", str(_BACKEND_DIR / "fever.db"))
 
+# Long-running actor simulation is isolated behind an asynchronous gateway.
+SIMULATION_GATEWAY_URL: str = os.getenv(
+    "FEVER_SIMULATION_GATEWAY_URL", "http://127.0.0.1:5010"
+).rstrip("/")
+SIMULATION_GATEWAY_TIMEOUT: float = float(
+    os.getenv("FEVER_SIMULATION_GATEWAY_TIMEOUT", "15")
+)
+
 # Skill execution guardrails (design.md §2/§4)
 SKILL_TIMEOUT: float = float(os.getenv("FEVER_SKILL_TIMEOUT", "60"))  # seconds per skill call
 TOOL_RESULT_MAX_CHARS: int = int(os.getenv("FEVER_TOOL_RESULT_MAX_CHARS", "4000"))

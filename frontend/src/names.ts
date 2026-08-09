@@ -100,4 +100,5 @@ export const KIND_CN: Record<string, string> = {
   evidence: "证据",
   report: "研究报告",
   graph: "证据图",
+  simulation: "情景推演",
 };
