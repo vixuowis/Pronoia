@@ -133,6 +133,42 @@ class SimulationRoutesTests(unittest.TestCase):
         self.assertEqual(cancelled.json()["status"], "cancelling")
         self.assertEqual(cancelled.json()["stage"], "cancel_requested")
 
+    def test_preview_passes_auto_actor_budget_without_creating_artifact(self):
+        def gateway(method, path, **kwargs):
+            self.assertEqual(method, "POST")
+            self.assertEqual(path, "/v1/simulations/preview")
+            self.assertIsNone(kwargs["json"]["max_actors"])
+            return {
+                "actor_selection": {
+                    "mode": "auto",
+                    "recommended_count": 4,
+                    "applied_limit": 4,
+                    "configured_count": 4,
+                    "rationale": "test",
+                },
+                "actors": [
+                    {
+                        "id": "actor_issuer",
+                        "label": "事件主体",
+                        "kind": "issuer",
+                        "selection_reason": "事件研究主体",
+                    }
+                ],
+            }
+
+        with patch("app.routes.simulations._gateway", side_effect=gateway):
+            response = self.client.post(
+                f"/api/cases/{self.case['id']}/simulations/preview",
+                json={"source_graph_artifact_id": self.graph["id"]},
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["actor_selection"]["mode"], "auto")
+        simulations = [
+            item for item in db.list_artifacts(self.case["id"])
+            if item["kind"] == "simulation"
+        ]
+        self.assertEqual(simulations, [])
+
 
 if __name__ == "__main__":
     unittest.main()

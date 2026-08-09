@@ -8,6 +8,8 @@ export default function SimulationView({ payload }: { payload: any }) {
   const execution = payload?.execution ?? {};
   const scenarios = Array.isArray(payload?.scenarios) ? payload.scenarios : [];
   const warnings = Array.isArray(payload?.warnings) ? payload.warnings : [];
+  const actorSelection = execution.actor_selection ?? {};
+  const configuredActors = Array.isArray(execution.configured_actors) ? execution.configured_actors : [];
   return (
     <div className="space-y-3">
       <div className="rounded-card border border-edge bg-card p-3.5 shadow-card">
@@ -18,6 +20,15 @@ export default function SimulationView({ payload }: { payload: any }) {
           <Stat label="有效决策" value={execution.valid_decision_count ?? 0} />
           <Stat label="情景分支" value={scenarios.length} />
         </div>
+        {configuredActors.length > 0 && (
+          <div className="mt-3 border-t border-edge pt-2.5 text-[11px] leading-relaxed text-mute">
+            <p className="font-medium text-ink">参与方选择 · {actorSelection.mode === "auto" ? "自动推荐" : "手动上限"}</p>
+            {actorSelection.rationale && <p className="mt-1 text-faint">{actorSelection.rationale}</p>}
+            <ul className="mt-1.5 space-y-1">
+              {configuredActors.map((actor: any) => <li key={actor.id}>• {actor.label}：{actor.selection_reason}</li>)}
+            </ul>
+          </div>
+        )}
       </div>
       <div className="rounded-lg border border-[#E8D7A5] bg-[#FFF9E8] px-3 py-2.5 text-[11.5px] leading-relaxed text-[#775B19]">
         <span className="font-semibold">含义提示：</span>分支频率与置信度只描述模拟内部的一致性，不等于真实市场发生概率，也不构成投资建议。
