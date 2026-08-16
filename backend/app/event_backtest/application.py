@@ -250,7 +250,7 @@ def render_trajectory_md_report(
     A = md.append
 
     # ===== Header =====
-    A(f"# FEVER team_full 单条事件试跑报告 — {meta.get('symbol','?')}({meta.get('market','?')})")
+    A(f"# Pronoia team_full 单条事件试跑报告 — {meta.get('symbol','?')}({meta.get('market','?')})")
     A("")
     A(f"> **生成时间**：{dt.datetime.now().strftime('%Y-%m-%d %H:%M')}")
     A(f"> **runner**：`team_full`（真 Team Agent 5 阶段流水线：plan → fan-out → synthesize → verify → extract）")

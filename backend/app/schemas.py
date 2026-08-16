@@ -61,7 +61,7 @@ class CreateBacktestRunRequest(BaseModel):
         ..., description="回测 runner 类型"
     )
     dataset_id: Optional[str] = Field(None, description="bt_datasets.id；若传则 events/labels 从 dataset 取")
-    events_path: Optional[str] = Field(None, description="数据集 JSONL 路径，相对路径以 FEVER 项目根目录为基准，或填绝对路径；与 dataset_id 二选一")
+    events_path: Optional[str] = Field(None, description="数据集 JSONL 路径，相对路径以 Pronoia 项目根目录为基准，或填绝对路径；与 dataset_id 二选一")
     labels_path: Optional[str] = Field(None, description="labels JSONL 路径（可选，不传则不做 oracle 对照）")
     prompt_variant: str = Field("v0", description="system prompt / agent 编排 变体标识（用于 A/B 对照，例：v0 / optimized-team / ab-1）")
     model_version: Optional[str] = Field(None, description="指定 LLM 模型版本")

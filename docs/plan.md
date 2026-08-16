@@ -1,11 +1,11 @@
-# FEVER 重做计划 — AI 金融事件分析工作台（对话式）
+# Pronoia 重做计划 — AI 金融事件分析工作台（对话式，开发代号 FEVER）
 
 ## 目标
 重做一个开源的 AI 金融事件分析工作台：对话式交互（类 Claude for Science 的金融版），
 功能封装为 Skills / Agents / Agent Team，数据用 akshare，LLM 用 Ark API (deepseek-v4-flash)。
 
 ## 约束与关键决策
-- 原 FEVER 问题：模块平行堆砌、动作停留在 UI 状态层、无研究资产沉淀 → 新版以「对话 + 研究案例(Case)」为主轴
+- 原 FEVER（Pronoia 前代号）问题：模块平行堆砌、动作停留在 UI 状态层、无研究资产沉淀 → 新版以「对话 + 研究案例(Case)」为主轴
 - 数据：akshare 免费接口（注意实测报告中 A股实时行情/板块接口在某些网络下不可用，需在本环境实测并做降级）
 - LLM：ARK_API_URL=https://ark.cn-beijing.volces.com/api/coding/v3, model=deepseek-v4-flash
 - 交付：可运行的全栈项目（FastAPI 后端 + React 前端），开源级 README

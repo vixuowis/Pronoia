@@ -9,7 +9,7 @@ os.environ.setdefault("TQDM_DISABLE", "1")
 
 from dotenv import load_dotenv
 
-# backend/app/config.py -> app -> backend -> FEVER project root
+# backend/app/config.py -> app -> backend -> Pronoia project root
 _BACKEND_DIR = Path(__file__).resolve().parents[1]
 _PROJECT_ROOT = _BACKEND_DIR.parent
 

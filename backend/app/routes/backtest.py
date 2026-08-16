@@ -34,7 +34,7 @@ router = APIRouter(prefix="/api/bt", tags=["backtest"])
 
 
 def _resolve_path(raw: str | None) -> str | None:
-    """把相对路径（以 FEVER 项目根为基准）解析为绝对路径；绝对路径原样返回。"""
+    """把相对路径（以 Pronoia 项目根为基准）解析为绝对路径；绝对路径原样返回。"""
     if raw is None:
         return None
     s = str(raw).strip()

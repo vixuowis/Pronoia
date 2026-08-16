@@ -71,11 +71,11 @@ function DirBadge({ d }: { d: BTDirection | string | null | undefined }) {
 }
 
 /**
- * 判断 source_url 是否为 FEVER 生成的占位链接（点出去一定 404）。
+ * 判断 source_url 是否为 Pronoia 合成的占位链接（点出去一定 404）。
  * 此类链接点击时应当拦截 → 打开「完整事件说明」Modal，而非跳外部 404。
  *
  * 识别逻辑（优先自上而下，最后用强特征兜底）：
- * 1) URL 里包含已知的 dataset_id 连字符形式 "<dsid>-NNN"（每个 FEVER 合成事件的 event_id = "<dsid>-NNN"，写 source_url 时都会带它）。
+ * 1) URL 里包含已知的 dataset_id 连字符形式 "<dsid>-NNN"（每个 Pronoia 合成事件的 event_id = "<dsid>-NNN"，写 source_url 时都会带它）。
  * 2) 兼容旧数据：域名 + 参数特征（巨潮/SEC/港交所/中国政府网里的 fever_ 占位符）。
  */
 function isFeverSyntheticSourceUrl(url: string): boolean {
@@ -1362,7 +1362,7 @@ function CaseDetailPanel({
                   <span className="text-mute">来源 URL：</span>
                   {synthetic ? (
                     <>
-                      <span className="rounded bg-violet/15 px-1 text-[10px] text-violet">FEVER 合成事件</span>
+                      <span className="rounded bg-violet/15 px-1 text-[10px] text-violet">Pronoia 合成事件</span>
                       <span className="font-mono break-all text-faint">{sourceUrlStr}</span>
                       <span className="text-mute">（原文即上方事件正文，此 URL 仅作追溯引用）</span>
                     </>

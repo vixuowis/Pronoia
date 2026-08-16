@@ -302,7 +302,7 @@ def cmd_case_study(args: argparse.Namespace) -> int:
 
     SEP = "=" * 110
     P()
-    P(SEP); P("  FEVER Case Study — CLI 自动挑典型（N=%d） × 三种方案 × T+3 Oracle Label" % len(events or [])); P(SEP)
+    P(SEP); P("  Pronoia Case Study — CLI 自动挑典型（N=%d） × 三种方案 × T+3 Oracle Label" % len(events or [])); P(SEP)
     P()
     pred_title_main = str(Path(args.pred).name)
     pred_title_v1 = str(Path(getattr(args, "pred_v1") or "").name) if getattr(args, "pred_v1") else ""
@@ -468,7 +468,7 @@ def cmd_trajectory(args: argparse.Namespace) -> int:
 
     SEP = "=" * 110
     P()
-    P(SEP); P(f"  FEVER CLI 真 Team Agent Trajectory 回放  event_id={eid}"); P(SEP)
+    P(SEP); P(f"  Pronoia CLI 真 Team Agent Trajectory 回放  event_id={eid}"); P(SEP)
     P()
     P(f"  source file     = {p}  size_kb={p.stat().st_size/1024:.1f}")
     P(f"  generated_at    = {obj.get('generated_at','')}   wall_seconds = {obj.get('wall_seconds','')}")

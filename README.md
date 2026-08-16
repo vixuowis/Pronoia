@@ -97,7 +97,7 @@ CLI 覆盖的子命令：
 - `chat`
 - `case list|create|show|delete|report`
 - `cache stats|clear|toggle`
-- **回测（FEVER Backtest，P0 Web 配套 CLI）**：
+- **回测（Pronoia Backtest，P0 Web 配套 CLI）**：
   ```bash
   ./pronoia bt run     --events data/xxx.events.jsonl --out /tmp/bt_ckpt/ --labels data/xxx.labels.jsonl \
                        --runner team_full --concurrency 2 --dataset-id cn_earnings_10
@@ -106,7 +106,7 @@ CLI 覆盖的子命令：
   ./pronoia bt cst     --events data/xxx.events.jsonl --out-md /tmp/cst.md          # 对照现有 ckpt 生成结构化案例汇报表
   ./pronoia bt trajectory --ckpt-dir /tmp/bt_ckpt/ --out-md /tmp/traj.md --labels data/xxx.labels.jsonl
   ```
-  > 回测 Web UI 默认走 `POST /api/bt/runs`，请用上方「🧪 FEVER 回测 Web 平台」章节访问。
+  > 回测 Web UI 默认走 `POST /api/bt/runs`，请用上方「🧪 Pronoia 回测 Web 平台」章节访问。
 
 Docker（单容器，后端托管前端构建产物）：
 
@@ -142,7 +142,7 @@ docker build -t fever . && docker run -p 8000:8000 fever
 主理人 Router · 事件猎手 Event Scout · 行情分析师 Market Analyst ·
 基本面分析师 Fundamentals Analyst · 复核员 Verifier · 报告撰写员 Report Writer
 
-## 🧪 FEVER 事件驱动回测平台（P0 · Web + CLI 双入口）
+## 🧪 Pronoia 事件驱动回测平台（P0 · Web + CLI 双入口）
 
 基于**真实事件 + 真实行情**的系统级回测。把每一次 Team/Predictor 的预测、
 Agent 协作的推理链、Tool/Skill 调用参数与结果，与 Oracle T+3 超额收益（CAR）
@@ -227,7 +227,7 @@ skill/prompt 策略更新」的长期自进化闭环。
 
 ## 📋 更新日志
 
-- **3.9.0** · 2026-08-16 · 功能：新增 FEVER 回测 Web 平台 P0（全栈）：Data list 选择真实数据集 → 启动/暂停/继续/取消、SSE 实时进度 + 3s 轮询兜底、事件目录 N 条待执行/执行中/已完成、单 Case 详情 6 个 Tab（Team Log/决策结论/Agent 逻辑链/行情视图/As-of Packet/Team Prompt）、原文链接真实可点击。5 个内置真实小数据集各 10 条，全部来自 v9_1000 官方回测池，零杜撰、零未来日期、100% 真实东方财富/Yahoo SEC 原文链接 + 真实 T+3 行情 Oracle Label。
+- **3.9.0** · 2026-08-16 · 功能：新增 Pronoia 回测 Web 平台 P0（全栈）：Data list 选择真实数据集 → 启动/暂停/继续/取消、SSE 实时进度 + 3s 轮询兜底、事件目录 N 条待执行/执行中/已完成、单 Case 详情 6 个 Tab（Team Log/决策结论/Agent 逻辑链/行情视图/As-of Packet/Team Prompt）、原文链接真实可点击。5 个内置真实小数据集各 10 条，全部来自 v9_1000 官方回测池，零杜撰、零未来日期、100% 真实东方财富/Yahoo SEC 原文链接 + 真实 T+3 行情 Oracle Label。
 - **3.8.3** · 2026-08-05 · 修补：新增 Pronoia CLI（含 ./p 简写）并增强首页推荐超时兜底
 - **3.8.2** · 2026-07-29 · 修补：品牌更名为 Pronoia，并统一首页推荐与团队研究体验
 - **3.8.1** · 2026-07-19 · 修补：SkillsTab「对外技能」SectionHeader 改为卡片化标题块（jade 边框 + jade-soft 背景 + 数量徽章 + Agent 实际可调用 hint），视觉权重对齐三层模型 / 底层工具；删除 SectionHeader 死代码。

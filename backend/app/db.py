@@ -73,7 +73,7 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_messages_case ON messages(case_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_artifacts_case ON artifacts(case_id, pinned DESC, created_at);
 
-            -- ==================== FEVER Backtest tables (P0) ====================
+            -- ==================== Pronoia Backtest tables (P0) ====================
             CREATE TABLE IF NOT EXISTS bt_runs(
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,

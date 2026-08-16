@@ -75,7 +75,7 @@ def summarize(events: list[dict]) -> dict:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Replay FEVER auto-mode low-score cases.")
+    parser = argparse.ArgumentParser(description="Replay Pronoia auto-mode low-score cases.")
     parser.add_argument("--base-url", default="http://127.0.0.1:8000", help="Backend base URL")
     parser.add_argument(
         "--cases",
