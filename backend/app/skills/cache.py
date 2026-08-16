@@ -25,6 +25,14 @@ TTL_PROFILES: dict[str, int] = {
     "industry_info":     60 * 30,         # 30m  - 板块实时概况（PE/PB/换手）
     "board_history":     60 * 30,         # 30m  - 历史 K 线
     "stock_industry":    60 * 60 * 24,    # 24h  - 个股所属行业
+    # K 线 / 行情（team_full 同会话内多 expert 重复拉同一 symbol，30m TTL 消除重复网络请求）
+    "kline":             60 * 30,         # 30m  - 个股/指数日K线
+    "us_stock":          60 * 30,         # 30m  - 美股行情/财务/指标
+    "sector_spot":       60 * 2,          # 2min - 板块实时快照
+    # 事件研究（同一 symbol+event_date 被 event_scout/market_analyst/deep_researcher 重复调）
+    "event_study":       60 * 30,         # 30m  - 事件研究法 AR/CAR
+    # 股票搜索（代码映射基本不变）
+    "search":            60 * 60,         # 1h   - search_stock 代码搜索
     # 资金流（盘中变化快）
     "fund_flow_rank":    60 * 2,          # 2min
     "fund_flow":         60 * 5,          # 5min

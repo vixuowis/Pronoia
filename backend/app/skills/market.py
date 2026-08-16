@@ -19,6 +19,7 @@ import requests
 import yfinance as yf
 
 from .registry import err, meta, ok, skill
+from . import cache
 
 # ------------------------------------------------------------ helpers ------
 
@@ -453,6 +454,7 @@ def _clean_ohlcv(df: pd.DataFrame, limit: int = 250) -> tuple[pd.DataFrame, bool
         "required": ["keyword"],
     },
     internal=False,)
+@cache.cached("search")
 def search_stock(keyword: str) -> dict:
     # 1) A 股搜索：sina suggest3（网络失败也不算致命）
     a_items: list[dict] = []
@@ -555,6 +557,7 @@ def search_stock(keyword: str) -> dict:
         "required": ["symbol"],
     },
     internal=True,)
+@cache.cached("kline")
 def get_stock_daily(symbol: str, start_date: Optional[str] = None,
                     end_date: Optional[str] = None, adjust: str = "qfq") -> dict:
     # 美股字母代码 → 转交美股 skill
@@ -611,6 +614,7 @@ def get_stock_daily(symbol: str, start_date: Optional[str] = None,
         "required": ["symbol"],
     },
     internal=True,)
+@cache.cached("us_stock")
 def get_us_stock_daily(symbol: str, start_date: Optional[str] = None,
                        end_date: Optional[str] = None, adjust: str = "qfq") -> dict:
     """美股日K（akshare.stock_us_daily 东方财富源）。start_date/end_date 接口不支持，按返回全量截取。"""
@@ -681,6 +685,7 @@ def get_us_stock_daily(symbol: str, start_date: Optional[str] = None,
         "required": ["symbol"],
     },
     internal=True,)
+@cache.cached("kline")
 def get_index_daily(symbol: str, start_date: Optional[str] = None,
                     end_date: Optional[str] = None) -> dict:
     try:
@@ -719,6 +724,7 @@ def get_index_daily(symbol: str, start_date: Optional[str] = None,
     "获取新浪行业板块实时快照（板块、公司数、平均价、涨跌幅、总成交额、领涨股）。",
     {"type": "object", "properties": {}, "required": []},
     internal=True,)
+@cache.cached("sector_spot")
 def get_sector_spot() -> dict:
     try:
         df = ak.stock_sector_spot(indicator="新浪行业")

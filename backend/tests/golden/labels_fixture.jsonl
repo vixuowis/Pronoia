@@ -1,0 +1,4 @@
+{"event_id":"e1","market":"CN","event_type_l2":"rate","label_t1":"up","label_t3":"up","label_t5":"up","car_t1":0.01,"car_t3":0.015,"car_t5":0.02}
+{"event_id":"e2","market":"CN","event_type_l2":"earnings","label_t1":"down","label_t3":"neutral","label_t5":"down","car_t1":-0.005,"car_t3":0.0,"car_t5":-0.01}
+{"event_id":"e3","market":"US","event_type_l2":"earnings","label_t1":"up","label_t3":"down","label_t5":"down","car_t1":0.002,"car_t3":-0.004,"car_t5":-0.003}
+{"event_id":"e4","market":"US","event_type_l2":"rate","label_t1":"neutral","label_t3":"down","label_t5":"down","car_t1":0.0,"car_t3":-0.006,"car_t5":-0.008}

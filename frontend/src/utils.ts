@@ -1,7 +1,8 @@
-/** className 拼接小工具 */
+/** className 拼接小工具（作为默认导出 clsx 别名）。 */
 export function cls(...xs: (string | false | null | undefined)[]): string {
   return xs.filter(Boolean).join(" ");
 }
+export { cls as clsx };
 
 export function uid(): string {
   return `m_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;

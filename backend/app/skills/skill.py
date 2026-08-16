@@ -621,7 +621,7 @@ async def macro_intel(topic: str | None = None) -> dict:
     "事件研究：基于 event_study 子能力，分析单次事件前后的异常收益（CAR）。"
     "event_date YYYY-MM-DD，symbol 支持 6 位 A 股代码或美股 ticker（AAPL/NVDA/TSLA）。"
     "如果传 keyword 而无 symbol，先用 search_stock 解析（自动识别美股/ A 股）。"
-    "window_days 默认 30；美股默认基准 SPY，A 股默认 sh000300。",
+    "window_days 默认 30；回测/严格 as-of 场景请传 as_of=True，此时仅返回事件日前数据（禁止未来函数）。",
     {
         "type": "object",
         "properties": {
@@ -630,6 +630,10 @@ async def macro_intel(topic: str | None = None) -> dict:
                        "description": "股票代码：A 股 6 位 / 美股 ticker（与 keyword 二选一）"},
             "keyword": {"type": "string", "description": "股票关键词（与 symbol 二选一）"},
             "window_days": {"type": "integer", "description": "事件窗口，默认 30"},
+            "benchmark": {"type": "string",
+                          "description": "基准指数/ETF：A 股传 sh000300 等；美股传 SPY/QQQ/XLK 等（优先使用调用方指定）"},
+            "as_of": {"type": "boolean",
+                      "description": "严格 as-of 回测模式：True=只返回事件日及以前数据（禁止未来函数，不返回 post-event CAR）"},
         },
         "required": ["event_date"],
         "additionalProperties": False,
@@ -639,7 +643,9 @@ async def macro_intel(topic: str | None = None) -> dict:
 )
 async def event_study_skill(event_date: str, symbol: str | None = None,
                             keyword: str | None = None,
-                            window_days: int = 30) -> dict:
+                            window_days: int = 30,
+                            benchmark: str | None = None,
+                            as_of: bool = False) -> dict:
     sym_raw = (symbol or "").strip()
     us = bool(sym_raw) and is_us_symbol(sym_raw)
     if us:
@@ -674,23 +680,85 @@ async def event_study_skill(event_date: str, symbol: str | None = None,
                     sym = code6
     if not sym:
         return err("必须提供 symbol 或 keyword")
+
+    # ===== P1：基准自动绑定（美股科技股 → QQQ/XLK），覆盖 event_study 默认 SPY 的错配 =====
+    # XLK 成分股（technology sector 纯科技）
+    XLK_COMPONENTS = {"AAPL", "MSFT", "NVDA", "AVGO", "ADBE", "AMAT", "QCOM", "TXN",
+                      "AMD", "INTC", "ORCL", "CRM", "NOW", "SNPS", "CDNS", "ANSS",
+                      "KLAC", "LRCX", "MRVL", "MU"}
+    # QQQ 前 20 大成分股（按权重）
+    QQQ_COMPONENTS = {"AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "GOOG", "AVGO",
+                      "TSLA", "NFLX", "AMD", "COST", "PEP", "QCOM", "ADBE", "INTU",
+                      "AMAT", "CMCSA", "ORCL", "TXN"}
+    idx_sym = ""
+    if benchmark:
+        idx_sym = benchmark.strip()
+    elif us:
+        if sym in XLK_COMPONENTS:
+            idx_sym = "XLK"
+        elif sym in QQQ_COMPONENTS:
+            idx_sym = "QQQ"
+        else:
+            idx_sym = "SPY"
+    else:
+        idx_sym = "sh000300"
+
     # event_study 子能力用 pre/post 表达事件窗口；window_days 转为单边窗口长度
     pre = max(1, min(int(window_days or 30), 60))
-    post = pre
-    result = await execute_skill("event_study", {
+    # as_of=True 时 post 强制 0（event_study 内兜底再次强制，双重保险）
+    post = 0 if as_of else pre
+    call_args = {
         "event_date": event_date, "symbol": sym,
         "pre": pre, "post": post,
-    })
+        "index_symbol": idx_sym,
+        "as_of": bool(as_of),
+    }
+    result = await execute_skill("event_study", call_args)
     if not result.get("ok"):
         return result
-    return ok(
-        {"symbol": sym, "market": "美股" if us else "A股",
-         "event_date": event_date, "window_days": window_days,
-         "event_study": result.get("data")},
-        meta("event_study_skill", 1),
-        artifact=result.get("artifact"),
-        artifacts=result.get("artifacts"),
-    )
+    es_data = result.get("data") or {}
+    es_summary = es_data.get("summary") or {}
+
+    # ===== P0：严格 as_of 回测模式下，移除所有泄露未来信息的字段 =====
+    if as_of:
+        # 确保顶层绝不暴露 T+3 CAR / direction_hint（防止子调用因缓存/配置疏漏返回旧格式）
+        return ok(
+            {"symbol": sym, "market": "美股" if us else "A股",
+             "event_date": event_date, "window_days": window_days,
+             "benchmark": idx_sym,
+             "as_of_mode": True,
+             "signal_event_day_change_pct": es_summary.get("event_day_change_pct"),
+             "signal_event_day_idx_change_pct": es_summary.get("event_day_idx_change_pct"),
+             "signal_event_day_ar_pct": es_summary.get("event_day_ar_pct"),
+             "signal_pre5_cum_return_pct": es_summary.get("pre5_cum_return_pct"),
+             "signal_pre20_cum_return_pct": es_summary.get("pre20_cum_return_pct"),
+             "signal_pre5_cum_ar_pct": es_summary.get("pre5_cum_ar_pct"),
+             # 彻底移除未来函数字段：显式置 None，禁止任何条件下出现有效数值
+             "benchmark_relative_car_t3_pct": None,
+             "direction_hint": None,
+             "postN_blocked": True,
+             "event_study": es_data},
+            meta("event_study_skill", 1),
+            artifact=result.get("artifact"),
+            artifacts=result.get("artifacts"),
+        )
+    else:
+        # 非回测场景（正常投研/分析）：保留完整 CAR 数据
+        car_t3 = es_summary.get("post3_car_endpoint_pct")
+        return ok(
+            {"symbol": sym, "market": "美股" if us else "A股",
+             "event_date": event_date, "window_days": window_days,
+             "benchmark": idx_sym,
+             "as_of_mode": False,
+             "benchmark_relative_car_t3_pct": car_t3,
+             "direction_hint": ("up" if car_t3 is not None and car_t3 > 0.5
+                                else "down" if car_t3 is not None and car_t3 < -0.5
+                                else "neutral"),
+             "event_study": es_data},
+            meta("event_study_skill", 1),
+            artifact=result.get("artifact"),
+            artifacts=result.get("artifacts"),
+        )
 
 
 _POLICY_EVENT_PRESETS: dict[str, dict[str, Any]] = {

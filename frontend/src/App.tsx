@@ -2,10 +2,13 @@ import { useEffect } from "react";
 import Sidebar from "./components/Sidebar";
 import ChatPanel from "./components/ChatPanel";
 import RightPanel from "./components/RightPanel";
+import BacktestList from "./components/BacktestList";
+import BacktestDetail from "./components/BacktestDetail";
 import { useStore } from "./store";
 
 export default function App() {
   const init = useStore((s) => s.init);
+  const view = useStore((s) => s.view);
   useEffect(() => {
     void init();
   }, [init]);
@@ -18,8 +21,14 @@ export default function App() {
         不再挤压主排版（design.md §7：右栏为浮层）。
       */}
       <div className="relative flex min-w-0 flex-1 overflow-hidden">
-        <ChatPanel />
-        <RightPanel />
+        {view === "chat" && (
+          <>
+            <ChatPanel />
+            <RightPanel />
+          </>
+        )}
+        {view === "backtest-list" && <BacktestList />}
+        {view === "backtest-detail" && <BacktestDetail />}
       </div>
     </div>
   );

@@ -8,5 +8,5 @@ if [ ! -x "$PY" ]; then
   PY="${PYTHON:-python3}"
 fi
 
-cd "$ROOT/backend"
+export PYTHONPATH="$ROOT/backend:$ROOT${PYTHONPATH:+:$PYTHONPATH}"
 exec "$PY" -m app.cli "$@"

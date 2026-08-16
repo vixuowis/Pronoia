@@ -258,11 +258,15 @@ async def run_team(
     state: dict,
     artifact_store: ArtifactStore,
     team_members: list[str] | None = None,
+    skip_hypothesis: bool = False,
+    skip_verify: bool = False,
 ) -> AsyncIterator[dict]:
     """Yield SSE events for the whole team-mode flow. state['content'] = final answer.
 
     team_members: 前端可选的专家白名单（仅 EXPERT_IDS 内的子集生效）。
                   None / 空 = 全部可调度。deep_researcher 是硬规则（不剔除）。
+    skip_hypothesis: 跳过 hypothesis 抽取（1 次 complete_json + 0 事实输出，回测场景下 hypothesis 不参与 ACC）。
+    skip_verify: 跳过 verifier 复核（1 次 complete_json + 可能 1 次 router fix，用于纯 speed 场景）。
     """
     # ------------------------------------------------------------ 1) plan --
     plan: list[dict] = []
@@ -341,18 +345,24 @@ async def run_team(
         "content": (
             f"【用户问题】{question}\n\n"
             f"【专家团队发现】\n{digest}\n\n"
-            "请综合以上专家发现，给出结构化的最终回答（先结论后依据，标注来源与推断；"
-            "如关键数据缺失可再调工具补充，但不要重复专家已查过的数据）。"
+            "请综合以上专家发现，给出结构化的最终回答（先结论后依据，标注来源与推断）。"
+            "【重要】不要调用任何工具！专家已经查过所有数据。你必须直接输出文字回答，不要 function/tool call。"
+            "输出格式要求（与 parser 对齐，必须严格包含中文标签行）：\n"
+            "【最终方向】 up / down / neutral 三选一\n"
+            "【置信度】 0.xx（0.50-0.99）\n"
+            "【中文理由】 不超过 300 字，列举 2-4 条关键支撑信号"
         ),
     })
-    async for ev in run_agent("router", synth_messages, agent_def=get_agent("router"),
+    # synthesize 阶段：禁用所有 skill，强制纯文字总结，避免 deepseek-v4-flash 发起无意义 tool call 导致 max_rounds 耗尽 content 为空
+    synth_agent_def = {**get_agent("router"), "skills": []}
+    async for ev in run_agent("router", synth_messages, agent_def=synth_agent_def,
                               state=state, artifact_store=artifact_store,
-                              max_rounds=3):
+                              max_rounds=2):
         yield ev
 
     # ------------------------------------------------------------- 4) verify
     draft = state["content"].strip()
-    if draft:
+    if draft and not skip_verify:
         try:
             evidence = _evidence_digest(state["tool_trace"])
             verdict_json = await complete_json(
@@ -408,7 +418,7 @@ async def run_team(
     # -------------------------------------------------- 5) extract hypotheses
     import time as _t
     final_answer = state["content"].strip()
-    if final_answer:
+    if final_answer and not skip_hypothesis:
         try:
             extracted = await complete_json(
                 system_prompt("router") + "\n\n" + HYPOTHESIS_EXTRACT_INSTRUCTION,

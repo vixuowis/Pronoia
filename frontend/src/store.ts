@@ -4,6 +4,7 @@ import type {
   AgentMeta,
   Artifact,
   ArtifactKind,
+  BTRun,
   CaseItem,
   HistoryMessage,
   LogicCheckEntry,
@@ -239,6 +240,9 @@ export function partsFromHistory(m: HistoryMessage): Part[] {
 
 /* ---------------- store ---------------- */
 
+/** P0 视图：chat（研究工作台）/ backtest-list（回测列表页）/ backtest-detail（回测详情页） */
+export type ViewName = "chat" | "backtest-list" | "backtest-detail";
+
 interface FeverState {
   cases: CaseItem[];
   currentCaseId: string | null;
@@ -266,6 +270,16 @@ interface FeverState {
   logicLibrary: LogicItem[];
   /** 右栏：是否显示逻辑库浮层（独立于 artifacts/skills/team） */
   logicLibOpen: boolean;
+
+  /* ===================================== Backtest (P0) ===================================== */
+
+  /** 当前页：chat 工作台 / 回测列表 / 回测详情 */
+  view: ViewName;
+  /** 回测详情页当前 run_id（view=backtest-detail 时使用） */
+  currentBTRunId: string | null;
+  /** 回测列表页缓存（懒加载） */
+  btRuns: BTRun[];
+  btRunsLoading: boolean;
 
   init: () => Promise<void>;
   sendMessage: (text: string, mode?: Mode, agent?: string) => Promise<void>;
@@ -299,6 +313,17 @@ interface FeverState {
   setLogicLibOpen: (v: boolean) => void;
   /** 正在被深度验证的 logic id（用于 UI loading 态） */
   logicChecking: Set<string>;
+
+  /* ---- Backtest 方法 ---- */
+  setView: (v: ViewName) => void;
+  /** 进入某个回测详情页（自动 setView("backtest-detail")） */
+  openBTDetail: (runId: string) => void;
+  /** 返回回测列表或 chat 工作台 */
+  backFromBTDetail: () => void;
+  /** 拉取回测列表（强制刷新） */
+  loadBTRuns: (force?: boolean) => Promise<BTRun[]>;
+  /** 列表里单独更新某条 run（start/cancel 后调用） */
+  patchBTRun: (runId: string, patch: Partial<BTRun>) => void;
 }
 
 let abortCtl: AbortController | null = null;
@@ -476,6 +501,12 @@ export const useStore = create<FeverState>((set, get) => {
     logicLibrary: loadLogicLibrary(),
     logicLibOpen: false,
     logicChecking: new Set<string>(),
+
+    /* ---- Backtest 默认值 ---- */
+    view: "chat",
+    currentBTRunId: null,
+    btRuns: [],
+    btRunsLoading: false,
 
     init: async () => {
       if (get().initialized) return;
@@ -920,5 +951,44 @@ export const useStore = create<FeverState>((set, get) => {
       void get().sendMessage(seed, "team");
     },
     setLogicLibOpen: (v) => set({ logicLibOpen: v }),
+
+    /* ===================================== Backtest 方法 ===================================== */
+
+    setView: (v) => {
+      // 切页面前如果 chat 在 streaming，则先停掉，避免挂起的 SSE 泄漏
+      if (v !== "chat" && get().streaming) get().stop();
+      set({ view: v });
+    },
+
+    openBTDetail: (runId) => {
+      if (get().streaming) get().stop();
+      set({ view: "backtest-detail", currentBTRunId: runId });
+    },
+
+    backFromBTDetail: () => {
+      // 详情页返回到列表页
+      set({ view: "backtest-list", currentBTRunId: null });
+    },
+
+    loadBTRuns: async (force) => {
+      const s = get();
+      if (!force && s.btRuns.length > 0 && !s.btRunsLoading) return s.btRuns;
+      set({ btRunsLoading: true });
+      try {
+        const res = await api.btRuns(200);
+        const items = [...res.items].sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
+        set({ btRuns: items, btRunsLoading: false });
+        return items;
+      } catch (e) {
+        set({ btRunsLoading: false });
+        throw e;
+      }
+    },
+
+    patchBTRun: (runId, patch) => {
+      set((s) => ({
+        btRuns: s.btRuns.map((r) => (r.id === runId ? { ...r, ...patch } : r)),
+      }));
+    },
   };
 });

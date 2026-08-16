@@ -359,6 +359,17 @@ def build_parser() -> argparse.ArgumentParser:
     cache_toggle.add_argument("--disabled", action="store_true", help="禁用缓存")
     cache_toggle.set_defaults(func=cmd_cache_toggle)
 
+    def cmd_bt(args: argparse.Namespace) -> int:
+        from .event_backtest.cli import build_bt_parser
+
+        bt_parser = build_bt_parser()
+        bt_args = bt_parser.parse_args(args.bt_argv)
+        return int(bt_args.func(bt_args) or 0)
+
+    bt = sub.add_parser("bt", aliases=["backtest", "b"], help="事件回测（离线）")
+    bt.add_argument("bt_argv", nargs=argparse.REMAINDER)
+    bt.set_defaults(func=cmd_bt)
+
     return ap
 
 

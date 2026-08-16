@@ -22,7 +22,30 @@ ARK_API_URL: str = os.getenv("ARK_API_URL", "https://ark.cn-beijing.volces.com/a
 ARK_API_KEY: str = os.getenv("ARK_API_KEY", "")
 ARK_MODEL: str = os.getenv("ARK_MODEL", "deepseek-v4-flash")
 
+MAAS_API_URL: str = os.getenv("MAAS_API_URL", "")
+MAAS_API_KEY: str = os.getenv("MAAS_API_KEY", "")
+MAAS_MODEL: str = os.getenv("MAAS_MODEL", "")
+
+def resolve_llm() -> tuple[str, str, str]:
+    """返回 (base_url, api_key, model)。优先级：MAAS → ARK；自动修正 URL/KEY 写反的容错。"""
+    maas_url = str(MAAS_API_URL or "").strip()
+    maas_key = str(MAAS_API_KEY or "").strip()
+    maas_model = str(MAAS_MODEL or "").strip()
+    if maas_url and maas_key:
+        u_is_url = maas_url.startswith("http://") or maas_url.startswith("https://")
+        k_is_url = maas_key.startswith("http://") or maas_key.startswith("https://")
+        if (not u_is_url) and k_is_url:
+            maas_url, maas_key = maas_key, maas_url
+            u_is_url, k_is_url = True, False
+        if u_is_url and (not k_is_url) and maas_model:
+            return (maas_url.rstrip("/"), maas_key, maas_model)
+    # fallback ARK
+    return (str(ARK_API_URL or "").rstrip("/"), str(ARK_API_KEY or ""), str(ARK_MODEL or "deepseek-v4-flash"))
+
+LLM_BASE_URL, LLM_API_KEY, LLM_MODEL = resolve_llm()
+
 DB_PATH: str = os.getenv("FEVER_DB_PATH", str(_BACKEND_DIR / "fever.db"))
+DATA_DIR: str = os.getenv("FEVER_DATA_DIR", str(_PROJECT_ROOT / "data"))
 
 # Skill execution guardrails (design.md §2/§4)
 SKILL_TIMEOUT: float = float(os.getenv("FEVER_SKILL_TIMEOUT", "60"))  # seconds per skill call
@@ -37,3 +60,5 @@ CONTEXT_MESSAGES: int = int(os.getenv("FEVER_CONTEXT_MESSAGES", "12"))
 LLM_TIMEOUT: float = float(os.getenv("FEVER_LLM_TIMEOUT", "180"))
 
 FRONTEND_DIST = _PROJECT_ROOT / "frontend" / "dist"
+PROJECT_ROOT: Path = _PROJECT_ROOT
+BACKEND_DIR: Path = _BACKEND_DIR

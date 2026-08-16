@@ -47,6 +47,10 @@ backend/data/event_analyses/*.json
 backend/data/free_market_snapshots/*.json
 debug-homepage-stuck-events.md
 
+# Data directory (event pools, trajectory ckpts, oracle labels, prediction caches)
+# Regenerate via `scripts/build_real_datasets_from_v9.py` + labeller CLI if needed
+data/
+
 # Archives / prototypes (kept locally but not in VC)
 archive/
 
