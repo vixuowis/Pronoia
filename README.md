@@ -28,6 +28,12 @@ Pronoia 是一个开源的对话式 AI 金融研究工作台。
 - **过程透明**：思考过程、每次工具调用的参数与结果、每个数字的来源接口（如
   `akshare.stock_news_em`）全部可见、可追溯。
 - **密钥安全**：LLM Key 只存后端 `.env`，绝不下发浏览器。
+- **🧪 事件驱动回测平台（P0 Web）**：基于真实事件 + 真实行情做系统级回测，
+  评估 Tool / Skill / Agent / Team 四层的方向命中率，形成「预测命中 → reward 计算 →
+  calibration 更新 → 策略自进化」的可追溯闭环。详见下方独立章节。
+- **真实数据集治理**：内置 5 个 × 10 条的真实小数据集（v9_1000 官方回测池分层抽样），
+  零杜撰、零未来日期、100% 可点击的东方财富公告 / Yahoo SEC 原文链接、100% 有
+  真实 T+3 超额收益（CAR）Oracle Label。
 
 ## 🏗 架构
 
@@ -91,6 +97,16 @@ CLI 覆盖的子命令：
 - `chat`
 - `case list|create|show|delete|report`
 - `cache stats|clear|toggle`
+- **回测（Pronoia Backtest，P0 Web 配套 CLI）**：
+  ```bash
+  ./pronoia bt run     --events data/xxx.events.jsonl --out /tmp/bt_ckpt/ --labels data/xxx.labels.jsonl \
+                       --runner team_full --concurrency 2 --dataset-id cn_earnings_10
+  ./pronoia bt score   --ckpt-dir /tmp/bt_ckpt/  --labels data/xxx.labels.jsonl   # 计算 strict / non-neutral ACC + Wilson 95% CI
+  ./pronoia bt label   --events data/xxx.events.jsonl --out data/xxx.labels.jsonl   # 用真实行情打 Oracle T+3 CAR 方向标签（akshare + yfinance）
+  ./pronoia bt cst     --events data/xxx.events.jsonl --out-md /tmp/cst.md          # 对照现有 ckpt 生成结构化案例汇报表
+  ./pronoia bt trajectory --ckpt-dir /tmp/bt_ckpt/ --out-md /tmp/traj.md --labels data/xxx.labels.jsonl
+  ```
+  > 回测 Web UI 默认走 `POST /api/bt/runs`，请用上方「🧪 Pronoia 回测 Web 平台」章节访问。
 
 Docker（单容器，后端托管前端构建产物）：
 
@@ -126,6 +142,75 @@ docker build -t fever . && docker run -p 8000:8000 fever
 主理人 Router · 事件猎手 Event Scout · 行情分析师 Market Analyst ·
 基本面分析师 Fundamentals Analyst · 复核员 Verifier · 报告撰写员 Report Writer
 
+## 🧪 Pronoia 事件驱动回测平台（P0 · Web + CLI 双入口）
+
+基于**真实事件 + 真实行情**的系统级回测。把每一次 Team/Predictor 的预测、
+Agent 协作的推理链、Tool/Skill 调用参数与结果，与 Oracle T+3 超额收益（CAR）
+放在同一面板对比，用于量化评估 **Tool → Skill → Agent → Team** 四层的方向命中率，
+形成「预测命中评估 → reward 计算 → calibration 更新 → 策略自进化」的可追溯闭环。
+
+### 五层架构
+
+```
+┌──────────────────────────── Frontend (React 18 · Vite · /backtest) ────────────────────────────┐
+│  BacktestList: Data list 选数据集 → 创建 run        BacktestDetail: SSE 进度 + 事件目录 + Case    │
+│       ↓                                                         ↓ 6 Tabs                        │
+│  Zustand store ─ api.ts ── REST POST/GET ─┐         Log / 决策 / Agent逻辑链 / 行情 / Packet /   │
+└───────────────────────────────────────────┤         Prompt 展开                                  │
+                                            │  GET /api/bt/runs · metrics · datasets · events ·   │
+┌───────────────────────────────────────────┤  catalog · events/{eid} · stream(SSE)               │
+│  Backend (FastAPI)    routes/backtest.py ─┘                                                    │
+│  ├─ schemas.py       BTRun / BTPrediction / BTMetrics / EventCatalogItem / BTDatasetResponse    │
+│  ├─ orchestrator.py  BacktestOrchestrator: 线程池 + SSE push + pause/resume/cancel +            │
+│  │                  resume 扫描 ckpt 跳过已完成 + V8 单进程双协程锁                              │
+│  ├─ event_backtest   engine(team_full/team_prompt runner + on_pred 单case回调) ·                │
+│  │                  models(Market/EventRecord/校验) · labeller(akshare+yfinance→Oracle CAR) ·   │
+│  │                  market(CN/XLK/QQQ/SPY/HSI 基准智能路由) · metrics(Wilson 95% CI 下界≥70%) ·  │
+│  │                  report / cli / collector / application                                     │
+│  └─ db.py           SQLite 五表: bt_runs / bt_predictions / bt_datasets / bt_sse_broadcasts /   │
+│                      bt_locks                                                                     │
+└───────────────────────────────────────────┬──────────────────────────────────────────────────────┘
+                                            ▼
+                     真实数据源：akshare (CN/HK) · yfinance (US) · 巨潮/东财公告原文
+```
+
+### 快速开始（Web UI）
+
+```bash
+# 1) 首次使用：构建 5 个内置真实小数据集（可选，已预装 bt_datasets DB 行则跳过）
+backend/.venv/bin/python scripts/build_real_datasets_from_v9.py
+
+# 2) 启动后端 + 前端
+./start.sh
+# 或分别：backend/.venv/bin/uvicorn app.main:app --port 8000 --reload
+#         cd frontend && npm run dev   # http://localhost:5173
+
+# 3) 浏览器打开 → 顶部 Sidebar「回测」或直接访问
+#    http://localhost:5173/backtest
+```
+
+工作流：选数据集（Data list 下拉） → 选 Runner（team_prompt / team_full）与并发 →
+点「创建并启动」 → 左侧 run 列表看进度 → 点进详情看 SSE 实时进度、暂停/继续/取消、
+事件目录（N 条 pending/processing/done） → 展开单 Case 看 6 个 Tab，
+「原文链接」直接 `<a target="_blank">` 跳东方财富 / Yahoo Finance SEC 原文。
+
+### 内置 5 个真实小数据集（v9_1000 官方池分层抽样 · 各 10 条 · 100% 真实链接）
+
+| dataset_id | 名称 | 市场 × 类型 | 原文来源 | Oracle T+3 | 日期范围 |
+|---|---|---|---|---|---|
+| `cn_earnings_10` | CN A股财报业绩预告 10例 | CN × 财报超预期/不及预期 | 东方财富公告链接 | ✅ up/down/neutral | 2025-01 ~ 2026-06 |
+| `cn_pure_ma_10` | CN A股并购/资产重组 10例 | CN × 并购/分拆/再融资 | 东方财富公告链接 | ✅ | 2025-03 ~ 2026-06 |
+| `cn_guidance_10` | CN A股公司业绩指引 10例 | CN × 公司指引上调/下调 | 东方财富公告链接 | ✅ | 2025-04 ~ 2026-05 |
+| `us_sec_ma_10` | US 美股 SEC 并购/分拆申报 10例 | US × 并购/分拆/再融资 | Yahoo Finance SEC Filing | ✅ | 2024-02 ~ 2026-04 |
+| `cross_market_mix_10` | 跨市场精选混合 10例 | CN 8 + US 2（均衡） | 全部 http 真实链接 | ✅ | 2025-02 ~ 2026-06 |
+
+严格约束（与 `docs/design.md` 第 5 节对齐）：
+- **零杜撰、零未来日期**：所有 event_time < 发布当天，字段 100% 拷贝自 v9_1000
+- **T+3 ACC 的 Wilson 95% CI 下界 ≥ 70%**（系统目标红线）
+- 基准路由：XLK 成分股（AAPL/MSFT/NVDA）→ XLK；QQQ 成分股（AMZN/NFLX/META）→ QQQ；
+  其他美股 → SPY；A 股 → 沪深 300（SH000300）；港股 → 恒生指数（HSI）
+- `FEVER_BT_STRICT_AS_OF=1` 默认开启：event_study_skill 仅返回事件发生前可用的数据，杜绝前视偏差
+
 ## 🗺 路线图
 
 工作台是 TTRL（Test-Time Reinforcement Learning）的产品地基：当输入、证据、结论、
@@ -134,6 +219,7 @@ skill/prompt 策略更新」的长期自进化闭环。
 
 - [x] P0 对话式研究闭环（提问→采证→产出物→Case 沉淀）
 - [x] P0 事件研究法引擎（AR/CAR）
+- [x] P0 事件驱动回测 Web 平台：Backtest 路由 + 5 张 SQLite 表 + Orchestrator + SSE 实时进度 + 暂停/继续/取消 + 事件目录 + 单 Case 6 Tab 详情 + 5×10 真实数据集（零杜撰/零未来/真实链接）
 - [ ] P1 研究资产化：历史 Case 检索、证据有效性标注、复盘面板
 - [ ] P1 事件监控与预警（定时任务 + 推送）
 - [ ] P2 TTRL v0：命中率统计、calibration 面板
@@ -141,6 +227,7 @@ skill/prompt 策略更新」的长期自进化闭环。
 
 ## 📋 更新日志
 
+- **3.9.0** · 2026-08-16 · 功能：新增 Pronoia 回测 Web 平台 P0（全栈）：Data list 选择真实数据集 → 启动/暂停/继续/取消、SSE 实时进度 + 3s 轮询兜底、事件目录 N 条待执行/执行中/已完成、单 Case 详情 6 个 Tab（Team Log/决策结论/Agent 逻辑链/行情视图/As-of Packet/Team Prompt）、原文链接真实可点击。5 个内置真实小数据集各 10 条，全部来自 v9_1000 官方回测池，零杜撰、零未来日期、100% 真实东方财富/Yahoo SEC 原文链接 + 真实 T+3 行情 Oracle Label。
 - **3.8.3** · 2026-08-05 · 修补：新增 Pronoia CLI（含 ./p 简写）并增强首页推荐超时兜底
 - **3.8.2** · 2026-07-29 · 修补：品牌更名为 Pronoia，并统一首页推荐与团队研究体验
 - **3.8.1** · 2026-07-19 · 修补：SkillsTab「对外技能」SectionHeader 改为卡片化标题块（jade 边框 + jade-soft 背景 + 数量徽章 + Agent 实际可调用 hint），视觉权重对齐三层模型 / 底层工具；删除 SectionHeader 死代码。

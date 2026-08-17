@@ -9,9 +9,9 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import config, db
-from .routes import cases, chat, logic, meta
+from .routes import backtest, cases, chat, logic, meta
 
-app = FastAPI(title="Pronoia", version="3.8.3", docs_url="/api/docs")
+app = FastAPI(title="Pronoia", version="3.9.0", docs_url="/api/docs")
 
 app.add_middleware(
     CORSMiddleware,
@@ -25,6 +25,7 @@ app.include_router(meta.router)
 app.include_router(cases.router)
 app.include_router(chat.router)
 app.include_router(logic.router)
+app.include_router(backtest.router)
 
 
 @app.on_event("startup")

@@ -72,6 +72,98 @@ def init_db() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_messages_case ON messages(case_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_artifacts_case ON artifacts(case_id, pinned DESC, created_at);
+
+            -- ==================== Pronoia Backtest tables (P0) ====================
+            CREATE TABLE IF NOT EXISTS bt_runs(
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                status TEXT NOT NULL,
+                runner TEXT NOT NULL,
+                prompt_variant TEXT,
+                model_version TEXT,
+                events_path TEXT NOT NULL,
+                labels_path TEXT,
+                out_path TEXT NOT NULL,
+                ckpt_dir TEXT,
+                concurrency INTEGER DEFAULT 2,
+                total_events INTEGER DEFAULT 0,
+                done_events INTEGER DEFAULT 0,
+                acc_t3_strict REAL,
+                acc_t3_strict_lo REAL,
+                acc_t3_non_neutral REAL,
+                config_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                started_at TEXT,
+                finished_at TEXT,
+                error_msg TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_bt_runs_status ON bt_runs(status);
+            CREATE INDEX IF NOT EXISTS idx_bt_runs_created ON bt_runs(created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS bt_predictions(
+                id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                event_id TEXT NOT NULL,
+                symbol TEXT,
+                market TEXT,
+                event_type_l2 TEXT,
+                pred_direction TEXT NOT NULL,
+                confidence REAL,
+                abstain INTEGER DEFAULT 0,
+                rationale TEXT,
+                oracle_label_t3 TEXT,
+                oracle_car_t3 REAL,
+                is_correct_t3 INTEGER,
+                trajectory_ckpt TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(run_id) REFERENCES bt_runs(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_bt_pred_run ON bt_predictions(run_id);
+            CREATE INDEX IF NOT EXISTS idx_bt_pred_event ON bt_predictions(event_id);
+
+            CREATE TABLE IF NOT EXISTS bt_metrics_snapshots(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL,
+                done_count INTEGER NOT NULL,
+                acc_t3_strict REAL,
+                acc_t3_strict_lo REAL,
+                acc_t3_non_neutral REAL,
+                neutral_ratio REAL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(run_id) REFERENCES bt_runs(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_bt_snap_run ON bt_metrics_snapshots(run_id, done_count);
+
+            CREATE TABLE IF NOT EXISTS bt_datasets(
+                id TEXT PRIMARY KEY,
+                path TEXT NOT NULL,
+                name TEXT NOT NULL,
+                total_events INTEGER,
+                by_market_json TEXT,
+                by_type_json TEXT,
+                by_symbol_json TEXT,
+                date_range_json TEXT,
+                labels_path TEXT,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS evolution_items(
+                id TEXT PRIMARY KEY,
+                level TEXT NOT NULL,
+                category TEXT,
+                title TEXT NOT NULL,
+                description TEXT,
+                trigger_run_ids TEXT,
+                before_metrics_json TEXT,
+                proposed_change_json TEXT NOT NULL,
+                ab_test_run_id TEXT,
+                after_metrics_json TEXT,
+                status TEXT NOT NULL,
+                applied_at TEXT,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_evo_level_status ON evolution_items(level, status);
             """
         )
         conn.commit()
@@ -264,3 +356,408 @@ def toggle_pin(case_id: str, artifact_id: str) -> Optional[dict]:
         )
         conn.commit()
     return get_artifact(case_id, artifact_id)
+
+
+# ===================================================== bt_runs (Backtest Run) ====
+
+_BT_RUN_FIELDS = (
+    "id,name,status,runner,prompt_variant,model_version,events_path,labels_path,"
+    "out_path,ckpt_dir,concurrency,total_events,done_events,acc_t3_strict,"
+    "acc_t3_strict_lo,acc_t3_non_neutral,config_json,created_at,updated_at,"
+    "started_at,finished_at,error_msg"
+)
+
+
+def _row_to_bt_run(row: sqlite3.Row | None) -> dict | None:
+    if not row:
+        return None
+    d = dict(row)
+    d["config"] = json.loads(d["config_json"]) if d.get("config_json") else None
+    d["concurrency"] = int(d["concurrency"] or 2)
+    d["total_events"] = int(d["total_events"] or 0)
+    d["done_events"] = int(d["done_events"] or 0)
+    return d
+
+
+def create_bt_run(
+    *,
+    name: str,
+    runner: str,
+    events_path: str,
+    out_path: str,
+    run_id: str | None = None,
+    labels_path: str | None = None,
+    prompt_variant: str | None = None,
+    model_version: str | None = None,
+    ckpt_dir: str | None = None,
+    concurrency: int = 2,
+    total_events: int = 0,
+    config: dict | None = None,
+) -> dict:
+    rid, ts = run_id or new_id(), now_iso()
+    cfg_json = json.dumps(config or {}, ensure_ascii=False) if config else None
+    with _lock:
+        conn = _get_conn()
+        conn.execute(
+            f"INSERT INTO bt_runs({_BT_RUN_FIELDS}) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                rid, name, "pending", runner, prompt_variant, model_version,
+                events_path, labels_path, out_path, ckpt_dir, concurrency,
+                total_events, 0, None, None, None, cfg_json, ts, ts,
+                None, None, None,
+            ),
+        )
+        conn.commit()
+    row = _get_conn().execute("SELECT * FROM bt_runs WHERE id=?", (rid,)).fetchone()
+    return _row_to_bt_run(row) or {"id": rid, "name": name, "status": "pending"}
+
+
+def list_bt_runs(limit: int = 100, offset: int = 0) -> list[dict]:
+    with _lock:
+        rows = _get_conn().execute(
+            "SELECT * FROM bt_runs ORDER BY created_at DESC LIMIT ? OFFSET ?", (int(limit), int(offset))
+        ).fetchall()
+    return [_row_to_bt_run(r) for r in rows if _row_to_bt_run(r)]
+
+
+def get_bt_run(run_id: str) -> dict | None:
+    with _lock:
+        row = _get_conn().execute("SELECT * FROM bt_runs WHERE id=?", (run_id,)).fetchone()
+    return _row_to_bt_run(row)
+
+
+def update_bt_run_status(run_id: str, status: str, *, error_msg: str | None = None) -> dict | None:
+    ts = now_iso()
+    fields = ["status = ?", "updated_at = ?"]
+    args: list[Any] = [status, ts]
+    if status == "running":
+        fields.append("started_at = COALESCE(started_at, ?)")
+        args.append(ts)
+    if status in {"done", "failed"}:
+        fields.append("finished_at = ?")
+        args.append(ts)
+    if error_msg is not None:
+        fields.append("error_msg = ?")
+        args.append(error_msg)
+    args.append(run_id)
+    with _lock:
+        conn = _get_conn()
+        conn.execute(f"UPDATE bt_runs SET {', '.join(fields)} WHERE id=?", tuple(args))
+        conn.commit()
+    return get_bt_run(run_id)
+
+
+def update_bt_run_progress(
+    run_id: str,
+    *,
+    done_events: int,
+    acc_t3_strict: float | None = None,
+    acc_t3_strict_lo: float | None = None,
+    acc_t3_non_neutral: float | None = None,
+) -> dict | None:
+    ts = now_iso()
+    fields = ["done_events = ?", "updated_at = ?"]
+    args: list[Any] = [int(done_events), ts]
+    if acc_t3_strict is not None:
+        fields.append("acc_t3_strict = ?"); args.append(float(acc_t3_strict))
+    if acc_t3_strict_lo is not None:
+        fields.append("acc_t3_strict_lo = ?"); args.append(float(acc_t3_strict_lo))
+    if acc_t3_non_neutral is not None:
+        fields.append("acc_t3_non_neutral = ?"); args.append(float(acc_t3_non_neutral))
+    args.append(run_id)
+    with _lock:
+        conn = _get_conn()
+        conn.execute(f"UPDATE bt_runs SET {', '.join(fields)} WHERE id=?", tuple(args))
+        conn.commit()
+    return get_bt_run(run_id)
+
+
+def delete_bt_run(run_id: str) -> bool:
+    with _lock:
+        conn = _get_conn()
+        cur = conn.execute("DELETE FROM bt_runs WHERE id=?", (run_id,))
+        conn.commit()
+        return cur.rowcount > 0
+
+
+# ================================================= bt_predictions (per event) ====
+
+def add_bt_prediction(
+    *,
+    run_id: str,
+    event_id: str,
+    pred_direction: str,
+    symbol: str | None = None,
+    market: str | None = None,
+    event_type_l2: str | None = None,
+    confidence: float | None = None,
+    abstain: bool = False,
+    rationale: str | None = None,
+    oracle_label_t3: str | None = None,
+    oracle_car_t3: float | None = None,
+    is_correct_t3: bool | None = None,
+    trajectory_ckpt: str | None = None,
+    pred_id: str | None = None,
+) -> dict:
+    pid, ts = pred_id or new_id(), now_iso()
+    with _lock:
+        conn = _get_conn()
+        conn.execute(
+            "INSERT INTO bt_predictions(id,run_id,event_id,symbol,market,event_type_l2,"
+            "pred_direction,confidence,abstain,rationale,oracle_label_t3,oracle_car_t3,"
+            "is_correct_t3,trajectory_ckpt,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                pid, run_id, event_id, symbol, market, event_type_l2,
+                pred_direction, confidence, 1 if abstain else 0,
+                rationale, oracle_label_t3, oracle_car_t3,
+                1 if is_correct_t3 else (0 if is_correct_t3 is False else None),
+                trajectory_ckpt, ts,
+            ),
+        )
+        conn.commit()
+    return {
+        "id": pid, "run_id": run_id, "event_id": event_id,
+        "pred_direction": pred_direction, "confidence": confidence,
+        "abstain": abstain, "created_at": ts,
+    }
+
+
+def list_bt_predictions(
+    run_id: str,
+    *,
+    offset: int = 0,
+    limit: int = 50,
+    market: str | None = None,
+    event_type_l2: str | None = None,
+    only_incorrect: bool = False,
+) -> tuple[int, list[dict]]:
+    where = ["run_id = ?"]
+    args: list[Any] = [run_id]
+    if market:
+        where.append("market = ?"); args.append(market)
+    if event_type_l2:
+        where.append("event_type_l2 = ?"); args.append(event_type_l2)
+    if only_incorrect:
+        where.append("is_correct_t3 = 0")
+    where_sql = " AND ".join(where)
+    with _lock:
+        conn = _get_conn()
+        total_row = conn.execute(
+            f"SELECT COUNT(*) c FROM bt_predictions WHERE {where_sql}", tuple(args)
+        ).fetchone()
+        total = int(total_row["c"] if total_row else 0)
+        rows = conn.execute(
+            f"SELECT * FROM bt_predictions WHERE {where_sql} ORDER BY created_at ASC LIMIT ? OFFSET ?",
+            tuple(args + [int(limit), int(offset)]),
+        ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["abstain"] = bool(d.get("abstain"))
+        d["is_correct_t3"] = bool(d["is_correct_t3"]) if d.get("is_correct_t3") is not None else None
+        out.append(d)
+    return total, out
+
+
+def get_bt_prediction(run_id: str, event_id: str) -> dict | None:
+    with _lock:
+        row = _get_conn().execute(
+            "SELECT * FROM bt_predictions WHERE run_id=? AND event_id=?", (run_id, event_id)
+        ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["abstain"] = bool(d.get("abstain"))
+    d["is_correct_t3"] = bool(d["is_correct_t3"]) if d.get("is_correct_t3") is not None else None
+    return d
+
+
+# ============================================ bt_metrics_snapshots (time series) ====
+
+def add_bt_metrics_snapshot(
+    *,
+    run_id: str,
+    done_count: int,
+    acc_t3_strict: float | None = None,
+    acc_t3_strict_lo: float | None = None,
+    acc_t3_non_neutral: float | None = None,
+    neutral_ratio: float | None = None,
+) -> int:
+    ts = now_iso()
+    with _lock:
+        conn = _get_conn()
+        cur = conn.execute(
+            "INSERT INTO bt_metrics_snapshots(run_id,done_count,acc_t3_strict,"
+            "acc_t3_strict_lo,acc_t3_non_neutral,neutral_ratio,created_at)"
+            " VALUES(?,?,?,?,?,?,?)",
+            (run_id, int(done_count), acc_t3_strict, acc_t3_strict_lo,
+             acc_t3_non_neutral, neutral_ratio, ts),
+        )
+        conn.commit()
+        return int(cur.lastrowid or 0)
+
+
+def list_bt_metrics_snapshots(run_id: str) -> list[dict]:
+    with _lock:
+        rows = _get_conn().execute(
+            "SELECT * FROM bt_metrics_snapshots WHERE run_id=? ORDER BY done_count ASC",
+            (run_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ============================================================== bt_datasets ====
+
+def upsert_bt_dataset(
+    *,
+    dataset_id: str,
+    path: str,
+    name: str,
+    total_events: int = 0,
+    by_market: dict | None = None,
+    by_type: dict | None = None,
+    by_symbol: dict | None = None,
+    date_range: dict | None = None,
+    labels_path: str | None = None,
+) -> dict:
+    ts = now_iso()
+    def _j(d): return json.dumps(d, ensure_ascii=False) if d else None
+    with _lock:
+        conn = _get_conn()
+        existing = conn.execute("SELECT id FROM bt_datasets WHERE id=?", (dataset_id,)).fetchone()
+        if existing:
+            conn.execute(
+                "UPDATE bt_datasets SET path=?,name=?,total_events=?,by_market_json=?,"
+                "by_type_json=?,by_symbol_json=?,date_range_json=?,labels_path=? WHERE id=?",
+                (path, name, int(total_events), _j(by_market), _j(by_type), _j(by_symbol),
+                 _j(date_range), labels_path, dataset_id),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO bt_datasets(id,path,name,total_events,by_market_json,"
+                "by_type_json,by_symbol_json,date_range_json,labels_path,created_at)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (dataset_id, path, name, int(total_events), _j(by_market), _j(by_type),
+                 _j(by_symbol), _j(date_range), labels_path, ts),
+            )
+        conn.commit()
+    return get_bt_dataset(dataset_id) or {"id": dataset_id, "path": path, "name": name}
+
+
+def list_bt_datasets() -> list[dict]:
+    with _lock:
+        rows = _get_conn().execute(
+            "SELECT * FROM bt_datasets ORDER BY created_at DESC"
+        ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        for k in ("by_market_json", "by_type_json", "by_symbol_json", "date_range_json"):
+            short = k[:-5]
+            d[short] = json.loads(d[k]) if d.get(k) else None
+            d.pop(k, None)
+        out.append(d)
+    return out
+
+
+def get_bt_dataset(dataset_id: str) -> dict | None:
+    with _lock:
+        row = _get_conn().execute("SELECT * FROM bt_datasets WHERE id=?", (dataset_id,)).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    for k in ("by_market_json", "by_type_json", "by_symbol_json", "date_range_json"):
+        short = k[:-5]
+        d[short] = json.loads(d[k]) if d.get(k) else None
+        d.pop(k, None)
+    return d
+
+
+# ========================================================== evolution_items ====
+
+def create_evolution_item(
+    *,
+    level: str,
+    title: str,
+    proposed_change: dict,
+    category: str | None = None,
+    description: str | None = None,
+    status: str = "proposed",
+) -> dict:
+    eid, ts = new_id(), now_iso()
+    with _lock:
+        conn = _get_conn()
+        conn.execute(
+            "INSERT INTO evolution_items(id,level,category,title,description,"
+            "trigger_run_ids,before_metrics_json,proposed_change_json,ab_test_run_id,"
+            "after_metrics_json,status,applied_at,created_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                eid, level, category, title, description, None, None,
+                json.dumps(proposed_change, ensure_ascii=False), None, None,
+                status, None, ts,
+            ),
+        )
+        conn.commit()
+    return get_evolution_item(eid) or {"id": eid, "level": level, "title": title, "status": status}
+
+
+def list_evolution_items(*, level: str | None = None, status: str | None = None) -> list[dict]:
+    where = []
+    args: list[Any] = []
+    if level:
+        where.append("level = ?"); args.append(level)
+    if status:
+        where.append("status = ?"); args.append(status)
+    sql = "SELECT * FROM evolution_items"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY created_at DESC"
+    with _lock:
+        rows = _get_conn().execute(sql, tuple(args)).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        for k in ("before_metrics_json", "after_metrics_json"):
+            short = k[:-5]
+            d[short] = json.loads(d[k]) if d.get(k) else None
+            d.pop(k, None)
+        d["proposed_change"] = json.loads(d["proposed_change_json"]) if d.get("proposed_change_json") else None
+        d.pop("proposed_change_json", None)
+        out.append(d)
+    return out
+
+
+def get_evolution_item(item_id: str) -> dict | None:
+    with _lock:
+        row = _get_conn().execute("SELECT * FROM evolution_items WHERE id=?", (item_id,)).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    for k in ("before_metrics_json", "after_metrics_json"):
+        short = k[:-5]
+        d[short] = json.loads(d[k]) if d.get(k) else None
+        d.pop(k, None)
+    d["proposed_change"] = json.loads(d["proposed_change_json"]) if d.get("proposed_change_json") else None
+    d.pop("proposed_change_json", None)
+    return d
+
+
+def update_evolution_status(item_id: str, status: str, **kwargs) -> dict | None:
+    fields = ["status = ?"]
+    args: list[Any] = [status]
+    if status == "applied":
+        fields.append("applied_at = ?")
+        args.append(now_iso())
+    allowed = {"ab_test_run_id"}
+    for k, v in kwargs.items():
+        if k not in allowed:
+            continue
+        fields.append(f"{k} = ?")
+        args.append(v)
+    args.append(item_id)
+    with _lock:
+        conn = _get_conn()
+        conn.execute(f"UPDATE evolution_items SET {', '.join(fields)} WHERE id=?", tuple(args))
+        conn.commit()
+    return get_evolution_item(item_id)

@@ -1,0 +1,2 @@
+{"event_id":"e1","market":"CN","symbol":"600000","event_time":"2025-01-10T09:00:00+08:00","event_type_l2":"rate","title":"LPR 下调刺激银行估值修复","event_text":"央行宣布 LPR 下调，市场预期银行板块风险偏好改善。","source_url":"https://example.com/e1","direction_prior":"up"}
+{"event_id":"e2","market":"US","symbol":"NVDA","event_time":"2025-02-20T16:30:00-05:00","event_type_l2":"earnings","title":"Guidance cut after weak quarter","event_text":"Management cut next quarter guidance after revenue miss.","source_url":"https://example.com/e2","direction_prior":"down"}

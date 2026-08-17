@@ -18,11 +18,12 @@ _client: Optional[AsyncOpenAI] = None
 
 
 def get_client() -> AsyncOpenAI:
+    """返回 AsyncOpenAI client。优先 MAAS，其次 ARK。统一 model_name 用 config.LLM_MODEL。"""
     global _client
     if _client is None:
         _client = AsyncOpenAI(
-            base_url=config.ARK_API_URL,
-            api_key=config.ARK_API_KEY,
+            base_url=config.LLM_BASE_URL,
+            api_key=config.LLM_API_KEY,
             timeout=config.LLM_TIMEOUT,
         )
     return _client
@@ -42,7 +43,21 @@ async def execute_skill(name: str, args: dict) -> dict:
     Supports both sync and async handlers:
     - async handler: 直接 await（skill 内部 await sub-tool）
     - sync handler:  to_thread 跑（保持原行为）
+
+    P0 未来函数防护（STRICT AS-OF）：当 FEVER_BT_STRICT_AS_OF=1 时，
+    对 event_study_skill / event_study 强制注入 as_of=True + 正确 benchmark，
+    防止 LLM 因 prompt 遗漏而暴露 post-event CAR。
     """
+    import os as _os
+    strict_as_of = _os.environ.get("FEVER_BT_STRICT_AS_OF", "").strip() in ("1", "true", "yes")
+    if strict_as_of:
+        args = dict(args or {})
+        if name == "event_study_skill":
+            args["as_of"] = True
+            # 若调用方未显式传 benchmark 则留空（skill 内部会按 symbol 自动绑定 QQQ/XLK/SPY/sh000300）
+        elif name == "event_study":
+            args["as_of"] = True
+            # event_study 是 internal skill，也强制 as_of（即使 skill.py 的 wrapper 没拦住）
     ensure_skills_loaded()
     sd = REGISTRY.get(name)
     if sd is None:
@@ -108,7 +123,7 @@ async def run_agent(
     for round_no in range(1, max_rounds + 1):
         state["rounds"] = round_no
         kwargs: dict[str, Any] = {
-            "model": config.ARK_MODEL,
+            "model": config.LLM_MODEL,
             "messages": messages,
             "stream": True,
         }
@@ -214,7 +229,7 @@ async def run_agent(
         repeated_failure_skill = next((skill for skill, count in consecutive_failures.items() if count >= 3), None)
         if repeated_failure_skill:
             summary_kwargs: dict[str, Any] = {
-                "model": config.ARK_MODEL,
+                "model": config.LLM_MODEL,
                 "messages": messages + [{
                     "role": "user",
                     "content": (
@@ -241,7 +256,7 @@ async def run_agent(
         # 达到最大轮数仍有 tool_calls —— 让模型做一次无工具总结
         state["truncated_by_rounds"] = True
         summary_kwargs: dict[str, Any] = {
-            "model": config.ARK_MODEL,
+            "model": config.LLM_MODEL,
             "messages": messages + [{"role": "user", "content": "工具轮次已用完，请基于已获得的信息直接给出最终回答。"}],
             "stream": True,
         }
@@ -265,7 +280,7 @@ async def complete_text(system: str, user: str, *, max_tokens: int = 2000) -> st
     """Non-streaming single completion (returns content only)."""
     client = get_client()
     resp = await client.chat.completions.create(
-        model=config.ARK_MODEL,
+        model=config.LLM_MODEL,
         messages=[{"role": "system", "content": system},
                   {"role": "user", "content": user}],
         max_tokens=max_tokens,
@@ -275,26 +290,44 @@ async def complete_text(system: str, user: str, *, max_tokens: int = 2000) -> st
 
 
 async def complete_json(system: str, user: str, *, max_tokens: int = 3000) -> Optional[dict]:
-    """Non-streaming completion forced to JSON object; returns parsed dict or None."""
+    """Non-streaming completion forced to JSON object; returns parsed dict or None.
+       MAAS/Ark 有 1 RPS + 首包慢 + 429；内部自动最多 4 次指数退避重试。"""
     client = get_client()
-    resp = await client.chat.completions.create(
-        model=config.ARK_MODEL,
-        messages=[{"role": "system", "content": system},
-                  {"role": "user", "content": user}],
-        max_tokens=max_tokens,
-        response_format={"type": "json_object"},
-    )
-    text = (resp.choices[0].message.content or "").strip()
-    if not text:
-        return None
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        m = text[text.find("{"): text.rfind("}") + 1]
+    import asyncio as _ai
+    last_err: Optional[BaseException] = None
+    for attempt in range(1, 5):
         try:
-            return json.loads(m)
-        except Exception:  # noqa: BLE001
-            return None
+            resp = await client.chat.completions.create(
+                model=config.LLM_MODEL,
+                messages=[{"role": "system", "content": system},
+                          {"role": "user", "content": user}],
+                max_tokens=max_tokens,
+                response_format={"type": "json_object"},
+            )
+            text = (resp.choices[0].message.content or "").strip()
+            if not text:
+                return None
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError:
+                m = text[text.find("{"): text.rfind("}") + 1]
+                try:
+                    return json.loads(m)
+                except Exception:  # noqa: BLE001
+                    return None
+        except BaseException as e:  # noqa: BLE001
+            last_err = e
+            if attempt >= 4:
+                break
+            # 429 / 超时 / 远端连接失败 → 指数退避，更长等待
+            msg = str(e)
+            sleep_s = min(9.0, (2.0 ** (attempt - 1)) * 1.3 + 0.4)
+            if "429" in msg or "TooManyRequests" in msg or "RateLimit" in msg or "rate limit" in msg:
+                sleep_s += 0.8
+            await _ai.sleep(sleep_s)
+    if last_err is not None:
+        raise last_err
+    return None
 
 
 def _response_output_text(resp: Any) -> str:
@@ -330,7 +363,7 @@ async def complete_json_with_web_search(
     """Responses API + Ark web_search, returning parsed JSON or None."""
     client = get_client()
     resp = await client.responses.create(
-        model=config.ARK_MODEL,
+        model=config.LLM_MODEL,
         instructions=system,
         input=user,
         tools=[{"type": "web_search", "max_keyword": max(1, min(int(max_keywords or 3), 10))}],

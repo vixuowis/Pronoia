@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 from typing import Optional
+import math
 
 import akshare as ak
 import pandas as pd
@@ -23,6 +24,7 @@ from .market import (
     norm_symbol,
 )
 from .registry import err, meta, ok, skill
+from . import cache
 
 
 def _fetch_stock_close(sym: str, start8: str, end8: str) -> tuple[pd.DataFrame, str]:
@@ -81,28 +83,35 @@ def _fetch_us_index_close(sym: str) -> tuple[pd.DataFrame, str]:
     "event_study",
     "事件研究法：以事件日为 T0，计算窗口 [-pre,+post] 内个股相对指数的超额收益 AR 与累计超额收益 CAR，"
     "并给出事件日前5日/后5日累计收益、CAR终值、事件日涨跌幅。收益单位%。"
-    "支持 A 股（6 位代码）与 美股（ticker，A 股默认基准 sh000300，美股默认 SPY）。",
+    "支持 A 股（6 位代码）与 美股（ticker，A 股默认基准 sh000300，美股默认 SPY）。"
+    "【as_of 严格模式】当 as_of=True 时，仅返回事件日及之前的数据，绝不包含任何 post-event 信息"
+    "（禁止计算/返回 postN_car_endpoint_pct / post5_cum_return 等未来指标，窗口截断至 T0）。",
     {
         "type": "object",
         "properties": {
             "symbol": {"type": "string", "description": "股票代码：A 股 6 位 / sh600519；美股 ticker AAPL / NVDA"},
             "event_date": {"type": "string", "description": "事件日 YYYYMMDD 或 YYYY-MM-DD"},
             "pre": {"type": "integer", "description": "事件前交易日数，默认20"},
-            "post": {"type": "integer", "description": "事件后交易日数，默认20"},
+            "post": {"type": "integer", "description": "事件后交易日数，默认20（as_of=True 时强制为 0）"},
             "index_symbol": {"type": "string", "description": "基准指数：A 股默认 sh000300(沪深300)；美股默认 SPY"},
+            "as_of": {"type": "boolean", "description": "严格 as-of 模式：True=仅返回事件日及以前数据（禁止未来信息）"},
         },
         "required": ["symbol", "event_date"],
     },
     internal=True,)
+@cache.cached("event_study")
 def event_study(symbol: str, event_date: str, pre: int = 20, post: int = 20,
-                index_symbol: str = "") -> dict:
+                index_symbol: str = "", as_of: bool = False) -> dict:
     try:
         try:
             ev = datetime.strptime(norm_date(event_date), "%Y%m%d").date()
         except ValueError:
             return err(f"无法识别事件日: {event_date}")
         pre = max(1, min(int(pre or 20), 60))
-        post = max(0, min(int(post or 20), 60))
+        # as_of 模式下强制 post=0，窗口截断到 T0 当天
+        if as_of:
+            post = 0
+        post = max(0, min(int(post or 0), 60))
 
         us = is_us_symbol(symbol)
         if us:
@@ -164,6 +173,21 @@ def event_study(symbol: str, event_date: str, pre: int = 20, post: int = 20,
                 return None
             return round(float(((1 + days / 100.0).prod() - 1) * 100.0), 4)
 
+        def _endpoint_car(n: int) -> Optional[float]:
+            """端点法 [T0, T0+N] CAR（%），与 Oracle labeler 的 car_tN 同口径。
+            car = (p_asset_tN / p_asset_t0 - 1) - (p_bm_tN / p_bm_t0 - 1)
+            """
+            idx_n = t0 + n
+            if idx_n >= len(df):
+                return None
+            p0 = float(df.loc[t0, "close"])
+            pN = float(df.loc[idx_n, "close"])
+            bm_p0 = float(df.loc[t0, "idx_close"])
+            bm_pN = float(df.loc[idx_n, "idx_close"])
+            if not p0 or not bm_p0 or not math.isfinite(pN) or not math.isfinite(bm_pN):
+                return None
+            return round(((pN / p0 - 1.0) - (bm_pN / bm_p0 - 1.0)) * 100.0, 4)
+
         rows = []
         for _, r in win.iterrows():
             rows.append({
@@ -176,22 +200,63 @@ def event_study(symbol: str, event_date: str, pre: int = 20, post: int = 20,
                 "car": None if pd.isna(r["car"]) else round(float(r["car"]), 4),
             })
         day0_rows = df.loc[t0]
-        summary = {
-            "symbol": sym,
-            "index_symbol": idx_sym,
-            "market": "美股" if us else "A股",
-            "event_date_requested": ev_iso,
-            "event_day": actual_event_day,
-            "event_day_is_trading_day": actual_event_day == ev_iso,
-            "window": f"[-{pre}, +{i_end - t0}] 交易日",
-            "event_day_change_pct": (None if pd.isna(day0_rows["r_stock"])
-                                     else round(float(day0_rows["r_stock"]), 4)),
-            "pre5_cum_return_pct": _cum_ret(df.loc[max(t0 - 5, i_start):t0 - 1, "r_stock"])
-            if t0 - 1 >= i_start else None,
-            "post5_cum_return_pct": _cum_ret(df.loc[t0 + 1:min(t0 + 5, i_end), "r_stock"]),
-            "car_final_pct": rows[-1]["car"] if rows else None,
-            "note": "r_stock/r_index/ar/car 单位均为 %；CAR 自窗口首日累计",
-        }
+        # as_of 模式下禁止计算 post-event 指标（未来函数）；仅返回事件当日及之前的信号
+        if as_of:
+            summary = {
+                "symbol": sym,
+                "index_symbol": idx_sym,
+                "market": "美股" if us else "A股",
+                "event_date_requested": ev_iso,
+                "event_day": actual_event_day,
+                "event_day_is_trading_day": actual_event_day == ev_iso,
+                "window": f"[-{pre}, 0] 交易日（strict as-of 模式：已截断 post-event 数据，禁止未来函数）",
+                "event_day_change_pct": (None if pd.isna(day0_rows["r_stock"])
+                                         else round(float(day0_rows["r_stock"]), 4)),
+                "event_day_idx_change_pct": (None if pd.isna(day0_rows["r_index"])
+                                             else round(float(day0_rows["r_index"]), 4)),
+                "event_day_ar_pct": (None if pd.isna(day0_rows["r_stock"]) or pd.isna(day0_rows["r_index"])
+                                     else round(float(day0_rows["r_stock"]) - float(day0_rows["r_index"]), 4)),
+                "pre5_cum_return_pct": _cum_ret(df.loc[max(t0 - 5, i_start):t0 - 1, "r_stock"])
+                if t0 - 1 >= i_start else None,
+                "pre20_cum_return_pct": _cum_ret(df.loc[i_start:t0 - 1, "r_stock"])
+                if t0 - 1 >= i_start else None,
+                "pre5_cum_ar_pct": _cum_ret(df.loc[max(t0 - 5, i_start):t0 - 1, "ar"])
+                if t0 - 1 >= i_start and "ar" in df.columns else None,
+                # as_of 模式下显式声明无 post-event 数据
+                "postN_as_of_blocked": True,
+                "post1_car_endpoint_pct": None,
+                "post3_car_endpoint_pct": None,
+                "post5_car_endpoint_pct": None,
+                "post5_cum_return_pct": None,
+                "car_final_pct": rows[-1]["car"] if rows else None,  # 仅 [-pre, 0]
+                "note": "【STRICT AS-OF 模式】本事件研究仅返回事件日及以前的数据，绝不包含 T+1 及以后的任何信息。"
+                        "r_stock/r_index/ar/car 单位均为 %。可参考信号：event_day_change_pct（T0 当日涨跌）、"
+                        "pre5/pre20_cum_return_pct（事件前漂移）、pre5_cum_ar_pct（事件前超额），"
+                        "禁止使用/推断任何 post-event 指标。",
+            }
+        else:
+            summary = {
+                "symbol": sym,
+                "index_symbol": idx_sym,
+                "market": "美股" if us else "A股",
+                "event_date_requested": ev_iso,
+                "event_day": actual_event_day,
+                "event_day_is_trading_day": actual_event_day == ev_iso,
+                "window": f"[-{pre}, +{i_end - t0}] 交易日",
+                "event_day_change_pct": (None if pd.isna(day0_rows["r_stock"])
+                                         else round(float(day0_rows["r_stock"]), 4)),
+                "pre5_cum_return_pct": _cum_ret(df.loc[max(t0 - 5, i_start):t0 - 1, "r_stock"])
+                if t0 - 1 >= i_start else None,
+                "post5_cum_return_pct": _cum_ret(df.loc[t0 + 1:min(t0 + 5, i_end), "r_stock"]),
+                "car_final_pct": rows[-1]["car"] if rows else None,
+                "post1_car_endpoint_pct": _endpoint_car(1),
+                "post3_car_endpoint_pct": _endpoint_car(3),
+                "post5_car_endpoint_pct": _endpoint_car(5),
+                "note": "r_stock/r_index/ar/car 单位均为 %。"
+                        "postN_car_endpoint_pct = 端点法 [T0, T0+N] 超额收益（与 Oracle labeler 的 car_tN 同口径），"
+                        "判断方向时优先看 post3_car_endpoint_pct；|post3_car_endpoint_pct| < 0.5 视为 neutral。"
+                        "car_final_pct 是 [-pre,+post] 窗口累加法 CAR，含事件前漂移，仅供参考。",
+            }
         line = {
             "kind": "line",
             "title": f"{sym.upper()} 事件研究 CAR 曲线（T0={actual_event_day}）",
