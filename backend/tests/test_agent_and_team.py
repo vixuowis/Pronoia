@@ -135,7 +135,110 @@ class TestAgentAndTeam(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(executions, 1)
         self.assertEqual(len(artifacts), 1)
-        self.assertEqual(context.stats(), {"calls": 2, "unique_calls": 1, "reuses": 1})
+        self.assertEqual(context.stats(), {"calls": 2, "unique_calls": 1, "reuses": 1, "slices": 0})
         self.assertFalse(first_state["tool_trace"][0]["reused"])
         self.assertTrue(second_state["tool_trace"][0]["reused"])
         self.assertEqual(len([e for e in first_events + second_events if e["type"] == "artifact"]), 1)
+
+    async def test_team_context_normalizes_equivalent_news_intel_arguments(self):
+        """Equivalent news_intel forms should share one run-scoped result."""
+        executions = 0
+
+        async def raw_executor(name, args):
+            nonlocal executions
+            executions += 1
+            return {"ok": True, "data": {"name": name, "args": args}, "meta": {}}
+
+        context = ResearchContext()
+        first = await context.execute(raw_executor, "news_intel", {
+            "symbol": "sh600031", "kind": ["announcement", "news", "news"], "limit": 8,
+        })
+        second = await context.execute(raw_executor, "news_intel", {"symbol": "600031"})
+
+        self.assertTrue(first["ok"])
+        self.assertTrue(second["ok"])
+        self.assertTrue(second["_team_shared"])
+        self.assertEqual(executions, 1)
+        self.assertEqual(context.stats(), {"calls": 2, "unique_calls": 1, "reuses": 1, "slices": 0})
+
+    async def test_team_context_keeps_distinct_news_intel_limits_separate(self):
+        """Limit slicing is not implemented yet, so only equivalent limits share."""
+        executions = 0
+
+        async def raw_executor(name, args):
+            nonlocal executions
+            executions += 1
+            return {"ok": True, "data": {"name": name, "args": args}, "meta": {}}
+
+        context = ResearchContext()
+        await context.execute(raw_executor, "news_intel", {"symbol": "600031", "limit": 8})
+        await context.execute(raw_executor, "news_intel", {"symbol": "600031", "limit": 10})
+
+        self.assertEqual(executions, 2)
+        self.assertEqual(context.stats(), {"calls": 2, "unique_calls": 2, "reuses": 0, "slices": 0})
+
+    async def test_team_context_slices_wider_news_intel_result(self):
+        executions = 0
+
+        async def raw_executor(name, args):
+            nonlocal executions
+            executions += 1
+            return {"ok": True, "data": {"kind": args["kind"], "data_points": [[
+                {"title": f"n{i}"} for i in range(args["limit"])
+            ]]}, "meta": {}}
+
+        context = ResearchContext()
+        await context.execute(raw_executor, "news_intel", {
+            "symbol": "600031", "kind": ["news", "announcement"], "limit": 20,
+        })
+        sliced = await context.execute(raw_executor, "news_intel", {
+            "symbol": "600031", "kind": ["announcement", "news"], "limit": 10,
+        })
+
+        self.assertEqual(executions, 1)
+        self.assertTrue(sliced["_team_shared"])
+        self.assertTrue(sliced["_team_slice"])
+        self.assertEqual(len(sliced["data"]["data_points"][0]), 10)
+        self.assertEqual(context.stats(), {"calls": 2, "unique_calls": 1, "reuses": 1, "slices": 1})
+
+    async def test_team_context_slices_price_only_market_research(self):
+        executions = 0
+        rows = [{"date": f"2026-08-{day:02d}", "close": day} for day in range(1, 19)]
+
+        async def raw_executor(name, args):
+            nonlocal executions
+            executions += 1
+            return {"ok": True, "data": {
+                "market": "A股", "data_points": [rows], "price_metrics": {},
+            }, "meta": {}}
+
+        context = ResearchContext()
+        await context.execute(raw_executor, "market_research", {
+            "symbol": "sh600031", "lookback_days": 120, "focus": ["price"],
+        })
+        sliced = await context.execute(raw_executor, "market_research", {
+            "symbol": "600031", "lookback_days": 60, "focus": ["price"],
+        })
+
+        self.assertEqual(executions, 1)
+        self.assertTrue(sliced["_team_slice"])
+        self.assertEqual(sliced["data"]["lookback_days"], 60)
+        self.assertEqual(sliced["data"]["price_metrics"]["latest_close"], 18.0)
+
+    async def test_team_context_slices_wider_evidence_ledger_result(self):
+        executions = 0
+
+        async def raw_executor(name, args):
+            nonlocal executions
+            executions += 1
+            return {"ok": True, "data": {"rows": [{"title": str(i)} for i in range(args["limit"])]},
+                    "meta": {"rows": args["limit"]}}
+
+        context = ResearchContext()
+        await context.execute(raw_executor, "evidence_ledger", {"symbol": "600031", "limit": 20})
+        sliced = await context.execute(raw_executor, "evidence_ledger", {"symbol": "600031", "limit": 8})
+
+        self.assertEqual(executions, 1)
+        self.assertTrue(sliced["_team_slice"])
+        self.assertEqual(len(sliced["data"]["rows"]), 8)
+        self.assertEqual(sliced["meta"]["rows"], 8)
