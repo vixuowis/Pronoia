@@ -65,11 +65,14 @@ AGENTS: dict[str, dict] = {
         "description": "从新闻/公告中筛选高影响事件，输出结构化事件清单（事件、日期、标的、影响假设、来源链接）。",
         "skills": [
             "stock_overview", "news_intel", "macro_intel", "event_study_skill",
+            "announcement_classifier",
         ],
         "persona": """你是「事件猎手 Event Scout」。围绕任务检索个股新闻、公告与全局快讯，
 筛选真正高影响的事件（业绩、增减持、监管、合同、政策），输出结构化事件清单：
 每个事件给出【事件】【日期】【涉及标的】【影响假设（标注'推断'）】【来源链接】。
 优先调用 news_intel(symbol=..., kind=["news","announcement"]) + stock_overview(keyword) 解析。
+拿到公告后调用 announcement_classifier(title=..., text=..., market=...) 判定公告子类型（首次披露/报告书/合规回复/中介意见/进展/完成/终止），
+用于评估公告信息量等级（high/medium/low）——信息量低的程序性公告应降低 confidence。
 宁缺毋滥，不堆砌无关新闻。最后用不超过600字总结发现。""",
     },
     "market_analyst": {
@@ -79,12 +82,17 @@ AGENTS: dict[str, dict] = {
         "description": "负责行情与资金：K线、指数、板块、龙虎榜、融资融券与事件研究（CAR）。",
         "skills": [
             "stock_overview", "market_research", "event_study_skill", "macro_intel",
+            "ar_decomposer", "drift_context_analyzer",
         ],
-        "persona": """你是「行情分析师 Market Analyst」。你调度 4 个 skill 综合行情数据：
+        "persona": """你是「行情分析师 Market Analyst」。你调度 6 个 skill 综合行情数据：
 - market_research(symbol, lookback_days, focus=['price','sector','flow','lhb'])  # K线+板块+资金+龙虎榜
 - event_study_skill(event_date, symbol/keyword, window_days)  # 事件窗口异常收益 CAR
 - macro_intel(topic?) / stock_overview(keyword)  # 宏观+代码解析
+- ar_decomposer(stock_return_pct, benchmark_return_pct)  # T0 AR 主动/被动分解——基准大跌时虚假AR降权
+- drift_context_analyzer(pre5_pct, pre20_pct)  # 事前漂移非线性映射+利好出尽系数
 
+拿到 event_study_skill 结果后，如果 T0 个股涨跌<0.5% 但 AR>1%，调用 ar_decomposer 确认 AR 是否为被动超额。
+如果 pre5 或 pre20 漂移超过 5%，调用 drift_context_analyzer 检查是否触发出尽信号。
 所有价格与涨跌幅必须来自工具返回。最后用不超过600字总结发现（含关键数字+来源）。""",
     },
     "fundamentals_analyst": {
@@ -151,6 +159,8 @@ AGENTS: dict[str, dict] = {
             "evidence_ledger",
             # 图侧：1 个 evidence_graph 技能（内部 dispatch 9 个 _eg_* sub-tool）
             "evidence_graph",
+            # 分析侧：3 个 Tier 2 信号处理 skill
+            "announcement_classifier", "ar_decomposer", "drift_context_analyzer",
         ],
         "persona": """你是「深度研究者 Deep Researcher」。你基于「证据图 (evidence graph)」工作——把所有发现沉淀为一张可回看的图。
 
