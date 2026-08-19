@@ -10,6 +10,7 @@ from typing import Any, AsyncIterator
 
 from .. import config
 from ..llm import ArtifactStore, complete_json, run_agent
+from .research_context import ResearchContext
 from ..skills.evidence_graph import (
     EvidenceGraph, eg_attach, eg_detach, get_current_graph,
 )
@@ -160,6 +161,7 @@ async def _run_expert_serial(
     *,
     prior_findings: dict[str, str] | None = None,
     prior_tool_trace: list[dict] | None = None,
+    research_context: ResearchContext | None = None,
 ) -> AsyncIterator[dict]:
     """单 expert 串行执行：agent_start → events → agent_done 收尾。失败也收尾。
 
@@ -199,8 +201,16 @@ async def _run_expert_serial(
                 "请调用你的技能获取真实数据后作答；最后用不超过600字总结发现（含关键数字+来源）。"
                 + evidence_context},
         ]
+        async def team_skill_executor(name: str, args: dict) -> dict:
+            if research_context is None:
+                from ..llm import execute_skill
+                return await execute_skill(name, args)
+            from ..llm import execute_skill
+            return await research_context.execute(execute_skill, name, args)
+
         async for ev in run_agent(agent_id, messages, agent_def=get_agent(agent_id),
                                   state=expert_state, artifact_store=artifact_store,
+                                  skill_executor=team_skill_executor,
                                   max_rounds=config.TEAM_MAX_ROUNDS):
             yield ev
         findings = expert_state["content"].strip()
@@ -317,11 +327,13 @@ async def run_team(
 
     # -------------------------------------------------------- 2) serial fan
     findings: dict[str, str] = {}
+    research_context = ResearchContext()
     for p in plan:
         async for ev in _run_expert_serial(
             p["agent"], p["task"], question, artifact_store,
             prior_findings=findings if p["agent"] == "deep_researcher" else None,
             prior_tool_trace=state["tool_trace"] if p["agent"] == "deep_researcher" else None,
+            research_context=research_context,
         ):
             # 提取 agent_findings 写入 state + findings；其余原样 yield
             if ev.get("type") == "agent_findings":
@@ -359,6 +371,8 @@ async def run_team(
                               state=state, artifact_store=artifact_store,
                               max_rounds=2):
         yield ev
+
+    state["tool_trace"].append({"type": "research_context", **research_context.stats()})
 
     # ------------------------------------------------------------- 4) verify
     draft = state["content"].strip()

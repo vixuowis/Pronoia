@@ -30,6 +30,7 @@ def get_client() -> AsyncOpenAI:
 
 
 ArtifactStore = Callable[[str, str, Any], Awaitable[dict]]
+SkillExecutor = Callable[[str, dict], Awaitable[dict]]
 
 
 async def noop_artifact_store(kind: str, title: str, payload: Any) -> dict:
@@ -104,6 +105,7 @@ async def run_agent(
     agent_def: dict,
     state: dict,
     artifact_store: ArtifactStore = noop_artifact_store,
+    skill_executor: SkillExecutor = execute_skill,
     max_rounds: int = 8,
     emit_thinking: bool = True,
 ) -> AsyncIterator[dict]:
@@ -184,10 +186,13 @@ async def run_agent(
                 args = {}
             yield {"type": "tool_call", "agent": agent_id, "id": tc_id,
                    "skill": name, "args": args}
-            result = await execute_skill(name, args)
+            result = await skill_executor(name, args)
 
             artifact_ids: list[str] = []
-            if result.get("ok"):
+            reused = bool(result.get("_team_shared"))
+            # A reused result remains available to the model, but its artifact
+            # has already been persisted by the first team member that fetched it.
+            if result.get("ok") and not reused:
                 arts = result.get("artifacts") or ([result["artifact"]] if result.get("artifact") else [])
                 for art in arts:
                     try:
@@ -200,14 +205,16 @@ async def run_agent(
                         yield {"type": "thinking", "agent": agent_id,
                                "delta": f"\n[artifact 落库失败: {e}]\n"}
 
-            preview = _preview(result)
+            preview = ("复用团队数据；" if reused else "") + _preview(result)
             yield {"type": "tool_result", "agent": agent_id, "id": tc_id,
                    "skill": name, "ok": bool(result.get("ok")), "preview": preview,
-                   "artifact_id": artifact_ids[0] if artifact_ids else None}
+                   "artifact_id": artifact_ids[0] if artifact_ids else None,
+                   "reused": reused}
             state["tool_trace"].append({
                 "type": "tool", "agent": agent_id, "id": tc_id, "skill": name,
                 "args": args, "ok": bool(result.get("ok")), "preview": preview,
                 "artifact_ids": artifact_ids,
+                "reused": reused,
             })
             if result.get("ok"):
                 consecutive_failures[name] = 0
