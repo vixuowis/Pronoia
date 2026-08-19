@@ -471,10 +471,16 @@ def score_files(
     predictions_path: str | Path,
     labels_path: str | Path,
     epsilon: float = 0.005,
+    primary_oracle_horizon: str = "t3",
 ) -> MetricsSummary:
     preds = load_predictions(predictions_path)
     labels = load_labels(labels_path)
-    return compute_metrics(predictions=preds, labels=labels, epsilon=epsilon)
+    return compute_metrics(
+        predictions=preds,
+        labels=labels,
+        epsilon=epsilon,
+        primary_oracle_horizon=primary_oracle_horizon,
+    )
 
 
 def write_metrics(path: str | Path, metrics: MetricsSummary) -> None:

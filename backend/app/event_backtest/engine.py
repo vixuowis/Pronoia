@@ -467,8 +467,20 @@ async def run_team_full_one_event(
         )
         question = question + preamble
 
+    # 事件元信息，用于 Synthesize 阶段路由到对应 Tier 1 analyzer skill
+    event_meta = {
+        "market": market,
+        "event_type_l2": event_type_l2,
+        "symbol": symbol,
+        "benchmark": benchmark,
+        "event_time": str(event_time),
+        "title": getattr(event, "title", ""),
+        "event_text": getattr(event, "event_text", ""),
+    }
+
     async for ev in _real_run_team(
         question, history=[], state=state, artifact_store=noop_artifact_store,
+        event_meta=event_meta,
         **team_kwargs,
     ):
         n_sse_events_total += 1
