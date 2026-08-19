@@ -18,9 +18,12 @@ Pronoia 是一个开源的对话式 AI 金融研究工作台。
 
 - **对话式研究工作台**：左栏研究案例（Case）、中栏对话流、右栏产出物面板。
   每个 Case 持久化（SQLite），刷新不丢，随时回看、继续追问。
-- **15 个真实数据技能（Skill）**：日K行情、指数、板块、个股新闻、全局快讯、公告检索、
+- **85 个真实数据技能（Skill）**：日K行情、指数、板块、个股新闻、全局快讯、公告检索、
   财务摘要/指标、研报评级、龙虎榜、融资融券、宏观 CPI/PPI/PMI/GDP/国债收益率、
   **事件研究法（AR/CAR）**、股票搜索——全部走 akshare 免费接口，零 mock。
+  另含 **6 个市场分析 Skill**（公告子类型分类 / T0 AR 主动被动分解 / 事前漂移非线性映射 /
+  A 股并购分析思维 / A 股财报分析思维 / 美股并购分析思维），按 market × event_type 路由，
+  替代一刀切评分卡。
 - **Agent 团队模式**：Planner 拆解任务 → 事件猎手 / 行情分析师 / 基本面分析师并行执行 →
   主理人综合 → 复核员逐条核对「数据事实 vs 模型推断」→ 流式输出。
 - **产出物（Artifacts）体系**：工具结果自动生成 K线图、CAR曲线、数据表、证据卡片，
@@ -31,9 +34,17 @@ Pronoia 是一个开源的对话式 AI 金融研究工作台。
 - **🧪 事件驱动回测平台（P0 Web）**：基于真实事件 + 真实行情做系统级回测，
   评估 Tool / Skill / Agent / Team 四层的方向命中率，形成「预测命中 → reward 计算 →
   calibration 更新 → 策略自进化」的可追溯闭环。详见下方独立章节。
+- **多 horizon 标签体系**：Oracle 标签覆盖 T+3 / T+7 / T+15 / T+30 / T+60 五个时间窗口的
+  CAR，并加权平均为 avg_all（t3=35% / t7=28% / t15=20% / t30=12% / t60=5%），
+  平滑短期波动；另含 consensus66 一致性指标（多窗口同向比例）。可指定
+  `--primary-oracle-horizon avg_all` 作为主证据，避免短期方差过大。
+- **Strict / Lenient 双口径 ACC**：Strict 要求预测方向与 Oracle 完全一致；
+  Lenient 仅在双方均非 neutral 时计分，更公平评估方向判断能力。另输出 12 个 horizon 的
+  ACC + confidence 分桶校准表（Spearman ρ）。
 - **真实数据集治理**：内置 5 个 × 10 条的真实小数据集（v9_1000 官方回测池分层抽样），
   零杜撰、零未来日期、100% 可点击的东方财富公告 / Yahoo SEC 原文链接、100% 有
-  真实 T+3 超额收益（CAR）Oracle Label。
+  真实 T+3 超额收益（CAR）Oracle Label。1000 条全量回测数据集独立存放于
+  `backtesting/` 目录（v1 版本）。
 
 ## 🏗 架构
 
@@ -130,9 +141,20 @@ docker build -t fever . && docker run -p 8000:8000 fever
 
 ## 🧩 技能清单
 
-`search_stock` `get_stock_daily` `get_index_daily` `get_sector_spot` `get_stock_news`
+### 数据采集 Skill（14 个 · 跨市场通用）
+
+`search_stock` `get_stock_daily` `get_us_stock_daily` `get_index_daily` `get_sector_spot` `get_stock_news`
 `get_global_news` `get_announcements` `get_financial_abstract` `get_financial_indicator`
 `get_research_reports` `get_lhb` `get_margin` `get_macro` `event_study` `get_current_date`
+
+### 市场分析 Skill（6 个 · 按 market × event_type 路由）
+
+- `announcement_classifier`：公告子类型分类（终止 / 首次披露 / 完成 / 合规回复 / 中介意见 / 进展 / 报告书 / 财报类）
+- `ar_decomposer`：T0 AR 主动收益 vs 被动收益分解（识别 alpha 来源）
+- `drift_context_analyzer`：事前漂移非线性映射 + 多 horizon 持续性 + 利好出尽系数
+- `cn_ma_analyzer`：A 股并购分析思维（终止/预案/合规/报告书差异化 prior）
+- `cn_earnings_analyzer`：A 股财报分析思维（业绩预告/快报/正式报告差异化 prior）
+- `us_ma_analyzer`：美股并购分析思维（Rule 425 / 8-K / DEFM14A 路由）
 
 > 注：本仓库针对网络环境做了数据源适配——东财行情类接口在部分网络不可用，
 > 日K默认走新浪源、腾讯源兜底；不可用的接口已在设计中剔除，不会产生幻觉数据。
@@ -140,7 +162,8 @@ docker build -t fever . && docker run -p 8000:8000 fever
 ## 👥 Agent 花名册
 
 主理人 Router · 事件猎手 Event Scout · 行情分析师 Market Analyst ·
-基本面分析师 Fundamentals Analyst · 复核员 Verifier · 报告撰写员 Report Writer
+基本面分析师 Fundamentals Analyst · 复核员 Verifier · 报告撰写员 Report Writer ·
+深度研究员 Deep Researcher · 事件预测员 Predictor
 
 ## 🧪 Pronoia 事件驱动回测平台（P0 · Web + CLI 双入口）
 
@@ -207,9 +230,13 @@ backend/.venv/bin/python scripts/build_real_datasets_from_v9.py
 严格约束（与 `docs/design.md` 第 5 节对齐）：
 - **零杜撰、零未来日期**：所有 event_time < 发布当天，字段 100% 拷贝自 v9_1000
 - **T+3 ACC 的 Wilson 95% CI 下界 ≥ 70%**（系统目标红线）
+- **多 horizon 主证据**：默认 `--primary-oracle-horizon avg_all`（T+3/7/15/30/60 加权平均），
+  避免短期方差过大；consensus66 作为保守参考（要求 ≥4/5 窗口同向）
 - 基准路由：XLK 成分股（AAPL/MSFT/NVDA）→ XLK；QQQ 成分股（AMZN/NFLX/META）→ QQQ；
   其他美股 → SPY；A 股 → 沪深 300（SH000300）；港股 → 恒生指数（HSI）
 - `FEVER_BT_STRICT_AS_OF=1` 默认开启：event_study_skill 仅返回事件发生前可用的数据，杜绝前视偏差
+- **backtesting/ 目录**：1000 条全量回测数据集 v1（`events_cn_us_1000_v1.jsonl` +
+  `labels_cn_us_1000_v1.jsonl`），详见 [backtesting/README.md](backtesting/README.md)
 
 ## 🗺 路线图
 
@@ -220,6 +247,10 @@ skill/prompt 策略更新」的长期自进化闭环。
 - [x] P0 对话式研究闭环（提问→采证→产出物→Case 沉淀）
 - [x] P0 事件研究法引擎（AR/CAR）
 - [x] P0 事件驱动回测 Web 平台：Backtest 路由 + 5 张 SQLite 表 + Orchestrator + SSE 实时进度 + 暂停/继续/取消 + 事件目录 + 单 Case 6 Tab 详情 + 5×10 真实数据集（零杜撰/零未来/真实链接）
+- [x] P0 多 horizon 标签体系：T+3/7/15/30/60 CAR + avg_all 加权平均 + consensus66 一致性 + Strict/Lenient 双口径 ACC + 12 horizon 指标 + confidence 分桶校准
+- [x] P0 市场分析 Skill 矩阵：6 个 analyzer（公告分类 / AR 分解 / 漂移分析 / CN MA / CN 财报 / US MA），按 market × event_type 路由替代一刀切评分卡
+- [x] P0 团队研究上下文共享：ResearchContext 模块，多专家 fan-out 阶段共享研究线索
+- [x] P0 1000 条全量回测数据集 v1：backtesting/ 目录独立维护，含使用说明文档
 - [ ] P1 研究资产化：历史 Case 检索、证据有效性标注、复盘面板
 - [ ] P1 事件监控与预警（定时任务 + 推送）
 - [ ] P2 TTRL v0：命中率统计、calibration 面板
@@ -227,6 +258,7 @@ skill/prompt 策略更新」的长期自进化闭环。
 
 ## 📋 更新日志
 
+- **3.10.0** · 2026-08-19 · 功能：多 horizon CAR 标签（T+3/7/15/30/60 + avg_all 加权平均）+ 6 个新 analyzer Skill（announcement_classifier / ar_decomposer / drift_context_analyzer / cn_ma_analyzer / cn_earnings_analyzer / us_ma_analyzer）+ Strict/Lenient 双口径 + 12 horizon ACC + confidence 分桶校准 + research_context 团队上下文共享 + backtesting/ 数据集目录（v1）
 - **3.9.0** · 2026-08-16 · 功能：新增 Pronoia 回测 Web 平台 P0（全栈）：Data list 选择真实数据集 → 启动/暂停/继续/取消、SSE 实时进度 + 3s 轮询兜底、事件目录 N 条待执行/执行中/已完成、单 Case 详情 6 个 Tab（Team Log/决策结论/Agent 逻辑链/行情视图/As-of Packet/Team Prompt）、原文链接真实可点击。5 个内置真实小数据集各 10 条，全部来自 v9_1000 官方回测池，零杜撰、零未来日期、100% 真实东方财富/Yahoo SEC 原文链接 + 真实 T+3 行情 Oracle Label。
 - **3.8.3** · 2026-08-05 · 修补：新增 Pronoia CLI（含 ./p 简写）并增强首页推荐超时兜底
 - **3.8.2** · 2026-07-29 · 修补：品牌更名为 Pronoia，并统一首页推荐与团队研究体验
