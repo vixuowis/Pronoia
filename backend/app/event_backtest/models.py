@@ -7,6 +7,17 @@ from typing import Any, Literal, Optional
 Market = Literal["CN", "US", "HK"]
 Direction = Literal["up", "down"]
 Label = Literal["up", "down", "neutral"]
+# Oracle horizons used for scoring. Numeric horizons (t*) map 1-to-1 to label_t* / car_t*.
+# Composite horizons (avg_* / consensus66) map to label_avg_* / label_consensus66.
+Horizon = Literal[
+    "t1", "t3", "t5", "t7", "t15", "t30", "t60",
+    "avg_short", "avg_mid", "avg_long", "avg_all", "consensus66",
+]
+
+ALL_HORIZONS: tuple[Horizon, ...] = (
+    "t1", "t3", "t5", "t7", "t15", "t30", "t60",
+    "avg_short", "avg_mid", "avg_long", "avg_all", "consensus66",
+)
 
 
 def event_template() -> dict[str, Any]:
@@ -115,14 +126,42 @@ class EventLabel:
     label_t1: Label
     label_t3: Label
     label_t5: Label
-    car_t1: float
-    car_t3: float
-    car_t5: float
+    label_t7: Label = ""
+    label_t15: Label = ""
+    label_t30: Label = ""
+    label_t60: Label = ""
+    label_avg_short: Label = ""
+    label_avg_mid: Label = ""
+    label_avg_long: Label = ""
+    label_avg_all: Label = ""
+    label_consensus66: Label = ""
+    car_t1: float = 0.0
+    car_t3: float = 0.0
+    car_t5: float = 0.0
+    car_t7: Optional[float] = None
+    car_t15: Optional[float] = None
+    car_t30: Optional[float] = None
+    car_t60: Optional[float] = None
+    car_avg_short: Optional[float] = None
+    car_avg_mid: Optional[float] = None
+    car_avg_long: Optional[float] = None
+    car_avg_all: Optional[float] = None
     market: Optional[Market] = None
     event_type_l2: Optional[str] = None
     car_t1_pvalue: Optional[float] = None
     car_t3_pvalue: Optional[float] = None
     car_t5_pvalue: Optional[float] = None
+    car_t7_pvalue: Optional[float] = None
+    car_t15_pvalue: Optional[float] = None
+    car_t30_pvalue: Optional[float] = None
+    car_t60_pvalue: Optional[float] = None
+    # Consistency / horizon-metadata signals
+    n_horizons_valid: Optional[int] = None
+    n_horizons_signed: Optional[int] = None
+    consensus_net: Optional[float] = None
+    consensus_maj_frac: Optional[float] = None
+    # Meta: which oracle horizon was used as the primary direction label (avg_all / t3 / etc.)
+    primary_oracle_horizon: Optional[str] = None
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "EventLabel":
@@ -135,19 +174,69 @@ class EventLabel:
                 return float(v)
             except (TypeError, ValueError):
                 return None
+        def _label(key):
+            return str(d.get(key) or "")
+        def _car(key):
+            v = d.get(key)
+            if v is None or v == "":
+                return None
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return None
+        def _opt_int(key):
+            v = d.get(key)
+            if v is None or v == "":
+                return None
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                return None
         return EventLabel(
             event_id=str(d.get("event_id") or d.get("id") or ""),
-            label_t1=str(d.get("label_t1") or ""),
-            label_t3=str(d.get("label_t3") or ""),
-            label_t5=str(d.get("label_t5") or ""),
+            # numeric horizon labels (backward-compat: t1/t3/t5 always present)
+            label_t1=_label("label_t1"),
+            label_t3=_label("label_t3"),
+            label_t5=_label("label_t5"),
+            # extended numeric horizons
+            label_t7=_label("label_t7"),
+            label_t15=_label("label_t15"),
+            label_t30=_label("label_t30"),
+            label_t60=_label("label_t60"),
+            # avgCAR horizons
+            label_avg_short=_label("label_avg_short"),
+            label_avg_mid=_label("label_avg_mid"),
+            label_avg_long=_label("label_avg_long"),
+            label_avg_all=_label("label_avg_all"),
+            # strict consensus horizon
+            label_consensus66=_label("label_consensus66"),
+            # backward-compat: base 3 cars
             car_t1=float(d.get("car_t1") or 0.0),
             car_t3=float(d.get("car_t3") or 0.0),
             car_t5=float(d.get("car_t5") or 0.0),
+            # extended cars (nullable: None = no data)
+            car_t7=_car("car_t7"),
+            car_t15=_car("car_t15"),
+            car_t30=_car("car_t30"),
+            car_t60=_car("car_t60"),
+            car_avg_short=_car("car_avg_short"),
+            car_avg_mid=_car("car_avg_mid"),
+            car_avg_long=_car("car_avg_long"),
+            car_avg_all=_car("car_avg_all"),
             market=(str(market).upper() if market is not None else None),  # type: ignore[arg-type]
             event_type_l2=(str(d.get("event_type_l2")).strip() or None) if d.get("event_type_l2") is not None else None,
             car_t1_pvalue=_safe_float("car_t1_pvalue"),
             car_t3_pvalue=_safe_float("car_t3_pvalue"),
             car_t5_pvalue=_safe_float("car_t5_pvalue"),
+            car_t7_pvalue=_safe_float("car_t7_pvalue"),
+            car_t15_pvalue=_safe_float("car_t15_pvalue"),
+            car_t30_pvalue=_safe_float("car_t30_pvalue"),
+            car_t60_pvalue=_safe_float("car_t60_pvalue"),
+            n_horizons_valid=_opt_int("n_horizons_valid"),
+            n_horizons_signed=_opt_int("n_horizons_signed"),
+            consensus_net=_safe_float("consensus_net"),
+            consensus_maj_frac=_safe_float("consensus_maj_frac"),
+            primary_oracle_horizon=str(d.get("primary_oracle_horizon") or "") or None,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -156,12 +245,38 @@ class EventLabel:
             "label_t1": self.label_t1,
             "label_t3": self.label_t3,
             "label_t5": self.label_t5,
+            "label_t7": self.label_t7,
+            "label_t15": self.label_t15,
+            "label_t30": self.label_t30,
+            "label_t60": self.label_t60,
+            "label_avg_short": self.label_avg_short,
+            "label_avg_mid": self.label_avg_mid,
+            "label_avg_long": self.label_avg_long,
+            "label_avg_all": self.label_avg_all,
+            "label_consensus66": self.label_consensus66,
             "car_t1": self.car_t1,
             "car_t3": self.car_t3,
             "car_t5": self.car_t5,
+            "car_t7": self.car_t7,
+            "car_t15": self.car_t15,
+            "car_t30": self.car_t30,
+            "car_t60": self.car_t60,
+            "car_avg_short": self.car_avg_short,
+            "car_avg_mid": self.car_avg_mid,
+            "car_avg_long": self.car_avg_long,
+            "car_avg_all": self.car_avg_all,
             "market": self.market,
             "event_type_l2": self.event_type_l2,
             "car_t1_pvalue": self.car_t1_pvalue,
             "car_t3_pvalue": self.car_t3_pvalue,
             "car_t5_pvalue": self.car_t5_pvalue,
+            "car_t7_pvalue": self.car_t7_pvalue,
+            "car_t15_pvalue": self.car_t15_pvalue,
+            "car_t30_pvalue": self.car_t30_pvalue,
+            "car_t60_pvalue": self.car_t60_pvalue,
+            "n_horizons_valid": self.n_horizons_valid,
+            "n_horizons_signed": self.n_horizons_signed,
+            "consensus_net": self.consensus_net,
+            "consensus_maj_frac": self.consensus_maj_frac,
+            "primary_oracle_horizon": self.primary_oracle_horizon,
         }

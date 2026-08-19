@@ -83,6 +83,11 @@ def build_bt_parser() -> argparse.ArgumentParser:
     score.add_argument("--labels", required=True, help="labels.jsonl")
     score.add_argument("--out", required=True, help="metrics_summary.json")
     score.add_argument("--epsilon", type=float, default=0.005)
+    score.add_argument("--primary-oracle-horizon", "--oracle-label", dest="primary_oracle_horizon",
+                       default="t3",
+                       help="主证据 oracle horizon（默认 t3）。可改为 avg_all（推荐，avgCAR 平均方向更稳）/"
+                            "avg_mid / consensus66 / t7 / t15 / t30 / t60。其余 horizons 会同时"
+                            "输出作参考指标。")
     score.set_defaults(func=cmd_score)
 
     report = sub.add_parser("report", help="从 metrics_summary.json 生成 markdown 报告")
@@ -205,8 +210,181 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 def cmd_score(args: argparse.Namespace) -> int:
-    metrics = score_files(predictions_path=args.pred, labels_path=args.labels, epsilon=float(args.epsilon))
+    primary_h = str(getattr(args, "primary_oracle_horizon") or "t3").strip() or "t3"
+    metrics = score_files(
+        predictions_path=args.pred,
+        labels_path=args.labels,
+        epsilon=float(args.epsilon),
+        primary_oracle_horizon=primary_h,
+    )
     write_metrics(args.out, metrics)
+    # 打印人类友好的多 horizon 指标汇总
+    ref_hs: list[str] = ["t3", "t7", "t15", "t30", "t60", "avg_all", "consensus66"]
+    lines = []
+    lines.append(f"[INFO] metrics written -> {args.out}")
+    lines.append(f"[INFO] primary oracle horizon: {primary_h}  (epsilon={args.epsilon})")
+    lines.append(f"[INFO] n_total={metrics.n_total}  n_abstain_pred={metrics.n_abstain_pred}"
+                 f"  n_abstain_oracle({primary_h})={metrics.n_abstain_oracle}")
+    lines.append("[INFO] 多时间窗口 Strict ACC（Oracle 各 horizon 对比，作参考）：")
+    md: dict = metrics.to_dict()
+    for h in ref_hs:
+        key = f"acc_{h}_strict"
+        item = md.get(key, {"n": 0, "k": 0, "acc": 0.0, "wilson_lo_95": 0.0, "wilson_hi_95": 1.0})
+        if not isinstance(item, dict): continue
+        n, k, acc, lo, hi = item.get("n", 0), item.get("k", 0), item.get("acc", 0.0), \
+            item.get("wilson_lo_95", 0.0), item.get("wilson_hi_95", 1.0)
+        marker = "  ← PRIMARY" if h == primary_h else ""
+        lines.append(f"  {h:14s} ACC={acc*100:5.2f}%  k/n={k}/{n}  Wilson95% CI [{lo*100:4.2f}%, {hi*100:4.2f}%]{marker}")
+    # primary non-neutral / significant only
+    pri_nn = md.get("acc_primary_non_neutral", {})
+    if isinstance(pri_nn, dict) and pri_nn.get("n", 0) > 0:
+        lines.append(f"[INFO] primary({primary_h}) NON-NEUTRAL 口径：ACC={pri_nn['acc']*100:5.2f}%"
+                     f"  k/n={pri_nn.get('k',0)}/{pri_nn.get('n',0)}  "
+                     f"Wilson [{pri_nn.get('wilson_lo_95',0)*100:4.2f}%, {pri_nn.get('wilson_hi_95',1)*100:4.2f}%]")
+    pri_sig = md.get("acc_primary_significant_only", {})
+    if isinstance(pri_sig, dict) and pri_sig.get("n", 0) > 0:
+        lines.append(f"[INFO] primary({primary_h}) SIGNIFICANT-ONLY(p<0.10) 口径："
+                     f"ACC={pri_sig['acc']*100:5.2f}%  k/n={pri_sig.get('k',0)}/{pri_sig.get('n',0)}")
+
+    # ---------- 新增：改进指标（辅助分析，不影响主口径 golden） ----------
+    # A. Strict vs Lenient 双口径对比（T+3/7/15/30/60）
+    #    Lenient 规则：双方都非 neutral（up/down）且未弃权 → 计入分母，方向相等=正确
+    #    这样 neutral 预测 / neutral Oracle 不会冤枉一方，公平比方向判断质量
+    try:
+        import json as _json, math as _math
+        from collections import Counter as _Counter
+        preds_raw = [_json.loads(l) for l in open(args.pred, encoding="utf-8") if l.strip()]
+        labels_raw = [_json.loads(l) for l in open(args.labels, encoding="utf-8") if l.strip()]
+        lbl_map = {r["event_id"]: r for r in labels_raw}
+        pred_map = {r["event_id"]: r for r in preds_raw}
+        common_ids = [eid for eid in pred_map if eid in lbl_map]
+        hs_ext: list[str] = ["t3", "t7", "t15", "t30", "t60"]
+        lines.append("")
+        lines.append("=" * 110)
+        lines.append("[改善指标 A] Strict vs Lenient 双口径对比（用户说：主要看 T+3/7/15/30/60）")
+        lines.append("=" * 110)
+        lines.append("  Strict  : neutral(预测/Oracle任何一方)=算错，最严格")
+        lines.append("  Lenient : 双方都非 neutral(up/down) 才计分，公平评估方向判断准确率")
+        header = (f"  {'Oracle':8s}  {'Strict ACC':>10s}  k/n(s)   "
+                  f"{'Lenient ACC':>11s}  k/n(l)   "
+                  f"{'Oracle=neu':>10s}  {'Pred=neu':>9s}  {'双方出手一致率':>15s}")
+        lines.append(header)
+        lines.append("  " + "-" * 105)
+        for h in hs_ext:
+            # Strict（取metrics已有值）
+            key_s = f"acc_{h}_strict"
+            s_item = md.get(key_s, {}) or {}
+            ns, ks = int(s_item.get("n", 0)), int(s_item.get("k", 0))
+            acc_s = ks / ns * 100 if ns else 0.0
+            # Lenient 重算
+            nl = kl = 0
+            oracle_neu_cnt = pred_neu_cnt = 0
+            for eid in common_ids:
+                p = pred_map[eid]; lab = lbl_map[eid]
+                lab_h = (lab.get(f"label_{h}") or "").strip()
+                pred_dir = str(p.get("pred_direction") or "")
+                if not lab_h: continue  # Oracle弃权：跳过
+                if lab_h == "neutral": oracle_neu_cnt += 1
+                if pred_dir == "neutral": pred_neu_cnt += 1
+                if bool(p.get("abstain")): continue
+                # Lenient 条件
+                if lab_h in {"up", "down"} and pred_dir in {"up", "down"}:
+                    nl += 1
+                    if lab_h == pred_dir: kl += 1
+            acc_l = kl / nl * 100 if nl else 0.0
+            hands_agree_pct = kl / nl * 100 if nl else 0.0
+            lines.append(
+                f"  {'T+'+h[1:]:8s}  {acc_s:>8.2f}%    {ks:>3d}/{ns:<4d}   "
+                f"{acc_l:>9.2f}%    {kl:>2d}/{nl:<3d}    "
+                f"{oracle_neu_cnt:>6d}      {pred_neu_cnt:>5d}      "
+                f"{hands_agree_pct:>8.2f}% ({kl}/{nl})"
+            )
+
+        # B. Conf 分桶校准 + Spearman ρ
+        lines.append("")
+        lines.append("=" * 110)
+        lines.append("[改善指标 B] 置信度校准表（conf分桶真实命中率 + Spearman等级相关ρ）")
+        lines.append("=" * 110)
+        lines.append(f"  真实命中率口径：primary oracle horizon({primary_h}) + Lenient（双方出手方向一致率）")
+        lines.append("  （同时参考：5窗平均命中率，用于校准ρ的补充参考）")
+        # 计算每条样本的"真实分"：primary_lenient_hit(0/1，若未出手则NA) + 5窗平均命中率（0~1）
+        cal_rows: list[dict] = []
+        for eid in common_ids:
+            p = pred_map[eid]; lab = lbl_map[eid]
+            conf = p.get("confidence")
+            if conf is None: continue
+            pred_dir = str(p.get("pred_direction") or "")
+            # Primary lenient hit
+            lab_p = (lab.get(f"label_{primary_h}") or "").strip()
+            pri_hit: bool | None = None
+            if lab_p in {"up", "down"} and pred_dir in {"up", "down"}:
+                pri_hit = (lab_p == pred_dir)
+            # 5窗平均命中率（t3-t60，严格=方向相等就+1，neutral不算对，分母=非弃权窗口数）
+            h5_valid = h5_hit = 0
+            for hv in hs_ext:
+                lv = (lab.get(f"label_{hv}") or "").strip()
+                if not lv: continue
+                h5_valid += 1
+                if lv in {"up","down"} and pred_dir == lv: h5_hit += 1
+            avg_hit_5 = (h5_hit / h5_valid) if h5_valid else None
+            cal_rows.append({
+                "eid": eid, "conf": float(conf), "pred": pred_dir,
+                "pri_hit": pri_hit, "avg_hit_5": avg_hit_5,
+            })
+        # 分桶：[0.5, 0.55) [0.55, 0.6) [0.6, 0.65) [0.65, 0.7) [0.7, 1.0]
+        buckets = [
+            ("0.50 ~ 0.55", 0.50, 0.55),
+            ("0.55 ~ 0.60", 0.55, 0.60),
+            ("0.60 ~ 0.65", 0.60, 0.65),
+            ("0.65 ~ 0.70", 0.65, 0.70),
+            ("0.70 ~ 1.00", 0.70, 1.01),
+        ]
+        header_b = f"  {'Conf分桶':>14s}  {'样本数':>6s}  出手数  主口径命中  主LenientACC  5窗平均命中率  方向分布"
+        lines.append(header_b)
+        lines.append("  " + "-" * 105)
+        for b_name, lo, hi in buckets:
+            in_b = [r for r in cal_rows if lo <= r["conf"] < hi]
+            if not in_b:
+                lines.append(f"  {b_name:>14s}  {0:>6d}   —  —")
+                continue
+            n_b = len(in_b)
+            n_play = sum(1 for r in in_b if r["pri_hit"] is not None)
+            n_hit_pri = sum(1 for r in in_b if r["pri_hit"] is True)
+            acc_pri_b = n_hit_pri / n_play * 100 if n_play else 0.0
+            avg5 = [r["avg_hit_5"] for r in in_b if r["avg_hit_5"] is not None]
+            avg5m = sum(avg5) / len(avg5) * 100 if avg5 else 0.0
+            dir_cnt = _Counter(r["pred"] for r in in_b)
+            lines.append(
+                f"  {b_name:>14s}  {n_b:>6d}  {n_play:>5d}  {n_hit_pri:>8d}   "
+                f"{acc_pri_b:>9.2f}%      {avg5m:>6.2f}%       "
+                f"U={dir_cnt.get('up',0)} D={dir_cnt.get('down',0)} N={dir_cnt.get('neutral',0)}"
+            )
+        # Spearman ρ: conf 排名 vs 5窗平均命中率排名
+        cal_valid = [r for r in cal_rows if r["avg_hit_5"] is not None]
+        if len(cal_valid) >= 3:
+            sorted_conf = sorted(range(len(cal_valid)), key=lambda i: -cal_valid[i]["conf"])
+            sorted_rate = sorted(range(len(cal_valid)), key=lambda i: -cal_valid[i]["avg_hit_5"])
+            n = len(cal_valid)
+            rank_conf = {sorted_conf[k]: n - k for k in range(n)}
+            rank_rate = {sorted_rate[k]: n - k for k in range(n)}
+            d2 = sum((rank_conf[i] - rank_rate[i]) ** 2 for i in range(n))
+            rho = 1 - 6 * d2 / (n * (n * n - 1))
+            if rho > 0.5:
+                tag = "✅ 校准良好（高conf≈高命中率）"
+            elif rho > 0.2:
+                tag = "⚠️ 校准一般（弱正相关）"
+            elif rho > -0.2:
+                tag = "❌ 校准失败（conf几乎和真实命中率无关）"
+            else:
+                tag = "💥 校准反了（conf越高命中率越低）"
+            lines.append("")
+            lines.append(f"  Spearman(conf vs 5窗平均命中率) ρ = {rho:+.2f}    {tag}")
+            lines.append(f"  说明：ρ>0.5 说明 Gate 分桶是可靠的；若<0 则 conf 需重新校准（后续可做 Platt scaling/isotonic）。")
+    except Exception as _e:
+        lines.append(f"[WARN] 辅助指标计算失败：{_e!r}")
+        lines.append("       （主指标 Strict ACC 已正常写出，不影响）")
+
+    print("\n".join(lines))
     return 0
 
 

@@ -718,11 +718,11 @@ def _compute_cars_for_events(
 
     all_tickers = set(asset_tickers.values()) | set(bm_tickers.values())
     # expand download window: 200 calendar days before earliest event (estimation window needs ~120 trading days),
-    # latest event_date + 30 days for T+5 horizon
+    # latest event_date + 150 days for up to T+60 horizon (≈84 trading days ≈ 120 calendar days)
     if not events:
         return {}
     earliest = min(e.event_date for e in events) - dt.timedelta(days=200)
-    latest = max(e.event_date for e in events) + dt.timedelta(days=30)
+    latest = max(e.event_date for e in events) + dt.timedelta(days=150)
     sd_iso = earliest.isoformat()
     ed_iso = latest.isoformat()
 
@@ -820,25 +820,28 @@ def _compute_cars_for_events(
     out: dict[tuple, dict] = {}
     no_asset = 0
     no_bm = 0
+    HORIZONS: list[tuple[int, str]] = [(1, "t1"), (3, "t3"), (5, "t5"), (7, "t7"), (15, "t15"), (30, "t30"), (60, "t60")]
     for e in events:
         key = (e.event_id, e.market, e.symbol)
         at = asset_tickers[key]
         bt = bm_tickers[key]
         a_close = closes_by_ticker.get(at)
         b_close = closes_by_ticker.get(bt)
-        rec = {
+        rec: dict = {
             "asset_ticker": at, "benchmark_ticker": bt,
-            "t1": None, "t3": None, "t5": None,
-            "bm_t1": None, "bm_t3": None, "bm_t5": None,
-            "car_t1": None, "car_t3": None, "car_t5": None,
-            "car_t1_tstat": None, "car_t3_tstat": None, "car_t5_tstat": None,
-            "car_t1_pvalue": None, "car_t3_pvalue": None, "car_t5_pvalue": None,
         }
+        # initialize horizons
+        for _, kn in HORIZONS:
+            rec[kn] = None
+            rec[f"bm_{kn}"] = None
+            rec[f"car_{kn}"] = None
+            rec[f"car_{kn}_tstat"] = None
+            rec[f"car_{kn}_pvalue"] = None
         if a_close is None:
             no_asset += 1
         if b_close is None:
             no_bm += 1
-        for w, key_name in [(1, "t1"), (3, "t3"), (5, "t5")]:
+        for w, key_name in HORIZONS:
             r_a = _car(a_close, e.event_date, w, e.event_time_raw, e.market) if a_close is not None else None
             r_b = _car(b_close, e.event_date, w, e.event_time_raw, e.market) if b_close is not None else None
             rec[key_name] = r_a
@@ -867,35 +870,109 @@ def _label_from_car(car: Optional[float], epsilon: float) -> str:
 
 
 def write_labels(events: list[RawEvent], cars: dict, out_path, epsilon: float = 0.005):
+    HORIZONS_DIR: list[str] = ["t1", "t3", "t5", "t7", "t15", "t30", "t60"]
+    # horizons used for "direction evidence" aggregations (exclude t1 which is too noisy)
+    AGG_H: list[str] = ["t3", "t7", "t15", "t30", "t60"]
+
+    def _sign(x: Optional[float]) -> int:
+        if x is None or not math.isfinite(x): return 0
+        if x > epsilon: return 1
+        if x < -epsilon: return -1
+        return 0
+
+    def _mean_nonnull(vals: list[Optional[float]]) -> Optional[float]:
+        xs = [v for v in vals if v is not None and math.isfinite(v)]
+        if not xs: return None
+        return float(sum(xs) / len(xs))
+
+    def _weighted_mean_nonnull(vals: list[tuple[Optional[float], float]]) -> Optional[float]:
+        total = 0.0; weight = 0.0
+        for v, w in vals:
+            if v is not None and math.isfinite(v):
+                total += v * w; weight += w
+        if weight <= 0: return None
+        return total / weight
+
     rows = []
     for e in events:
         key = (e.event_id, e.market, e.symbol)
         c = cars.get(key) or {}
         p_t3 = c.get("car_t3_pvalue")
         sig_t3 = bool(p_t3 is not None and p_t3 < 0.10)
-        row = {
+
+        row: dict = {
             "event_id": e.event_id,
             "market": e.market,
             "symbol": e.symbol,
             "event_time": e.event_date.isoformat(),
             "event_type_l2": e.event_type_l2,
-            "ret_t1": c.get("t1"),
-            "ret_t3": c.get("t3"),
-            "ret_t5": c.get("t5"),
-            "bm_ret_t1": c.get("bm_t1"),
-            "bm_ret_t3": c.get("bm_t3"),
-            "bm_ret_t5": c.get("bm_t5"),
-            "car_t1": c.get("car_t1"),
-            "car_t3": c.get("car_t3"),
-            "car_t5": c.get("car_t5"),
-            "car_t1_pvalue": c.get("car_t1_pvalue"),
-            "car_t3_pvalue": c.get("car_t3_pvalue"),
-            "car_t5_pvalue": c.get("car_t5_pvalue"),
-            "sig_t3": sig_t3,
-            "label_t1": _label_from_car(c.get("car_t1"), epsilon),
-            "label_t3": _label_from_car(c.get("car_t3"), epsilon),
-            "label_t5": _label_from_car(c.get("car_t5"), epsilon),
         }
+        # ---- horizon fields (ret / bm_ret / car / car_pvalue for each) ----
+        for kn in HORIZONS_DIR:
+            row[f"ret_{kn}"] = c.get(kn)
+            row[f"bm_ret_{kn}"] = c.get(f"bm_{kn}")
+            row[f"car_{kn}"] = c.get(f"car_{kn}")
+            row[f"car_{kn}_pvalue"] = c.get(f"car_{kn}_pvalue")
+        row["sig_t3"] = sig_t3
+
+        # ---- individual horizon labels (compatibility) ----
+        for kn in HORIZONS_DIR:
+            row[f"label_{kn}"] = _label_from_car(c.get(f"car_{kn}"), epsilon)
+
+        # ---- aggregations: avgCARs across non-t1 horizons ----
+        # short (t3,t7), mid (t3,t7,t15), long (t15,t30,t60), all (t3,t7,t15,t30,t60)
+        cars_short = [c.get(f"car_{h}") for h in ["t3", "t7"]]
+        cars_mid = [c.get(f"car_{h}") for h in ["t3", "t7", "t15"]]
+        cars_long = [c.get(f"car_{h}") for h in ["t15", "t30", "t60"]]
+        cars_all = [c.get(f"car_{h}") for h in AGG_H]
+
+        row["car_avg_short"] = _mean_nonnull(cars_short)
+        row["car_avg_mid"] = _mean_nonnull(cars_mid)
+        row["car_avg_long"] = _mean_nonnull(cars_long)
+        # all-horizon weighted avg: nearer horizons get slightly more weight (we care most
+        # about short-term reaction, but want long-term direction consistency to smooth noise)
+        row["car_avg_all"] = _weighted_mean_nonnull(list(zip(
+            cars_all,
+            [0.35, 0.28, 0.20, 0.12, 0.05],  # weights sum=1.0; t3=0.35 t7=0.28 t15=0.20 t30=0.12 t60=0.05
+        )))
+
+        # how many of the 5 AGG horizons actually have valid CAR
+        n_valid = sum(1 for v in cars_all if v is not None and math.isfinite(v))
+        row["n_horizons_valid"] = n_valid
+
+        # direction consensus signals (among AGG_H with valid sign)
+        signs = [s for s in [_sign(c.get(f"car_{h}")) for h in AGG_H] if s != 0]
+        row["n_horizons_signed"] = len(signs)
+        if signs:
+            up_cnt = sum(1 for s in signs if s > 0)
+            down_cnt = sum(1 for s in signs if s < 0)
+            maj = max(up_cnt, down_cnt)
+            row["consensus_up_frac"] = (up_cnt / len(signs)) if signs else None
+            row["consensus_down_frac"] = (down_cnt / len(signs)) if signs else None
+            # max direction agreement: 1.0 = all same sign
+            row["consensus_maj_frac"] = (maj / len(signs)) if signs else None
+            # -1..+1 net: up_frac - down_frac; used as stable direction evidence
+            row["consensus_net"] = ((up_cnt - down_cnt) / len(signs)) if signs else None
+        else:
+            row["consensus_up_frac"] = None
+            row["consensus_down_frac"] = None
+            row["consensus_maj_frac"] = None
+            row["consensus_net"] = None
+
+        # avg-based labels (the new "Oracle direction" for scoring / training)
+        row["label_avg_short"] = _label_from_car(row["car_avg_short"], epsilon)
+        row["label_avg_mid"] = _label_from_car(row["car_avg_mid"], epsilon)
+        row["label_avg_long"] = _label_from_car(row["car_avg_long"], epsilon)
+        row["label_avg_all"] = _label_from_car(row["car_avg_all"], epsilon)
+        # label by strict consensus (>=66% horizons agree in same direction; else neutral)
+        if signs and (row.get("consensus_maj_frac") or 0.0) >= 0.66 and row.get("consensus_net") is not None:
+            net = row["consensus_net"]
+            if net > 0: row["label_consensus66"] = "up"
+            elif net < 0: row["label_consensus66"] = "down"
+            else: row["label_consensus66"] = "neutral"
+        else:
+            row["label_consensus66"] = "neutral"
+
         rows.append(row)
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
@@ -920,13 +997,29 @@ def main():
     _rows = write_labels(events, cars, args.out, epsilon=float(args.epsilon))
     # summary stats
     mkt = Counter(e.market for e in events)
-    lab_t3 = Counter(r["label_t3"] for r in _rows)
-    cars_t3_valid = [r["car_t3"] for r in _rows if r["car_t3"] is not None]
+    def _lc(name): return Counter(r[name] for r in _rows if r.get(name))
     print(f"[INFO] market: {dict(mkt)}")
-    print(f"[INFO] label_t3 distribution (epsilon={args.epsilon}): {dict(lab_t3)}")
-    if cars_t3_valid:
-        arr = np.array(cars_t3_valid, dtype=float)
-        print(f"[INFO] car_t3 n={len(arr)} mean={arr.mean():.4f} std={arr.std():.4f} min={arr.min():.4f} max={arr.max():.4f}")
+    for ln in ["label_t3", "label_t7", "label_t15", "label_t30", "label_t60",
+               "label_avg_short", "label_avg_mid", "label_avg_long", "label_avg_all", "label_consensus66"]:
+        dist = dict(_lc(ln))
+        if dist: print(f"[INFO] {ln} distribution (eps={args.epsilon}): {dist}")
+    # horizon coverage
+    for h in ["t3", "t7", "t15", "t30", "t60"]:
+        nv = sum(1 for r in _rows if r.get(f"car_{h}") is not None)
+        print(f"[INFO] car_{h} coverage: {nv}/{len(_rows)} ({nv*100//len(_rows) if _rows else 0}%)")
+    n_valid_stats = Counter(r["n_horizons_valid"] for r in _rows)
+    print(f"[INFO] n_horizons_valid distribution: {dict(sorted(n_valid_stats.items()))}")
+    # avgCAR stats
+    for name in ["car_avg_short", "car_avg_mid", "car_avg_long", "car_avg_all"]:
+        vs = [r[name] for r in _rows if r.get(name) is not None]
+        if vs:
+            arr = np.array(vs, dtype=float) * 10000  # → bps
+            print(f"[INFO] {name} (bps): n={len(arr)} mean={arr.mean():+.1f} med={np.median(arr):+.1f} std={arr.std():.0f} p5={np.percentile(arr,5):.0f} p95={np.percentile(arr,95):.0f}")
+    # cross-label agreement: label_t3 vs label_avg_all
+    agree = sum(1 for r in _rows if r.get("label_t3") and r.get("label_avg_all") and r["label_t3"] == r["label_avg_all"])
+    total_both = sum(1 for r in _rows if r.get("label_t3") and r.get("label_avg_all"))
+    if total_both:
+        print(f"[INFO] label_t3 <-> label_avg_all 方向一致性: {agree}/{total_both} = {agree*100//total_both}%")
     print("DONE_LABELS")
 
 

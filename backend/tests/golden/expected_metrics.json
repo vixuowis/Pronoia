@@ -4,6 +4,7 @@
   "n_abstain_pred": 0,
   "n_abstain_oracle": 0,
   "n_non_significant": 0,
+  "primary_oracle_horizon": "t3",
   "acc_t1_strict": {
     "n": 4,
     "k": 3,
@@ -25,12 +26,89 @@
     "wilson_lo_95": 0.30064184258240184,
     "wilson_hi_95": 0.9544127391902995
   },
+  "acc_t7_strict": {
+    "n": 0,
+    "k": 0,
+    "acc": 0.0,
+    "wilson_lo_95": 0.0,
+    "wilson_hi_95": 1.0
+  },
+  "acc_t15_strict": {
+    "n": 0,
+    "k": 0,
+    "acc": 0.0,
+    "wilson_lo_95": 0.0,
+    "wilson_hi_95": 1.0
+  },
+  "acc_t30_strict": {
+    "n": 0,
+    "k": 0,
+    "acc": 0.0,
+    "wilson_lo_95": 0.0,
+    "wilson_hi_95": 1.0
+  },
+  "acc_t60_strict": {
+    "n": 0,
+    "k": 0,
+    "acc": 0.0,
+    "wilson_lo_95": 0.0,
+    "wilson_hi_95": 1.0
+  },
+  "acc_avg_short_strict": {
+    "n": 0,
+    "k": 0,
+    "acc": 0.0,
+    "wilson_lo_95": 0.0,
+    "wilson_hi_95": 1.0
+  },
+  "acc_avg_mid_strict": {
+    "n": 0,
+    "k": 0,
+    "acc": 0.0,
+    "wilson_lo_95": 0.0,
+    "wilson_hi_95": 1.0
+  },
+  "acc_avg_long_strict": {
+    "n": 0,
+    "k": 0,
+    "acc": 0.0,
+    "wilson_lo_95": 0.0,
+    "wilson_hi_95": 1.0
+  },
+  "acc_avg_all_strict": {
+    "n": 0,
+    "k": 0,
+    "acc": 0.0,
+    "wilson_lo_95": 0.0,
+    "wilson_hi_95": 1.0
+  },
+  "acc_consensus66_strict": {
+    "n": 0,
+    "k": 0,
+    "acc": 0.0,
+    "wilson_lo_95": 0.0,
+    "wilson_hi_95": 1.0
+  },
+  "acc_primary_non_neutral": {
+    "n": 3,
+    "k": 2,
+    "acc": 0.6666666666666666,
+    "wilson_lo_95": 0.2076596008020477,
+    "wilson_hi_95": 0.9385080552796037
+  },
   "acc_t3_non_neutral": {
     "n": 3,
     "k": 2,
     "acc": 0.6666666666666666,
     "wilson_lo_95": 0.2076596008020477,
     "wilson_hi_95": 0.9385080552796037
+  },
+  "acc_primary_significant_only": {
+    "n": 0,
+    "k": 0,
+    "acc": 0.0,
+    "wilson_lo_95": 0.0,
+    "wilson_hi_95": 1.0
   },
   "acc_t3_significant_only": {
     "n": 0,
@@ -42,19 +120,19 @@
   "acc_t1": 0.75,
   "acc_t3": 0.5,
   "acc_t5": 0.75,
+  "acc_t7": 0.0,
+  "acc_t15": 0.0,
+  "acc_t30": 0.0,
+  "acc_t60": 0.0,
+  "acc_avg_all": 0.0,
+  "acc_consensus66": 0.0,
   "avg_car_t1": 0.00175,
   "avg_car_t3": 0.0012499999999999998,
   "avg_car_t5": -0.00025,
+  "avg_car_avg_all": 0.0,
   "acc_by_market": {
     "CN": {
       "n": 2,
-      "acc_t1": {
-        "n": 2,
-        "k": 2,
-        "acc": 1.0,
-        "wilson_lo_95": 0.34238,
-        "wilson_hi_95": 1.0
-      },
       "acc_t3": {
         "n": 2,
         "k": 1,
@@ -62,23 +140,44 @@
         "wilson_lo_95": 0.094531,
         "wilson_hi_95": 0.905469
       },
-      "acc_t5": {
-        "n": 2,
-        "k": 2,
-        "acc": 1.0,
-        "wilson_lo_95": 0.34238,
+      "acc_t7": {
+        "n": 0,
+        "k": 0,
+        "acc": 0.0,
+        "wilson_lo_95": 0.0,
+        "wilson_hi_95": 1.0
+      },
+      "acc_t15": {
+        "n": 0,
+        "k": 0,
+        "acc": 0.0,
+        "wilson_lo_95": 0.0,
+        "wilson_hi_95": 1.0
+      },
+      "acc_t30": {
+        "n": 0,
+        "k": 0,
+        "acc": 0.0,
+        "wilson_lo_95": 0.0,
+        "wilson_hi_95": 1.0
+      },
+      "acc_avg_all": {
+        "n": 0,
+        "k": 0,
+        "acc": 0.0,
+        "wilson_lo_95": 0.0,
+        "wilson_hi_95": 1.0
+      },
+      "acc_consensus66": {
+        "n": 0,
+        "k": 0,
+        "acc": 0.0,
+        "wilson_lo_95": 0.0,
         "wilson_hi_95": 1.0
       }
     },
     "US": {
       "n": 2,
-      "acc_t1": {
-        "n": 2,
-        "k": 1,
-        "acc": 0.5,
-        "wilson_lo_95": 0.094531,
-        "wilson_hi_95": 0.905469
-      },
       "acc_t3": {
         "n": 2,
         "k": 1,
@@ -86,25 +185,46 @@
         "wilson_lo_95": 0.094531,
         "wilson_hi_95": 0.905469
       },
-      "acc_t5": {
-        "n": 2,
-        "k": 1,
-        "acc": 0.5,
-        "wilson_lo_95": 0.094531,
-        "wilson_hi_95": 0.905469
+      "acc_t7": {
+        "n": 0,
+        "k": 0,
+        "acc": 0.0,
+        "wilson_lo_95": 0.0,
+        "wilson_hi_95": 1.0
+      },
+      "acc_t15": {
+        "n": 0,
+        "k": 0,
+        "acc": 0.0,
+        "wilson_lo_95": 0.0,
+        "wilson_hi_95": 1.0
+      },
+      "acc_t30": {
+        "n": 0,
+        "k": 0,
+        "acc": 0.0,
+        "wilson_lo_95": 0.0,
+        "wilson_hi_95": 1.0
+      },
+      "acc_avg_all": {
+        "n": 0,
+        "k": 0,
+        "acc": 0.0,
+        "wilson_lo_95": 0.0,
+        "wilson_hi_95": 1.0
+      },
+      "acc_consensus66": {
+        "n": 0,
+        "k": 0,
+        "acc": 0.0,
+        "wilson_lo_95": 0.0,
+        "wilson_hi_95": 1.0
       }
     }
   },
   "acc_by_type": {
     "rate": {
       "n": 2,
-      "acc_t1": {
-        "n": 2,
-        "k": 1,
-        "acc": 0.5,
-        "wilson_lo_95": 0.094531,
-        "wilson_hi_95": 0.905469
-      },
       "acc_t3": {
         "n": 2,
         "k": 2,
@@ -112,23 +232,44 @@
         "wilson_lo_95": 0.34238,
         "wilson_hi_95": 1.0
       },
-      "acc_t5": {
-        "n": 2,
-        "k": 2,
-        "acc": 1.0,
-        "wilson_lo_95": 0.34238,
+      "acc_t7": {
+        "n": 0,
+        "k": 0,
+        "acc": 0.0,
+        "wilson_lo_95": 0.0,
+        "wilson_hi_95": 1.0
+      },
+      "acc_t15": {
+        "n": 0,
+        "k": 0,
+        "acc": 0.0,
+        "wilson_lo_95": 0.0,
+        "wilson_hi_95": 1.0
+      },
+      "acc_t30": {
+        "n": 0,
+        "k": 0,
+        "acc": 0.0,
+        "wilson_lo_95": 0.0,
+        "wilson_hi_95": 1.0
+      },
+      "acc_avg_all": {
+        "n": 0,
+        "k": 0,
+        "acc": 0.0,
+        "wilson_lo_95": 0.0,
+        "wilson_hi_95": 1.0
+      },
+      "acc_consensus66": {
+        "n": 0,
+        "k": 0,
+        "acc": 0.0,
+        "wilson_lo_95": 0.0,
         "wilson_hi_95": 1.0
       }
     },
     "earnings": {
       "n": 2,
-      "acc_t1": {
-        "n": 2,
-        "k": 2,
-        "acc": 1.0,
-        "wilson_lo_95": 0.34238,
-        "wilson_hi_95": 1.0
-      },
       "acc_t3": {
         "n": 2,
         "k": 0,
@@ -136,12 +277,40 @@
         "wilson_lo_95": 0.0,
         "wilson_hi_95": 0.65762
       },
-      "acc_t5": {
-        "n": 2,
-        "k": 1,
-        "acc": 0.5,
-        "wilson_lo_95": 0.094531,
-        "wilson_hi_95": 0.905469
+      "acc_t7": {
+        "n": 0,
+        "k": 0,
+        "acc": 0.0,
+        "wilson_lo_95": 0.0,
+        "wilson_hi_95": 1.0
+      },
+      "acc_t15": {
+        "n": 0,
+        "k": 0,
+        "acc": 0.0,
+        "wilson_lo_95": 0.0,
+        "wilson_hi_95": 1.0
+      },
+      "acc_t30": {
+        "n": 0,
+        "k": 0,
+        "acc": 0.0,
+        "wilson_lo_95": 0.0,
+        "wilson_hi_95": 1.0
+      },
+      "acc_avg_all": {
+        "n": 0,
+        "k": 0,
+        "acc": 0.0,
+        "wilson_lo_95": 0.0,
+        "wilson_hi_95": 1.0
+      },
+      "acc_consensus66": {
+        "n": 0,
+        "k": 0,
+        "acc": 0.0,
+        "wilson_lo_95": 0.0,
+        "wilson_hi_95": 1.0
       }
     }
   }

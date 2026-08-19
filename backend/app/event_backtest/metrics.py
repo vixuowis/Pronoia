@@ -2,12 +2,9 @@ from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass, field
-from typing import Any, Iterable, Literal
+from typing import Any, Iterable
 
-from .models import EventLabel, Label, TeamPrediction
-
-
-Horizon = Literal["t1", "t3", "t5"]
+from .models import EventLabel, Label, TeamPrediction, Horizon, ALL_HORIZONS
 
 
 def _wilson_lower(n: int, k: int, *, z: float = 1.959963984540054) -> float:
@@ -59,23 +56,44 @@ class MetricsSummary:
     epsilon: float
     n_total: int                              # pairs 总数（pred∩labels）
     n_abstain_pred: int                       # 预测器 abstain=True 计数
-    n_abstain_oracle: int                     # oracle label_t3 为空（car_t3 空 / 无行情）计数
-    n_non_significant: int = 0                # 因 car_t3_pvalue>0.10 被剔除的标签数（exclude_non_significant=True 时）
-    # 主口径：剔除 (pred_abstain ∨ oracle_abstain)；neutral=算错 （最严格，设计文档 §5 默认口径）
+    n_abstain_oracle: int                     # primary oracle horizon label 为空计数
+    n_non_significant: int = 0                # 因 primary car_pvalue>0.10 被剔除的标签数（exclude_non_significant=True 时）
+    primary_oracle_horizon: str = "t3"        # 用作主证据的 horizon（label_avg_all / t3 / ...）
+    # 主口径：剔除 (pred_abstain ∨ oracle_abstain)；neutral=算错（最严格，设计文档 §5 默认口径）
+    # 为所有 12 个 horizons 都计算 strict（主+参考指标）
     acc_t1_strict: AccWithWilson = field(default_factory=lambda: AccWithWilson(0,0,0.0,0.0,1.0))
     acc_t3_strict: AccWithWilson = field(default_factory=lambda: AccWithWilson(0,0,0.0,0.0,1.0))
     acc_t5_strict: AccWithWilson = field(default_factory=lambda: AccWithWilson(0,0,0.0,0.0,1.0))
-    # 次口径：剔除 abstain 且 oracle≠neutral 时才计（只在有方向样本上测）
+    acc_t7_strict: AccWithWilson = field(default_factory=lambda: AccWithWilson(0,0,0.0,0.0,1.0))
+    acc_t15_strict: AccWithWilson = field(default_factory=lambda: AccWithWilson(0,0,0.0,0.0,1.0))
+    acc_t30_strict: AccWithWilson = field(default_factory=lambda: AccWithWilson(0,0,0.0,0.0,1.0))
+    acc_t60_strict: AccWithWilson = field(default_factory=lambda: AccWithWilson(0,0,0.0,0.0,1.0))
+    acc_avg_short_strict: AccWithWilson = field(default_factory=lambda: AccWithWilson(0,0,0.0,0.0,1.0))
+    acc_avg_mid_strict: AccWithWilson = field(default_factory=lambda: AccWithWilson(0,0,0.0,0.0,1.0))
+    acc_avg_long_strict: AccWithWilson = field(default_factory=lambda: AccWithWilson(0,0,0.0,0.0,1.0))
+    acc_avg_all_strict: AccWithWilson = field(default_factory=lambda: AccWithWilson(0,0,0.0,0.0,1.0))
+    acc_consensus66_strict: AccWithWilson = field(default_factory=lambda: AccWithWilson(0,0,0.0,0.0,1.0))
+    # 次口径：针对 primary oracle horizon —— 剔除 abstain 且 oracle∈{up,down} 才计分（更贴近实战使用）
+    acc_primary_non_neutral: AccWithWilson = field(default_factory=lambda: AccWithWilson(0,0,0.0,0.0,1.0))
+    # 兼容旧字段：acc_t3_non_neutral / acc_t3_significant_only
     acc_t3_non_neutral: AccWithWilson = field(default_factory=lambda: AccWithWilson(0,0,0.0,0.0,1.0))
-    # 仅统计显著事件口径：只在 car_t3_pvalue<0.10 的标签上算 t3 strict ACC
+    # 仅 primary horizon car_pvalue<0.10 的显著事件口径
+    acc_primary_significant_only: AccWithWilson = field(default_factory=lambda: AccWithWilson(0,0,0.0,0.0,1.0))
     acc_t3_significant_only: AccWithWilson = field(default_factory=lambda: AccWithWilson(0,0,0.0,0.0,1.0))
-    # 保留老字段（向后兼容）：严格口径的 acc 值
+    # 保留老字段（向后兼容）：严格口径的 acc 值（前三个基础 horizons）
     acc_t1: float = 0.0
     acc_t3: float = 0.0
     acc_t5: float = 0.0
+    acc_t7: float = 0.0
+    acc_t15: float = 0.0
+    acc_t30: float = 0.0
+    acc_t60: float = 0.0
+    acc_avg_all: float = 0.0    # 重点字段：avgCAR(all) 口径严格 ACC
+    acc_consensus66: float = 0.0
     avg_car_t1: float = 0.0
     avg_car_t3: float = 0.0
     avg_car_t5: float = 0.0
+    avg_car_avg_all: float = 0.0
     acc_by_market: dict[str, dict[str, Any]] = field(default_factory=dict)
     acc_by_type: dict[str, dict[str, Any]] = field(default_factory=dict)
 
@@ -125,7 +143,21 @@ def compute_metrics(
     labels: list[EventLabel],
     epsilon: float = 0.005,
     exclude_non_significant: bool = False,
+    primary_oracle_horizon: str = "t3",
 ) -> MetricsSummary:
+    """
+    primary_oracle_horizon: 用作"主证据方向"的标签字段（默认 t3，可改为 "avg_all"）。
+        这个字段用来：
+          ① 决定 oracle_abstain（缺失=弃权）；
+          ② 计算 non_neutral / significant_only 两个实战口径；
+          ③ 作为 n_abstain_oracle / n_non_significant 的统计基础。
+        其他所有 horizons（t3/t7/.../consensus66）都会同时计算 strict ACC，
+        用作"多时间窗口参考指标"。
+    """
+    # Validate primary_oracle_horizon is a valid Horizon
+    if primary_oracle_horizon not in ALL_HORIZONS:
+        primary_oracle_horizon = "t3"
+
     pred_by_id = {p.event_id: p for p in predictions if p.event_id}
     pairs: list[tuple[TeamPrediction, EventLabel]] = []
     for lab in labels:
@@ -136,15 +168,22 @@ def compute_metrics(
 
     n_total = len(pairs)
     n_abstain_pred = sum(1 for p, _ in pairs if p.abstain)
-    n_abstain_oracle = sum(1 for _, lab in pairs if not (lab.label_t3 or "").strip())
 
-    # 显著性过滤（向后兼容：旧 EventLabel 没有 car_t3_pvalue 字段时 getattr 返回 None）
-    # 非显著 = car_t3_pvalue 不为 None 且 > 0.10（CAR 太小、方向标签可能是噪声）
+    def _label_of(lab: EventLabel, h: str) -> Label:
+        return getattr(lab, f"label_{h}", "") or ""
+
+    n_abstain_oracle = sum(1 for _, lab in pairs if not _label_of(lab, primary_oracle_horizon).strip())
+
+    # 显著性过滤：只对 primary horizon 检查 p 值（如果该 horizon 有 pvalue 字段）
     def _is_non_significant(lab: EventLabel) -> bool:
-        p_val = getattr(lab, "car_t3_pvalue", None)
+        # primary horizon car_pvalue key: car_{h}_pvalue
+        pkey = f"car_{primary_oracle_horizon}_pvalue"
+        p_val = getattr(lab, pkey, None)
+        if p_val is None and primary_oracle_horizon == "t3":
+            # backward-compat fallback
+            p_val = getattr(lab, "car_t3_pvalue", None)
         return p_val is not None and p_val > 0.10
 
-    # 仅在 exclude_non_significant=True 时把非显著标签计入剔除计数
     non_sig_event_ids: set[str] = set()
     if exclude_non_significant:
         for p, lab in pairs:
@@ -152,73 +191,76 @@ def compute_metrics(
                 non_sig_event_ids.add(lab.event_id)
     n_non_significant = len(non_sig_event_ids)
 
-    def _evaluate(h: Horizon):
-        """返回 (strict_acc, nonneutral_t3_acc=None_otherwise) 两个 AccWithWilson"""
+    def _evaluate(h: str):
+        """返回 (strict_acc, non_neutral_acc_for_primary_or_None, sign_only_acc_for_primary_or_None)"""
         rows = []
         for p, lab in pairs:
-            lab_h: Label = getattr(lab, f"label_{h}") or ""
+            lab_h: Label = _label_of(lab, h)
             pred_abstain = bool(p.abstain)
             oracle_abstain = (not lab_h.strip())
-            # 显著性过滤：开启时把非显著标签当作 oracle_abstain 剔除（不进 strict 分母）
             if exclude_non_significant and lab.event_id in non_sig_event_ids:
                 oracle_abstain = True
             rows.append((p, lab_h, pred_abstain, oracle_abstain))
 
-        # Strict 口径：
-        #   分母 = not(pred_abstain ∨ oracle_abstain)
-        #   分子 = 分母中 pred_direction == label_h **且** 仅 label_h in {up,down} 时判对
-        #          （即 oracle=neutral 即使方向相等也算错，严格对齐 §5）
         n_s = 0; k_s = 0
         for p, lab_h, pa, oa in rows:
             if pa or oa: continue
             n_s += 1
-            if lab_h == "neutral":
-                continue  # k_s 不增 → 与 _hard_correct 逻辑一致（neutral 判错）
-            if p.pred_direction == lab_h:
-                k_s += 1
+            if lab_h == "neutral": continue
+            if p.pred_direction == lab_h: k_s += 1
         strict = _mk_wilson(n_s, k_s)
 
-        # Non-neutral 口径（仅 t3 暴露）：
-        #   分母 = not abstain 且 oracle∈{up,down}；分子 = 方向一致
         non_neutral: AccWithWilson | None = None
-        if h == "t3":
+        significant_only: AccWithWilson | None = None
+        if h == primary_oracle_horizon:
             n_nn = 0; k_nn = 0
             for p, lab_h, pa, oa in rows:
                 if pa or oa: continue
                 if lab_h not in {"up","down"}: continue
                 n_nn += 1
-                if p.pred_direction == lab_h:
-                    k_nn += 1
+                if p.pred_direction == lab_h: k_nn += 1
             non_neutral = _mk_wilson(n_nn, k_nn)
-        return strict, non_neutral
 
-    s1, _ = _evaluate("t1")
-    s3, s3_nn = _evaluate("t3")
-    s5, _ = _evaluate("t5")
-    s3_nn = s3_nn or _mk_wilson(0,0)
+            # significant_only —— 只对 primary horizon 计算：pvalue < 0.10 且 非abstain
+            n_sig = 0; k_sig = 0
+            for p, lab in pairs:
+                if p.abstain: continue
+                pkey = f"car_{h}_pvalue"
+                p_val = getattr(lab, pkey, None)
+                if h == "t3" and p_val is None:
+                    p_val = getattr(lab, "car_t3_pvalue", None)
+                if p_val is None or p_val >= 0.10: continue
+                lh = _label_of(lab, h)
+                if not lh.strip(): continue
+                n_sig += 1
+                if lh == "neutral": continue
+                if p.pred_direction == lh: k_sig += 1
+            significant_only = _mk_wilson(n_sig, k_sig)
+        return strict, non_neutral, significant_only
 
-    # acc_t3_significant_only：只在 car_t3_pvalue<0.10 的显著标签上算 t3 strict ACC
-    # （独立于 exclude_non_significant 开关；旧标签无 p 值则不被计入分母）
-    n_sig = 0; k_sig = 0
-    for p, lab in pairs:
-        p_val = getattr(lab, "car_t3_pvalue", None)
-        if p_val is None or p_val >= 0.10:
-            continue
-        if p.abstain: continue
-        lab_t3 = (lab.label_t3 or "").strip()
-        if not lab_t3: continue
-        n_sig += 1
-        if lab_t3 == "neutral": continue
-        if p.pred_direction == lab_t3: k_sig += 1
-    acc_t3_significant_only = _mk_wilson(n_sig, k_sig)
+    # Evaluate all 12 horizons
+    results: dict[str, tuple[AccWithWilson, AccWithWilson | None, AccWithWilson | None]] = {}
+    for h in ALL_HORIZONS:
+        results[h] = _evaluate(h)
 
-    # avg car：对 oracle car_t* 非空（非 0）的样本求均值
-    def car_for(h: Horizon) -> list[float]:
+    def _strict(h: str) -> AccWithWilson: return results[h][0]
+    def _strict_acc(h: str) -> float: return _strict(h).acc
+
+    # Primary-specific special values
+    primary_nn, primary_sig = results[primary_oracle_horizon][1], results[primary_oracle_horizon][2]
+    empty = _mk_wilson(0, 0)
+    primary_nn = primary_nn or empty
+    primary_sig = primary_sig or empty
+    # Compat fields
+    t3_nn = results["t3"][1] or empty
+    t3_sig = results["t3"][2] or empty
+
+    # avg cars (reference values)
+    def car_for(h: str) -> list[float]:
         out = []
         for _, lab in pairs:
-            c = getattr(lab, f"car_{h}")
-            # EventLabel.from_dict 里用了 float(car or 0.0)，这里粗略区分：label 非空才算有效 car
-            lab_h = getattr(lab, f"label_{h}")
+            c = getattr(lab, f"car_{h}", None)
+            lab_h = _label_of(lab, h)
             if (lab_h or "").strip() and isinstance(c, (int, float)):
                 out.append(float(c))
         return out
@@ -226,6 +268,8 @@ def compute_metrics(
     avg_car_t1 = sum(car_for("t1")) / len(car_for("t1")) if car_for("t1") else 0.0
     avg_car_t3 = sum(car_for("t3")) / len(car_for("t3")) if car_for("t3") else 0.0
     avg_car_t5 = sum(car_for("t5")) / len(car_for("t5")) if car_for("t5") else 0.0
+    avg_car_avg_all_list = car_for("avg_all")
+    avg_car_avg_all = sum(avg_car_avg_all_list) / len(avg_car_avg_all_list) if avg_car_avg_all_list else 0.0
 
     def group_key_market(lab: EventLabel) -> str:
         return lab.market or "UNK"
@@ -233,8 +277,8 @@ def compute_metrics(
     def group_key_type(lab: EventLabel) -> str:
         return lab.event_type_l2 or "UNK"
 
-    # group 级 ACC：沿用严格口径逻辑，每个 horizon 都打 Wilson 95% CI
-    # 结构：out[k] = {"n": int, "acc_t1": AccWithWilson, "acc_t3": AccWithWilson, "acc_t5": AccWithWilson}
+    # group 级 ACC：对每个分组，输出 t3 / t7 / t15 / t30 / avg_all / consensus66 的 strict
+    GROUP_HS: tuple[str, ...] = ("t3", "t7", "t15", "t30", "avg_all", "consensus66")
     def group_acc(key_fn) -> dict[str, dict[str, Any]]:
         grouped: dict[str, list[tuple[TeamPrediction, EventLabel]]] = {}
         for p, lab in pairs:
@@ -244,10 +288,10 @@ def compute_metrics(
         out: dict[str, dict[str, Any]] = {}
         for k, items in grouped.items():
             per: dict[str, Any] = {"n": int(len(items))}
-            for h in ("t1","t3","t5"):
+            for h in GROUP_HS:
                 n_s, k_s = 0, 0
                 for p, lab in items:
-                    lab_h = getattr(lab, f"label_{h}") or ""
+                    lab_h = _label_of(lab, h)
                     if not lab_h.strip(): continue
                     n_s += 1
                     if lab_h == "neutral": continue
@@ -262,18 +306,37 @@ def compute_metrics(
         n_abstain_pred=n_abstain_pred,
         n_abstain_oracle=n_abstain_oracle,
         n_non_significant=n_non_significant,
-        acc_t1_strict=s1,
-        acc_t3_strict=s3,
-        acc_t5_strict=s5,
-        acc_t3_non_neutral=s3_nn,
-        acc_t3_significant_only=acc_t3_significant_only,
-        # 向后兼容老字段
-        acc_t1=s1.acc,
-        acc_t3=s3.acc,
-        acc_t5=s5.acc,
+        primary_oracle_horizon=primary_oracle_horizon,
+        acc_t1_strict=_strict("t1"),
+        acc_t3_strict=_strict("t3"),
+        acc_t5_strict=_strict("t5"),
+        acc_t7_strict=_strict("t7"),
+        acc_t15_strict=_strict("t15"),
+        acc_t30_strict=_strict("t30"),
+        acc_t60_strict=_strict("t60"),
+        acc_avg_short_strict=_strict("avg_short"),
+        acc_avg_mid_strict=_strict("avg_mid"),
+        acc_avg_long_strict=_strict("avg_long"),
+        acc_avg_all_strict=_strict("avg_all"),
+        acc_consensus66_strict=_strict("consensus66"),
+        acc_primary_non_neutral=primary_nn,
+        acc_t3_non_neutral=t3_nn,
+        acc_primary_significant_only=primary_sig,
+        acc_t3_significant_only=t3_sig,
+        # Backward compat: top-level .acc_t* floats (same values as strict.acc)
+        acc_t1=_strict_acc("t1"),
+        acc_t3=_strict_acc("t3"),
+        acc_t5=_strict_acc("t5"),
+        acc_t7=_strict_acc("t7"),
+        acc_t15=_strict_acc("t15"),
+        acc_t30=_strict_acc("t30"),
+        acc_t60=_strict_acc("t60"),
+        acc_avg_all=_strict_acc("avg_all"),
+        acc_consensus66=_strict_acc("consensus66"),
         avg_car_t1=avg_car_t1,
         avg_car_t3=avg_car_t3,
         avg_car_t5=avg_car_t5,
+        avg_car_avg_all=avg_car_avg_all,
         acc_by_market=group_acc(group_key_market),
         acc_by_type=group_acc(group_key_type),
     )
