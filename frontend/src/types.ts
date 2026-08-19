@@ -277,9 +277,15 @@ export interface BTRun {
   concurrency: number;
   total_events: number;
   done_events: number;
+  /** 关联数据集（bt_datasets.id）：创建 Run 时可选指定，Arena 聚合时用来分组 */
+  dataset_id?: string | null;
+  /** 数据集名字：冗余字段，方便列表页直接显示 */
+  dataset_name?: string | null;
   acc_t3_strict?: number | null;
   acc_t3_strict_lo?: number | null;
   acc_t3_non_neutral?: number | null;
+  /** v2 可插拔指标完整字典（metrics_json 解析后产物） */
+  metrics?: Record<string, BTMetricItem> | null;
   config?: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
@@ -395,6 +401,37 @@ export interface BTPredAccStat {
   wilson_hi_95?: number | null;
 }
 
+/** v2: 可插拔单指标结果（来自 metrics_registry.MetricResult） */
+export interface BTMetricItem {
+  value: number | string | Record<string, unknown> | null;
+  display_name: string;
+  description: string;
+  tier: "core" | "extended" | "custom";
+  higher_is_better: boolean;
+  breakdown?: Record<string, unknown>;
+  meta?: Record<string, unknown>;
+}
+
+/** v2: 指标元信息（列表 GET /api/bt/metrics/defs 返回） */
+export interface BTMetricDef {
+  display_name: string;
+  description: string;
+  tier: "core" | "extended" | "custom";
+  higher_is_better: boolean;
+}
+
+/** v2: GET /api/bt/runs/{rid}/metrics 返回完整结构 */
+export interface BTMetricsV2 {
+  run_id: string;
+  primary_oracle_horizon: string;
+  epsilon: number;
+  n_total: number;
+  metrics: Record<string, BTMetricItem>;
+  // 向后兼容字段（保留老代码不崩）
+  acc_t3_strict?: BTPredAccStat;
+  acc_t3_non_neutral?: BTPredAccStat;
+}
+
 export interface BTMetrics {
   total: number;
   abstain_count: number;
@@ -426,6 +463,7 @@ export interface BTSSEEvent {
     | "run_info"
     | "prediction"
     | "metrics_snapshot"
+    | "run_status_changed"
     | "run_done"
     | "run_failed"
     | "run_cancelled";
@@ -445,6 +483,10 @@ export interface BTSSEEvent {
   acc_t3_strict_lo?: number | null;
   acc_t3_non_neutral?: number | null;
   neutral_ratio?: number | null;
+  // run_status_changed 事件字段（pause/resume）
+  from?: BTStatus | string;
+  to?: BTStatus | string;
+  reason?: string;
   error?: string;
 }
 
@@ -463,4 +505,162 @@ export interface BTEventsCount {
   valid: boolean;
   count: number;
   message?: string | null;
+}
+
+/* ===================================== Arena 横向比对 ===================================== */
+
+export type ArenaStatus = "ready" | "computing" | "done" | "failed";
+
+/** bt_arenas 行 */
+export interface ArenaItem {
+  id: string;
+  name: string;
+  dataset_id?: string | null;
+  dataset_name?: string | null;
+  run_ids: string[];
+  description?: string | null;
+  config?: Record<string, unknown> | null;
+  /** 创建时可选指定的指标列表（保存到 config.selected_metric_ids 后反序列化到此） */
+  selected_metric_ids?: string[] | null;
+  status: ArenaStatus | string;
+  result?: ArenaComputeResult | null;
+  created_at: string;
+  updated_at: string;
+  finished_at?: string | null;
+}
+
+/** Arena 计算结果（POST /api/arena/compute & arena.result 字段） */
+export interface ArenaComputeResult {
+  run_count: number;
+  selected_metric_ids: string[];
+  metric_defs: Record<string, BTMetricDef>;
+  per_run: Record<
+    string,
+    {
+      run_id: string;
+      display_name: string;
+      runner: string;
+      prompt_variant: string;
+      model_version: string;
+      status: string;
+      done_events: number;
+      total_events: number;
+      metrics: Record<string, BTMetricItem>;
+      /* 成本 / 耗时（来自 bt_predictions tokens 字段聚合 + 估算） */
+      tokens_in?: number | null;
+      tokens_out?: number | null;
+      tokens_total?: number | null;
+      step_ms_total?: number | null;
+      cost_usd_estimate?: number | null;
+    }
+  >;
+  ranking: Record<
+    string,
+    Array<{ run_id: string; value: number | null; rank: number | null; display_name: string }>
+  >;
+  radar_chart: {
+    axes: Array<{ metric_id: string; display_name: string }>;
+    series: Array<{ run_id: string; label: string; values: (number | null)[] }>;
+  };
+  /**
+   * Pairwise 显著性检验（后端按 metric 跑 McNemar / 置换检验）。
+   * 嵌套结构：pairwise_tests[runA_id][runB_id].per_metric[metric_id] = {p_value, delta, winner, test_meta?}
+   * 与 run-level 概览（如共同事件数）共存。前端可以直接矩阵式渲染。
+   */
+  pairwise_tests:
+    | Record<
+        string,
+        Record<
+          string,
+          {
+            shared_events?: number;
+            per_metric: Record<
+              string,
+              {
+                display_name?: string;
+                p_value?: number | null;
+                delta?: number | null;
+                winner?: string | null; // runA_id / runB_id / "tie"
+                test_name?: string;
+                test_meta?: Record<string, unknown>;
+              }
+            >;
+          }
+        >
+      >
+    | null;
+  /**
+   * Head-to-Head 事件级对决：
+   * - summary 每个 (runA, runB) 对的胜负平计数
+   * - event_level 每一条共同事件、每个 Run 的预测、是否正确、该事件最佳 Run 列表
+   */
+  head_to_head:
+    | {
+        summary?: Record<
+          string,
+          { a_wins: number; b_wins: number; ties: number; shared: number }
+        >;
+        event_level: Array<{
+          event_id: string;
+          oracle?: string | null;
+          per_run: Record<
+            string,
+            {
+              prediction?: string | null;
+              confidence?: number | null;
+              correct?: boolean | null;
+              abstain?: boolean | null;
+            }
+          >;
+          best_runs?: string[];
+        }>;
+      }
+    | null;
+  /**
+   * 综合得分：按 method 聚合多指标排名。每个 Run 的得分 + 全局排名。
+   */
+  composite_score: {
+    method: "rank_average" | "z_score" | string;
+    description: string;
+    per_run_score: Record<string, { score: number; rank: number }>;
+  } | null;
+  /**
+   * Pareto 成本/效果 二维散点图数据：
+   *  - points：每个 run 一个散点（effect=效果越大越好，cost_tokens=总成本越小越好，on_pareto_frontier 标记是否在非支配边界上）
+   *  - frontier_line：按 cost_tokens 排序的非支配点序列（用于连出"帕累托前沿"折线）
+   *  - defaults：默认坐标映射（前端允许用户切换坐标轴）
+   */
+  pareto_chart:
+    | {
+        points: Array<{
+          run_id: string;
+          label: string;
+          runner: string;
+          prompt_variant: string;
+          model_version: string;
+          effect: number;
+          effect_metric_id: string;
+          cost_tokens: number;
+          cost_usd: number;
+          step_ms: number;
+          composite_score?: number | null;
+          on_pareto_frontier?: boolean | null;
+        }>;
+        frontier_run_ids: string[];
+        frontier_line: Array<{ run_id: string | null; cost_tokens: number; effect: number }>;
+        defaults: {
+          y_axis: string;
+          x_axis: string;
+        };
+      }
+    | null;
+}
+
+/* ===================================== Live Log (debug) ===================================== */
+
+/** 后端实时日志条目（来自 EventSource /api/admin/live-log）。
+ *  ts 为 ISO 字符串，msg 为单行日志原文（含关键字标签如 TIMING/LLM/SKILL/LLM_JSON）。 */
+export interface LogEntry {
+  ts: string;
+  msg: string;
 }

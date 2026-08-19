@@ -387,7 +387,9 @@ def start_bt_run(run_id: str) -> BacktestStartResult:
     if active_thread is not None and active_thread.is_alive():
         return BacktestStartResult(ok=True, run_id=run_id, error=f"already active, status={current}")
 
-    if current not in {"pending", "paused", "running"}:
+    # 允许从 pending / paused / running(stuck) / failed / cancelled 启动；
+    # done 是终态，不允许再启动。failed/cancelled 启动会走 resume 续算（跳过已完成事件）。
+    if current not in {"pending", "paused", "running", "failed", "cancelled"}:
         return BacktestStartResult(ok=False, run_id=run_id, error=f"cannot start from status={current}")
 
     # 参数 clamp：V8 稳定性硬约束（project_memory）
@@ -429,7 +431,7 @@ def cancel_bt_run(run_id: str) -> bool:
     _RUN_CANCEL[run_id] = True
     # 若当前 paused，先把 resume event set 一下 → wait_if_paused 会立刻抛 cancel，不永久阻塞
     _get_resume_event(run_id).set()
-    db.update_bt_run_status(run_id, "failed", error_msg="user cancelled")
+    db.update_bt_run_status(run_id, "cancelled")
     sse_broadcast(run_id, {"type": "run_cancelled"})
     return True
 

@@ -1,4 +1,4 @@
-import { CheckCircle2, ListChecks, ShieldCheck, User } from "lucide-react";
+import { CheckCircle2, ListChecks, RotateCcw, ShieldCheck, User } from "lucide-react";
 import { useMemo } from "react";
 import type { Message, Part } from "../types";
 import { agentColor, agentName } from "../names";
@@ -214,6 +214,7 @@ function AgentStepView({ part }: { part: Extract<Part, { type: "agent_step" }> }
 
 export default function MessageItem({ message }: { message: Message }) {
   const agents = useStore((s) => s.agents);
+  const retryLastMessage = useStore((s) => s.retryLastMessage);
 
   if (message.role === "user") {
     return (
@@ -337,6 +338,18 @@ export default function MessageItem({ message }: { message: Message }) {
               <span className="relative h-2 w-2 rounded-full bg-brand" />
             </span>
             {message.mode === "team" ? "研究团队正在规划任务…" : "正在思考…"}
+          </div>
+        )}
+
+        {message.error && !message.pending && (
+          <div className="mt-2 flex items-center gap-2">
+            <button
+              onClick={() => retryLastMessage()}
+              className="flex items-center gap-1.5 rounded-md border border-edge bg-paper px-2.5 py-1 text-[12px] font-medium text-ink transition-colors hover:bg-brand-soft hover:text-brand"
+            >
+              <RotateCcw size={12} />
+              重试
+            </button>
           </div>
         )}
       </div>

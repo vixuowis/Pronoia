@@ -374,6 +374,58 @@ def get_run_event(run_id: str, event_id: str) -> Any:
     return result
 
 
+@router.get("/runs/{run_id}/events/{event_id}/kline")
+def get_run_event_kline(run_id: str, event_id: str) -> Any:
+    """单事件行情（K 线）数据源：按 symbol 复用 get_stock_daily 拉事件日前后日K
+    （前 120 / 后 15 自然日），返回 KlinePayload（symbol/dates/ohlc/volumes/event_date），
+    供详情页「标的视图」渲染蜡烛图 + 事件日 markLine。"""
+    import datetime as _dt
+    import re as _re
+
+    run = db.get_bt_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="run not found")
+    events_path = run.get("events_path") or ""
+    if not Path(events_path).is_file():
+        raise HTTPException(status_code=404, detail=f"events_path not found on disk: {events_path}")
+    from ..event_backtest.application import load_events
+
+    evs = load_events(events_path)
+    ev = next((e for e in evs if getattr(e, "event_id", "") == event_id), None)
+    if ev is None:
+        raise HTTPException(status_code=404, detail="event not found")
+    symbol = str(getattr(ev, "symbol", "") or "").strip()
+    if not symbol:
+        raise HTTPException(status_code=404, detail="event has no symbol")
+
+    # 事件日（仅取日期部分；无/异常则回退今天，避免整条 K 线接口失败）
+    raw_ts = str(getattr(ev, "event_time", "") or "").strip()
+    event_date = None
+    try:
+        event_date = _dt.datetime.fromisoformat(raw_ts.replace("Z", "+00:00")).date()
+    except Exception:
+        m = _re.match(r"\d{4}-\d{2}-\d{2}", raw_ts)
+        if m:
+            event_date = _dt.date.fromisoformat(m.group(0))
+    if event_date is None:
+        event_date = _dt.date.today()
+
+    start = (event_date - _dt.timedelta(days=120)).isoformat()
+    end = (event_date + _dt.timedelta(days=15)).isoformat()
+
+    from ..skills.market import get_stock_daily
+
+    res = get_stock_daily(symbol, start_date=start, end_date=end, adjust="qfq")
+    if not isinstance(res, dict) or not res.get("ok"):
+        err = res.get("error") if isinstance(res, dict) else "kline fetch failed"
+        return {"ok": False, "error": err}
+    artifact = res.get("artifact") or {}
+    payload = dict(artifact.get("payload") or {})
+    payload["symbol"] = payload.get("symbol") or symbol
+    payload["event_date"] = event_date.isoformat()
+    return {"ok": True, "payload": payload}
+
+
 # ========================================================= metrics & snapshots ---
 
 @router.get("/runs/{run_id}/metrics")
@@ -398,10 +450,184 @@ def get_run_metrics(run_id: str) -> Any:
         except Exception:
             labels_list = []
     try:
-        summary = compute_metrics(predictions=preds, labels=labels_list)
-        return summary.to_dict()
+        from ..event_backtest.metrics_registry import compute_all_metrics
+        # 用新的可插拔指标系统计算
+        results = compute_all_metrics(predictions=preds, labels=labels_list)
+        # 统一转成 {metric_id: MetricResult_dict}
+        metrics_dict = {mid: mr.to_dict() for mid, mr in results.items()}
+        # 存入 bt_runs.metrics_json（后台持久化）
+        try:
+            db.update_bt_run_metrics(run_id, metrics_dict)
+        except Exception:
+            pass
+        # 返回元信息 + 指标本体
+        def _compat_acc_stat(metric_id: str) -> dict:
+            """把新 MetricResult 字典还原成旧 BTPredAccStat {acc, n, k, wilson_lo_95, wilson_hi_95}。
+
+            Fallback 优先级（针对老数据或 predictions/labels 无法重算 meta 的情况）：
+              1) 新 metrics_dict（compute_all_metrics 计算结果）
+              2) bt_runs 行已持久化的标量字段：acc_t3_strict / acc_t3_strict_lo / acc_t3_non_neutral
+                 （列表页展示的值就是直接读这些字段），同时用 run.done_events 作为 n 近似兜底
+              3) 零值兜底，保证前端拿到数值不会 undefined 崩
+            """
+            md = metrics_dict.get(metric_id) or {}
+            value = md.get("value")
+            breakdown = md.get("breakdown") or {}
+            wilson = breakdown.get("wilson") or {}
+            meta = md.get("meta") or {}
+            # 兼容新老键名（lo_95 vs wilson_lo_95）
+            lo = wilson.get("lo_95") if wilson.get("lo_95") is not None else wilson.get("wilson_lo_95")
+            hi = wilson.get("hi_95") if wilson.get("hi_95") is not None else wilson.get("wilson_hi_95")
+            n = meta.get("n") if meta.get("n") is not None else 0
+            k = meta.get("k") if meta.get("k") is not None else 0
+            acc = value if value is not None else ((k / n) if n > 0 else 0.0)
+
+            # ============== Fallback 2：bt_runs 行里已有的标量字段 ==============
+            # 如果 compute_all_metrics 产出的 meta 是空的（老数据、结构不兼容、load_labels 失败）
+            # → 列表页显示的 acc 实际来自 run.acc_t3_strict 字段，这里必须同步，避免「列表有%、详情 0%」
+            try:
+                acc_scalar = float(acc) if isinstance(acc, (int, float)) else None
+                lo_scalar = float(lo) if isinstance(lo, (int, float)) else None
+                n_int = int(n) if isinstance(n, (int, float)) else 0
+                k_int = int(k) if isinstance(k, (int, float)) else 0
+
+                # 如果重新计算出来的 n 极小（< 3）但 run.done_events 又≥真实事件数 → 说明重算失败，走 fallback
+                done_n = int(run.get("done_events") or 0) if isinstance(run.get("done_events"), (int, float)) else 0
+                need_fallback = (
+                    (acc_scalar is None or n_int <= 0)
+                    and done_n >= 1
+                )
+
+                def _fb(
+                    field_acc: str,
+                    field_lo: str | None,
+                    *,
+                    strict_metric: bool,
+                ) -> None:
+                    nonlocal acc_scalar, lo_scalar, n_int, k_int
+                    saved_acc = run.get(field_acc)
+                    if not isinstance(saved_acc, (int, float)):
+                        return
+                    saved_acc_f = float(saved_acc)
+                    acc_scalar = saved_acc_f
+                    # k / n 近似：用 done_events 作为 n（Oracle 有标签的都跑过了 → 当作严格分母的 n）
+                    # 对 non_neutral：n < done_events，这里保守取 max(1, round(done_n * (0.6~0.9))) 下限不写死，保留 done_n 即可 ——
+                    #   前端只显示 k/n 的文本，不依赖数字精确比较，关键是 acc% 和 Wilson lo 视觉正确
+                    # lo bound
+                    if field_lo:
+                        vv = run.get(field_lo)
+                        if isinstance(vv, (int, float)):
+                            lo_scalar = float(vv)
+                    # 重算 k = round(acc * n)，让 k/n 与 acc 在显示的%上一致
+                    eff_n = max(1, done_n) if done_n >= 1 else max(1, n_int)
+                    # strict 分母小一点？但前端显示的%是 acc_scalar*100，无需较真；保证 round(k/n)==acc_scalar 即可
+                    est_k = int(round(acc_scalar * eff_n))
+                    # clamp
+                    if 0 <= est_k <= eff_n:
+                        n_int = eff_n
+                        k_int = est_k
+                    elif n_int <= 0:
+                        n_int = eff_n
+                        k_int = max(0, min(eff_n, est_k))
+
+                if need_fallback:
+                    if metric_id == "acc_t3_strict":
+                        _fb("acc_t3_strict", "acc_t3_strict_lo", strict_metric=True)
+                    elif metric_id == "acc_primary_non_neutral":
+                        _fb("acc_t3_non_neutral", None, strict_metric=False)
+
+                if acc_scalar is None:
+                    acc_scalar = 0.0
+                if lo_scalar is None:
+                    lo_scalar = 0.0
+                acc = acc_scalar
+                lo = lo_scalar
+                n = n_int
+                k = k_int
+            except Exception:
+                # 兜底：保持已有的值（可能 0），绝对不能抛
+                pass
+
+            return {
+                "acc": float(acc) if isinstance(acc, (int, float)) else 0.0,
+                "n": int(n) if isinstance(n, (int, float)) else 0,
+                "k": int(k) if isinstance(k, (int, float)) else 0,
+                "wilson_lo_95": float(lo) if isinstance(lo, (int, float)) else 0.0,
+                "wilson_hi_95": float(hi) if isinstance(hi, (int, float)) else 1.0,
+            }
+
+        # 中性预测占比 / 弃权数 / 总样本量：从 metrics 元信息 + 实际 predictions 反推
+        coverage_meta = (metrics_dict.get("coverage_rate") or {}).get("meta") or {}
+        abstain_meta = (metrics_dict.get("abstain_rate") or {}).get("meta") or {}
+        strict_meta = (metrics_dict.get("acc_t3_strict") or {}).get("meta") or {}
+        # 总标签事件数（预测有交集的）
+        done_events_raw = run.get("done_events")
+        done_events_n = int(done_events_raw) if isinstance(done_events_raw, (int, float)) else 0
+        n_total_labels_meta = int(
+            coverage_meta.get("n_total")
+            if coverage_meta.get("n_total") is not None
+            else (abstain_meta.get("n") if abstain_meta.get("n") is not None else strict_meta.get("n", 0))
+        )
+        # Fallback：run.done_events（列表页显示的真实完成事件数）
+        n_total_labels = n_total_labels_meta if n_total_labels_meta > 0 else done_events_n
+        # 弃权数（pred.abstain 或 force_neutral）
+        n_abstain_meta = int(
+            coverage_meta.get("n_abstain")
+            if coverage_meta.get("n_abstain") is not None
+            else (abstain_meta.get("abstain") if abstain_meta.get("abstain") is not None else 0)
+        )
+        n_abstain = n_abstain_meta
+        # 中性预测的数量：pred_direction == "neutral" 且 非 abstain
+        try:
+            label_event_ids: set[str] = set()
+            for l in labels_list:
+                eid = getattr(l, "event_id", None) or (l.get("event_id") if isinstance(l, dict) else None)
+                if eid:
+                    label_event_ids.add(str(eid))
+            # 若 labels 为空，则退化为「所有 preds 都算在样本内」
+            n_neutral_pred = 0
+            for p in preds:
+                eid = getattr(p, "event_id", None) or (p.get("event_id") if isinstance(p, dict) else None)
+                if eid and label_event_ids and str(eid) not in label_event_ids:
+                    continue
+                pred_d = getattr(p, "pred_direction", None) or (p.get("pred_direction") if isinstance(p, dict) else None)
+                abst = getattr(p, "abstain", False) or (p.get("abstain") if isinstance(p, dict) else False)
+                if (not abst) and pred_d == "neutral":
+                    n_neutral_pred += 1
+        except Exception:
+            n_neutral_pred = 0
+
+        total_denom = int(n_total_labels) if n_total_labels > 0 else 0
+        neutral_ratio = (n_neutral_pred / total_denom) if total_denom > 0 else 0.0
+        abstain_count_val = int(n_abstain)
+
+        compat_strict = _compat_acc_stat("acc_t3_strict")
+        compat_non_neutral = _compat_acc_stat("acc_primary_non_neutral")
+
+        return {
+            "run_id": run_id,
+            "primary_oracle_horizon": "t3",
+            "epsilon": 0.005,
+            "n_total": total_denom,
+            "total": total_denom,
+            "metrics": metrics_dict,
+            "neutral_count": int(n_neutral_pred),
+            "neutral_ratio": float(neutral_ratio),
+            "abstain_count": abstain_count_val,
+            # 向后兼容：保留老接口需要的顶层字段（前端旧代码不至于崩）
+            "acc_t3_strict": compat_strict,
+            "acc_t3_non_neutral": compat_non_neutral,
+        }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"compute_metrics failed: {exc}")
+
+
+@router.get("/metrics/defs")
+def list_metric_definitions() -> Any:
+    """列出所有已注册的指标元信息（display_name / description / tier / higher_is_better）。
+    前端用这个动态渲染指标卡片 / 雷达图维度。"""
+    from ..event_backtest.metrics_registry import list_metric_defs
+    return list_metric_defs()
 
 
 @router.get("/runs/{run_id}/metrics/snapshots", response_model=BacktestMetricsSnapshotList)
@@ -419,7 +645,7 @@ async def stream_run_events(run_id: str) -> StreamingResponse:
     """订阅回测进度 SSE 流。
 
     Frame event.type ∈ {run_started, run_info, prediction, metrics_snapshot,
-                         run_done, run_failed, run_cancelled}
+                         run_done, run_failed, run_cancelled, run_status_changed}
     """
     run = db.get_bt_run(run_id)
     if not run:

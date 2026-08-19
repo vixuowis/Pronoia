@@ -1,10 +1,13 @@
 import type {
   AgentMeta,
+  ArenaComputeResult,
+  ArenaItem,
   Artifact,
   BTDataset,
   BTEventCatalogItem,
   BTEventStatus,
-  BTMetrics,
+  BTMetricDef,
+  BTMetricsV2,
   BTPredictionDetail,
   BTPredictionItem,
   BTRun,
@@ -14,6 +17,7 @@ import type {
   BTPromptVariant,
   CaseDetail,
   CaseItem,
+  KlinePayload,
   Mode,
   SkillMeta,
   SuggestionItem,
@@ -211,7 +215,16 @@ export const api = {
   btGetPredictionDetail: (runId: string, eventId: string) =>
     req<BTPredictionDetail>(`/bt/runs/${runId}/events/${eventId}`),
 
-  btGetMetrics: (runId: string) => req<BTMetrics>(`/bt/runs/${runId}/metrics`),
+  /** 单事件 K 线行情（GET /runs/{rid}/events/{eid}/kline）：按 symbol 拉事件日前后日K，返回 KlinePayload */
+  btGetEventKline: (runId: string, eventId: string) =>
+    req<{ ok: boolean; payload?: KlinePayload; error?: string }>(
+      `/bt/runs/${runId}/events/${eventId}/kline`,
+    ),
+
+  btGetMetrics: (runId: string) => req<BTMetricsV2>(`/bt/runs/${runId}/metrics`),
+
+  /** 列出已注册的指标元信息（display_name / tier / higher_is_better），用于前端动态渲染。 */
+  btMetricDefs: () => req<Record<string, BTMetricDef>>("/bt/metrics/defs"),
 
   /** 列出 bt_datasets 中已注册的数据集（Data list 下拉用），附带 market/type/symbol 分布 & labels_path。 */
   btListDatasets: () => req<BTDataset[]>("/bt/datasets"),
@@ -229,6 +242,55 @@ export const api = {
     const qs = new URLSearchParams({ path });
     if (eventsPath?.trim()) qs.set("events_path", eventsPath.trim());
     return req<BTEventsCount>(`/bt/labels-count?${qs.toString()}`);
+  },
+
+  /* ===================================== Arena 横向比对 ===================================== */
+
+  /** 列出所有 Arena 比对实验 */
+  arenaList: (limit = 100) =>
+    req<{ total: number; items: ArenaItem[] }>(`/arena?limit=${limit}`),
+
+  /** 创建一个新 Arena（落库） */
+  arenaCreate: (data: {
+    name: string;
+    run_ids: string[];
+    dataset_id?: string;
+    description?: string;
+    selected_metric_ids?: string[];
+    config?: Record<string, unknown>;
+  }) =>
+    req<ArenaItem>("/arena", { method: "POST", body: JSON.stringify(data) }),
+
+  /** 获取单个 Arena */
+  arenaGet: (arenaId: string) => req<ArenaItem>(`/arena/${arenaId}`),
+
+  /** 删除 Arena */
+  arenaDelete: (arenaId: string) =>
+    req<{ ok: boolean; arena_id: string }>(`/arena/${arenaId}`, { method: "DELETE" }),
+
+  /** 即时计算比对（不落库，适合临时对比几个 run） */
+  arenaComputeInline: (data: { run_ids: string[]; selected_metric_ids?: string[] }) =>
+    req<ArenaComputeResult>("/arena/compute", { method: "POST", body: JSON.stringify(data) }),
+
+  /** 对已落库的 arena_id 触发计算并保存结果。返回更新后的 ArenaItem */
+  arenaComputeAndSave: (arenaId: string, data?: { run_ids?: string[]; selected_metric_ids?: string[] }) =>
+    req<ArenaItem>(`/arena/${arenaId}/compute`, {
+      method: "POST",
+      body: data ? JSON.stringify(data) : "{}",
+    }),
+
+  /**
+   * 对已落库的 arena 触发计算并直接返回 ComputeResult（便于详情页「计算完成后立刻展示结果」）。
+   * 等价于先 arenaComputeAndSave 再取返回的 arena.result；如果 arena.result 缺失，兜底调用一次 arenaGet。
+   */
+  arenaCompute: async (arenaId: string): Promise<ArenaComputeResult> => {
+    const arena = await api.arenaComputeAndSave(arenaId);
+    if (arena.result) return arena.result;
+    const fresh = await api.arenaGet(arenaId);
+    if (!fresh.result) {
+      throw new Error("Arena 计算完成，但后端未返回 result 字段。");
+    }
+    return fresh.result;
   },
 };
 

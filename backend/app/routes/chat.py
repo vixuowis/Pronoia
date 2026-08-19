@@ -101,6 +101,21 @@ async def _chat_stream(req: ChatRequest) -> AsyncIterator[str]:
             yield sse({"type": "case_title", "title": title})
 
         yield sse({"type": "done", "case_id": case_id, "message_id": message_id})
+    except asyncio.CancelledError:
+        # 前端断开 / 用户主动停止：尽力保存已产出内容，然后让 ASGI 正常收尾
+        # 不 yield error（连接已断，前端收不到），只落库 + 日志
+        try:
+            if state["content"] or state["tool_trace"]:
+                err_agent = req.agent if req.mode == "agent" and req.agent else "router"
+                db.add_message(case_id, role="assistant", agent=err_agent,
+                               content=state["content"],
+                               tool_trace=state["tool_trace"] or None,
+                               message_id=message_id)
+        except Exception:  # noqa: BLE001
+            pass
+        print(f"CHAT case={case_id} cancelled by client (rounds={state.get('rounds', 0)}, "
+              f"content_len={len(state.get('content', ''))})", flush=True)
+        raise
     except Exception as e:  # noqa: BLE001
         # 尽力保留已产出内容
         try:

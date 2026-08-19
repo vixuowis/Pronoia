@@ -7,11 +7,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 
 from openai import AsyncOpenAI
 
 from . import config
+from .log_bus import publish
 from .skills.registry import REGISTRY, ensure_skills_loaded, serialize_tool_result, tool_schema_subset, tools_for_agent
 
 _client: Optional[AsyncOpenAI] = None
@@ -47,8 +49,11 @@ async def execute_skill(name: str, args: dict) -> dict:
     P0 未来函数防护（STRICT AS-OF）：当 FEVER_BT_STRICT_AS_OF=1 时，
     对 event_study_skill / event_study 强制注入 as_of=True + 正确 benchmark，
     防止 LLM 因 prompt 遗漏而暴露 post-event CAR。
+
+    日志：每次调用打印 SKILL 行，含 name / ok / dur / [SLOW|VSLOW|TIMEOUT] 标签。
     """
     import os as _os
+    _t0 = time.time()
     strict_as_of = _os.environ.get("FEVER_BT_STRICT_AS_OF", "").strip() in ("1", "true", "yes")
     if strict_as_of:
         args = dict(args or {})
@@ -61,20 +66,37 @@ async def execute_skill(name: str, args: dict) -> dict:
     ensure_skills_loaded()
     sd = REGISTRY.get(name)
     if sd is None:
+        print(f"SKILL name={name} ok=false err=unknown dur={time.time() - _t0:.2f}s", flush=True)
+        publish(f"SKILL name={name} ok=false err=unknown dur={time.time() - _t0:.2f}s")
         return {"ok": False, "error": f"未知技能: {name}"}
     try:
         if asyncio.iscoroutinefunction(sd.handler):
-            return await asyncio.wait_for(
+            result = await asyncio.wait_for(
                 sd.handler(**args), timeout=config.SKILL_TIMEOUT
             )
-        return await asyncio.wait_for(
-            asyncio.to_thread(sd.handler, **args), timeout=config.SKILL_TIMEOUT
-        )
+        else:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(sd.handler, **args), timeout=config.SKILL_TIMEOUT
+            )
+        _dur = time.time() - _t0
+        _tag = " [VSLOW]" if _dur > 10 else (" [SLOW]" if _dur > 3 else "")
+        print(f"SKILL name={name} ok={bool(result.get('ok'))} dur={_dur:.2f}s{_tag}", flush=True)
+        publish(f"SKILL name={name} ok={bool(result.get('ok'))} dur={_dur:.2f}s{_tag}")
+        return result
     except asyncio.TimeoutError:
+        _dur = time.time() - _t0
+        print(f"SKILL name={name} ok=false err=timeout dur={_dur:.2f}s [VSLOW]", flush=True)
+        publish(f"SKILL name={name} ok=false err=timeout dur={_dur:.2f}s [VSLOW]")
         return {"ok": False, "error": f"技能 {name} 执行超时（>{int(config.SKILL_TIMEOUT)}s）"}
     except TypeError as e:
+        _dur = time.time() - _t0
+        print(f"SKILL name={name} ok=false err=type_error dur={_dur:.2f}s", flush=True)
+        publish(f"SKILL name={name} ok=false err=type_error dur={_dur:.2f}s")
         return {"ok": False, "error": f"技能参数错误: {e}"}
     except Exception as e:  # noqa: BLE001
+        _dur = time.time() - _t0
+        print(f"SKILL name={name} ok=false err={type(e).__name__} dur={_dur:.2f}s", flush=True)
+        publish(f"SKILL name={name} ok=false err={type(e).__name__} dur={_dur:.2f}s")
         return {"ok": False, "error": f"技能执行失败: {type(e).__name__}: {e}"}
 
 
@@ -129,6 +151,7 @@ async def run_agent(
         }
         if tools:
             kwargs["tools"] = tools
+        _llm_t0 = time.time()
         stream = await client.chat.completions.create(**kwargs)
 
         tc_acc: dict[int, dict] = {}
@@ -160,6 +183,20 @@ async def run_agent(
                 finish_reason = choice.finish_reason
 
         tool_calls = [tc_acc[i] for i in sorted(tc_acc)]
+        _llm_dur = time.time() - _llm_t0
+        _llm_tag = " [VSLOW]" if _llm_dur > 15 else (" [SLOW]" if _llm_dur > 5 else "")
+        _tc_names = ",".join(t["name"] for t in tool_calls) if tool_calls else "-"
+        print(
+            f"LLM agent={agent_id} round={round_no} finish={finish_reason} "
+            f"tool_calls={len(tool_calls)}({_tc_names}) content={saw_content} "
+            f"dur={_llm_dur:.2f}s{_llm_tag}",
+            flush=True,
+        )
+        publish(
+            f"LLM agent={agent_id} round={round_no} finish={finish_reason} "
+            f"tool_calls={len(tool_calls)}({_tc_names}) content={saw_content} "
+            f"dur={_llm_dur:.2f}s{_llm_tag}"
+        )
         if not tool_calls:
             # 最终答复轮（token 已流式发出）
             if round_content:
@@ -289,13 +326,24 @@ async def complete_text(system: str, user: str, *, max_tokens: int = 2000) -> st
     return (msg.content or "").strip()
 
 
-async def complete_json(system: str, user: str, *, max_tokens: int = 3000) -> Optional[dict]:
+async def complete_json(system: str, user: str, *, max_tokens: int = 2000) -> Optional[dict]:
     """Non-streaming completion forced to JSON object; returns parsed dict or None.
-       MAAS/Ark 有 1 RPS + 首包慢 + 429；内部自动最多 4 次指数退避重试。"""
+       MAAS/Ark 有 1 RPS + 首包慢 + 429；内部自动最多 3 次指数退避重试。
+
+       优化（2026-08-19）：
+       - max_tokens 3000 → 2000（路由判断 / labeller 均不需要 3k tokens，减生成时间）
+       - 重试 4 → 3 次（最坏总等待 9s→5s，避免单请求阻塞太久）
+       - sleep 上限 9s → 5s（同上）
+       - 日志加 [SLOW|VSLOW] 标签（>5s / >15s）
+
+       日志：每次尝试打印 LLM_JSON 行，含 attempt / ok / dur / [SLOW|VSLOW|RETRY|GIVEUP]。
+    """
     client = get_client()
     import asyncio as _ai
     last_err: Optional[BaseException] = None
-    for attempt in range(1, 5):
+    _MAX_ATTEMPTS = 3
+    for attempt in range(1, _MAX_ATTEMPTS + 1):
+        _t0 = time.time()
         try:
             resp = await client.chat.completions.create(
                 model=config.LLM_MODEL,
@@ -304,26 +352,50 @@ async def complete_json(system: str, user: str, *, max_tokens: int = 3000) -> Op
                 max_tokens=max_tokens,
                 response_format={"type": "json_object"},
             )
+            _dur = time.time() - _t0
+            _tag = " [VSLOW]" if _dur > 15 else (" [SLOW]" if _dur > 5 else "")
             text = (resp.choices[0].message.content or "").strip()
             if not text:
+                print(f"LLM_JSON attempt={attempt}/{_MAX_ATTEMPTS} ok=false err=empty dur={_dur:.2f}s{_tag}", flush=True)
+                publish(f"LLM_JSON attempt={attempt}/{_MAX_ATTEMPTS} ok=false err=empty dur={_dur:.2f}s{_tag}")
                 return None
             try:
-                return json.loads(text)
+                result = json.loads(text)
+                print(f"LLM_JSON attempt={attempt}/{_MAX_ATTEMPTS} ok=true dur={_dur:.2f}s{_tag}", flush=True)
+                publish(f"LLM_JSON attempt={attempt}/{_MAX_ATTEMPTS} ok=true dur={_dur:.2f}s{_tag}")
+                return result
             except json.JSONDecodeError:
+                print(f"LLM_JSON attempt={attempt}/{_MAX_ATTEMPTS} ok=false err=json_decode dur={_dur:.2f}s{_tag}", flush=True)
+                publish(f"LLM_JSON attempt={attempt}/{_MAX_ATTEMPTS} ok=false err=json_decode dur={_dur:.2f}s{_tag}")
                 m = text[text.find("{"): text.rfind("}") + 1]
                 try:
-                    return json.loads(m)
+                    result = json.loads(m)
+                    print(f"LLM_JSON attempt={attempt}/{_MAX_ATTEMPTS} ok=true(recovered) dur={_dur:.2f}s{_tag}", flush=True)
+                    publish(f"LLM_JSON attempt={attempt}/{_MAX_ATTEMPTS} ok=true(recovered) dur={_dur:.2f}s{_tag}")
+                    return result
                 except Exception:  # noqa: BLE001
                     return None
         except BaseException as e:  # noqa: BLE001
+            # 前端断开 / 主动取消 → 立刻传播，不当普通错误重试
+            # （否则前端断了后端还在跑 LLM，白白浪费配额 + 阻塞 worker）
+            if isinstance(e, (asyncio.CancelledError, KeyboardInterrupt)):
+                _dur = time.time() - _t0
+                print(f"LLM_JSON attempt={attempt}/{_MAX_ATTEMPTS} cancelled dur={_dur:.2f}s [CANCELLED]", flush=True)
+                publish(f"LLM_JSON attempt={attempt}/{_MAX_ATTEMPTS} cancelled dur={_dur:.2f}s [CANCELLED]")
+                raise
+            _dur = time.time() - _t0
             last_err = e
-            if attempt >= 4:
+            if attempt >= _MAX_ATTEMPTS:
+                print(f"LLM_JSON attempt={attempt}/{_MAX_ATTEMPTS} ok=false err={type(e).__name__} dur={_dur:.2f}s [GIVEUP]", flush=True)
+                publish(f"LLM_JSON attempt={attempt}/{_MAX_ATTEMPTS} ok=false err={type(e).__name__} dur={_dur:.2f}s [GIVEUP]")
                 break
             # 429 / 超时 / 远端连接失败 → 指数退避，更长等待
             msg = str(e)
-            sleep_s = min(9.0, (2.0 ** (attempt - 1)) * 1.3 + 0.4)
+            sleep_s = min(5.0, (2.0 ** (attempt - 1)) * 1.0 + 0.3)
             if "429" in msg or "TooManyRequests" in msg or "RateLimit" in msg or "rate limit" in msg:
-                sleep_s += 0.8
+                sleep_s += 0.5
+            print(f"LLM_JSON attempt={attempt}/{_MAX_ATTEMPTS} err={type(e).__name__} dur={_dur:.2f}s sleep={sleep_s:.1f}s [RETRY]", flush=True)
+            publish(f"LLM_JSON attempt={attempt}/{_MAX_ATTEMPTS} err={type(e).__name__} dur={_dur:.2f}s sleep={sleep_s:.1f}s [RETRY]")
             await _ai.sleep(sleep_s)
     if last_err is not None:
         raise last_err

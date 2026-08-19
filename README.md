@@ -45,6 +45,20 @@ Pronoia 是一个开源的对话式 AI 金融研究工作台。
   零杜撰、零未来日期、100% 可点击的东方财富公告 / Yahoo SEC 原文链接、100% 有
   真实 T+3 超额收益（CAR）Oracle Label。1000 条全量回测数据集独立存放于
   `backtesting/` 目录（v1 版本）。
+- **🧩 可插拔指标系统（Metrics Registry）**：指标不再硬编码，通过 `@metric` 装饰器
+  注册独立计算器；核心 18+ 指标（12 个 horizon 的 ACC / avg_all strict / lenient /
+  consensus66 / coverage_rate / abstain_rate / calibration_MSE / directional_bias /
+  mean_CAR / by-market & by-event-type groupwise / high_confidence_acc / prior_alignment）
+  分 core / extended / breakdown 三级，列表页可动态选择展示列，支持未来新增指标零侵入。
+- **🏟 Arena 横向比对平台**：从同一数据集的多个回测 Run（不同 Runner / Prompt / LLM）
+  中一键选择多个 Run，生成**同一数据、不同 Agent 不同 LLM 的 360° 横向评测**——
+  综合排名、6 指标雷达图、两两显著性检验（Wilson diff + Fisher 精确检验 + Bonferroni 校正）、
+  事件级头对头（Head-to-Head）胜场统计。**Arena 只收录「已完成」的 Runs**，无效/未跑结果不会出现在候选里。
+- **📉 成本 / 效果二维散点（帕累托边界）**：Arena 详情页新增「成本/效果」Tab，
+  汇总每个模型的 tokens_in / tokens_out / 耗时 step_ms / USD 估算成本，
+  与效果（主口径 acc 或 综合 composite_score）画散点图，并通过**非支配排序**
+  动态计算帕累托前沿线——直观看到「效果 X% 提升是否值得 Y% 额外成本」的性价比取舍。
+  支持坐标轴自由切换（X：Tokens / USD / ms，Y：ACC / 综合得分），切换时前端重算前沿。
 
 ## 🏗 架构
 
@@ -172,30 +186,42 @@ Agent 协作的推理链、Tool/Skill 调用参数与结果，与 Oracle T+3 超
 放在同一面板对比，用于量化评估 **Tool → Skill → Agent → Team** 四层的方向命中率，
 形成「预测命中评估 → reward 计算 → calibration 更新 → 策略自进化」的可追溯闭环。
 
-### 五层架构
+### 五层架构（含 Arena 横向比对）
 
 ```
-┌──────────────────────────── Frontend (React 18 · Vite · /backtest) ────────────────────────────┐
-│  BacktestList: Data list 选数据集 → 创建 run        BacktestDetail: SSE 进度 + 事件目录 + Case    │
-│       ↓                                                         ↓ 6 Tabs                        │
-│  Zustand store ─ api.ts ── REST POST/GET ─┐         Log / 决策 / Agent逻辑链 / 行情 / Packet /   │
-└───────────────────────────────────────────┤         Prompt 展开                                  │
-                                            │  GET /api/bt/runs · metrics · datasets · events ·   │
-┌───────────────────────────────────────────┤  catalog · events/{eid} · stream(SSE)               │
-│  Backend (FastAPI)    routes/backtest.py ─┘                                                    │
-│  ├─ schemas.py       BTRun / BTPrediction / BTMetrics / EventCatalogItem / BTDatasetResponse    │
-│  ├─ orchestrator.py  BacktestOrchestrator: 线程池 + SSE push + pause/resume/cancel +            │
-│  │                  resume 扫描 ckpt 跳过已完成 + V8 单进程双协程锁                              │
-│  ├─ event_backtest   engine(team_full/team_prompt runner + on_pred 单case回调) ·                │
-│  │                  models(Market/EventRecord/校验) · labeller(akshare+yfinance→Oracle CAR) ·   │
-│  │                  market(CN/XLK/QQQ/SPY/HSI 基准智能路由) · metrics(Wilson 95% CI 下界≥70%) ·  │
-│  │                  report / cli / collector / application                                     │
-│  └─ db.py           SQLite 五表: bt_runs / bt_predictions / bt_datasets / bt_sse_broadcasts /   │
-│                      bt_locks                                                                     │
+┌─────────────────────────── Frontend (React 18 · Vite · /backtest · /arena) ─────────────────────┐
+│  BacktestList: 选数据集 → 创建 run                          ArenaList: 选 Runs → 创建 Arena    │
+│       ↓ 详情 BacktestDetail: 6 Tabs（Log/决策/逻辑链/行情/                           ↓ 详情     │
+│  Zustand store ← api.ts ← REST POST/GET ─┐          ArenaDetail: 排名/雷达/显著性/H2H/成本·效果 │
+│                                           │          (帕累托边界散点图 + 前沿线)                 │
+└───────────────────────────────────────────┤                                                  │
+│  GET /api/bt/runs · /metrics · /datasets · Backend routes: backtest.py + arena.py               │
+│  FastAPI  ├─ schemas.py: + BTArena / ArenaComputeResult / ParetoChartPoint                      │
+│  (cont)   ├─ event_backtest: arena.py (compute_arena_result) · metrics_registry.py (@metric)    │
+│           │              成本聚合: tokens_in/out · step_ms_total; 非支配排序 → 帕累托前沿       │
+│           └─ db.py: 新增 bt_arenas + bt_metrics_snapshots 表                                    │
+│               bt_runs / bt_predictions / bt_datasets / bt_sse_broadcasts / bt_locks  → 共 7 表  │
 └───────────────────────────────────────────┬──────────────────────────────────────────────────────┘
                                             ▼
                      真实数据源：akshare (CN/HK) · yfinance (US) · 巨潮/东财公告原文
 ```
+
+### 回测平台核心能力清单
+- **可插拔指标**：`backend/app/event_backtest/metrics_registry.py` 用 `@metric` 装饰器注册，
+  每个指标独立的 `compute()`、`to_dict()`、display_name、tier（core/extended/breakdown）、
+  higher_is_better。列表页指标列芯片「A T3 准确率 / B 主口径 / 重置」可动态开关，
+  支持未来接入自定义打分器。
+- **Arena 横向比对**：从「同一数据集的已完成回测 Run」中多选 → 一键生成
+  `BTArena` 比对任务。`event_backtest/arena.py::compute_arena_result` 输出：
+  综合排名（rank_average 倒数越大越优）、6 指标雷达图、pairwise_tests 显著性矩阵
+  （Wilson score diff + Fisher exact + Bonferroni 多重比较校正）、
+  events_head_to_head 事件级胜场。详情页 5 个 Tab：概览排名 / 雷达图 / 显著性检验 /
+  头对头 / **成本·效果（帕累托）**。
+- **帕累托边界**：成本字段 = per-step tokens_in/out 聚合 + USD 估算 + step_ms；
+  效果字段 = 主口径 acc 或 综合 composite_score；对所有 Run 做非支配排序
+  （A 支配 B ⇔ 效果≥B 且 成本≤B 且 至少一项严格更优）得到前沿集，
+  成本最低者向原点延伸 L 型参考线，散点图 + 虚线前沿 + 数据表格，
+  切换 X/Y 轴时前端重算前沿并立即更新显示。
 
 ### 快速开始（Web UI）
 
@@ -251,6 +277,9 @@ skill/prompt 策略更新」的长期自进化闭环。
 - [x] P0 市场分析 Skill 矩阵：6 个 analyzer（公告分类 / AR 分解 / 漂移分析 / CN MA / CN 财报 / US MA），按 market × event_type 路由替代一刀切评分卡
 - [x] P0 团队研究上下文共享：ResearchContext 模块，多专家 fan-out 阶段共享研究线索
 - [x] P0 1000 条全量回测数据集 v1：backtesting/ 目录独立维护，含使用说明文档
+- [x] P0 **可插拔指标系统（Metrics Registry）**：@metric 装饰器注册，列表页指标列动态开关
+- [x] P0 **Arena 横向比对平台**：同一数据集多 Run 一键比对；综合排名 / 6 指标雷达图 / 显著性矩阵 / H2H 事件级胜场；候选仅限已完成 Run
+- [x] P0 **成本/效果二维散点（帕累托边界）**：tokens / USD / 耗时 × 准确率 / 综合得分；非支配排序 → 前沿线 + L 型参考线 + 数据表
 - [ ] P1 研究资产化：历史 Case 检索、证据有效性标注、复盘面板
 - [ ] P1 事件监控与预警（定时任务 + 推送）
 - [ ] P2 TTRL v0：命中率统计、calibration 面板
@@ -258,6 +287,7 @@ skill/prompt 策略更新」的长期自进化闭环。
 
 ## 📋 更新日志
 
+- **3.11.0** · 2026-08-20 · 功能：新增可插拔指标系统（18+ 指标 core/extended/breakdown 三级、列表页指标列动态切换）；新增 Arena 横向比对平台（同数据集多 Run 360° 评测：排名/雷达/显著性检验/事件级 H2H）；新增成本·效果二维散点图 + 帕累托边界分析（非支配排序 + L 型参考线，X/Y 轴可切换）；修复回测详情页 compat 层老数据无数值（acc/k/n/Wilson 从 bt_runs 标量字段 fallback）；Arena 创建候选仅收录已完成（status=done + done_events>0）的回测 Run
 - **3.10.0** · 2026-08-19 · 功能：多 horizon CAR 标签（T+3/7/15/30/60 + avg_all 加权平均）+ 6 个新 analyzer Skill（announcement_classifier / ar_decomposer / drift_context_analyzer / cn_ma_analyzer / cn_earnings_analyzer / us_ma_analyzer）+ Strict/Lenient 双口径 + 12 horizon ACC + confidence 分桶校准 + research_context 团队上下文共享 + backtesting/ 数据集目录（v1）
 - **3.9.0** · 2026-08-16 · 功能：新增 Pronoia 回测 Web 平台 P0（全栈）：Data list 选择真实数据集 → 启动/暂停/继续/取消、SSE 实时进度 + 3s 轮询兜底、事件目录 N 条待执行/执行中/已完成、单 Case 详情 6 个 Tab（Team Log/决策结论/Agent 逻辑链/行情视图/As-of Packet/Team Prompt）、原文链接真实可点击。5 个内置真实小数据集各 10 条，全部来自 v9_1000 官方回测池，零杜撰、零未来日期、100% 真实东方财富/Yahoo SEC 原文链接 + 真实 T+3 行情 Oracle Label。
 - **3.8.3** · 2026-08-05 · 修补：新增 Pronoia CLI（含 ./p 简写）并增强首页推荐超时兜底
