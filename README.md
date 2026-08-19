@@ -227,7 +227,7 @@ backend/.venv/bin/python scripts/build_real_datasets_from_v9.py
 | `us_sec_ma_10` | US 美股 SEC 并购/分拆申报 10例 | US × 并购/分拆/再融资 | Yahoo Finance SEC Filing | ✅ | 2024-02 ~ 2026-04 |
 | `cross_market_mix_10` | 跨市场精选混合 10例 | CN 8 + US 2（均衡） | 全部 http 真实链接 | ✅ | 2025-02 ~ 2026-06 |
 
-严格约束（与 `docs/design.md` 第 5 节对齐）：
+严格约束（与 `docs/20260729_design.md` 第 5 节对齐）：
 - **零杜撰、零未来日期**：所有 event_time < 发布当天，字段 100% 拷贝自 v9_1000
 - **T+3 ACC 的 Wilson 95% CI 下界 ≥ 70%**（系统目标红线）
 - **多 horizon 主证据**：默认 `--primary-oracle-horizon avg_all`（T+3/7/15/30/60 加权平均），
