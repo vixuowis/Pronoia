@@ -9,7 +9,7 @@
    而无需在 `run_agent` 或 skill schema 上动外科手术。
 
 2. 暴露给 LLM 的只有一个 **skill** ``evidence_graph``，由它 dispatcher
-   到 9 个 ``_eg_*`` sub-tool（internal=True，LLM 不可见）：
+   到 10 个 ``_eg_*`` sub-tool（internal=True，LLM 不可见）：
    - _eg_add_evidence   —— 添加 evidence 节点（来源 = skill 返回的数据）
    - _eg_add_claim      —— 添加 claim 节点（可证伪陈述）
    - _eg_link           —— 把 claim 链到 evidence（supports/contradicts/context）
@@ -17,6 +17,7 @@
    - _eg_merge_claims   —— 合并重复 claim
    - _eg_add_missing    —— 记录尚未覆盖的研究面（用于下一轮 follow-up）
    - _eg_set_sufficient —— 标记图已充分（终止信号）
+   - _eg_audit          —— 检查图谱的覆盖与关系质量
    - _eg_export         —— 导出图（默认 markdown 摘要 + JSON）
    - _eg_clear          —— 重置图（保留 question/scope，清空节点）
 
@@ -32,6 +33,7 @@ from __future__ import annotations
 
 import contextvars
 import json
+import re
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -74,6 +76,56 @@ def _require_graph() -> "EvidenceGraph":
 
 VALID_CLAIM_STATUS = {"exploring", "verified", "rejected", "needs_more", "insufficient"}
 VALID_RELATIONS = {"supports", "contradicts", "context", "addresses"}
+# 关系的端点语义是图谱的基本不变量。此前仅校验 ID 是否存在，
+# 会允许 claim→claim 或 claim→missing 等难以解释的边。
+RELATION_ENDPOINT_KINDS: dict[str, tuple[str, str]] = {
+    "supports": ("claim", "evidence"),
+    "contradicts": ("claim", "evidence"),
+    "context": ("claim", "evidence"),
+    "addresses": ("evidence", "missing"),
+}
+CLAIM_TITLE_SOFT_MAX_LENGTH = 50
+
+
+def check_claim_title(title: str) -> dict:
+    """Return transparent, non-blocking checks for a Claim title.
+
+    Claim titles are model-generated research hypotheses, so these heuristics
+    deliberately warn rather than reject.  The LLM can shorten a title via
+    ``merge(..., merge_ids=[], canonical_claim=...)`` after receiving a warning.
+    """
+    compact = "".join(str(title or "").split())
+    warnings: list[dict[str, str]] = []
+    if len(compact) > CLAIM_TITLE_SOFT_MAX_LENGTH:
+        warnings.append({
+            "code": "title_too_long",
+            "message": f"Claim 标题为 {len(compact)} 字，建议控制在 {CLAIM_TITLE_SOFT_MAX_LENGTH} 字以内；将数字、限制和验证条件移入 rationale。",
+        })
+    if any(marker in compact for marker in ("事实：", "比较：", "反方/限制：", "验证条件：")):
+        warnings.append({
+            "code": "title_contains_rationale",
+            "message": "Claim 标题含有 rationale 段落标记，应只保留一个原子化推断。",
+        })
+    # A reporting period such as ``2026Q1`` or a date is a single time anchor,
+    # not evidence of numeric overload.  Strip common time labels before
+    # counting data-like numbers, otherwise routine Claim titles are warned on
+    # merely for naming their period.
+    title_without_time_labels = re.sub(
+        r"(?:19|20)\d{2}(?:[-/.]\d{1,2}(?:[-/.]\d{1,2})?|[Qq][1-4])?",
+        "",
+        compact,
+    )
+    if len(re.findall(r"\d+(?:\.\d+)?", title_without_time_labels)) >= 2:
+        warnings.append({
+            "code": "title_numeric_overload",
+            "message": "Claim 标题包含多个数字；除非数字本身定义该判断，否则应移入 rationale 或 Evidence。",
+        })
+    if "；" in compact or compact.count("。") >= 2:
+        warnings.append({
+            "code": "title_multiple_sentences",
+            "message": "Claim 标题含多个分句；检查是否应拆成可独立支持或反驳的 Claim。",
+        })
+    return {"length": len(compact), "soft_max_length": CLAIM_TITLE_SOFT_MAX_LENGTH, "warnings": warnings}
 
 
 @dataclass
@@ -180,19 +232,27 @@ class EvidenceGraph:
         self.updated_at = time.strftime("%Y-%m-%dT%H:%M:%S")
         return nid
 
-    def link(self, claim_id: str, evidence_id: str, relation: str = "supports",
+    def link(self, source_id: str, target_id: str, relation: str = "supports",
              note: str = "") -> str:
         if relation not in VALID_RELATIONS:
             raise ValueError(f"relation 非法: {relation}（应为 {sorted(VALID_RELATIONS)}）")
-        ids = {n.id for n in self.nodes}
-        if claim_id not in ids:
-            raise ValueError(f"claim_id 不存在: {claim_id}")
-        if evidence_id not in ids:
-            raise ValueError(f"evidence_id 不存在: {evidence_id}")
-        edge = EvidenceEdge(src=claim_id, dst=evidence_id, relation=relation, note=note[:200])
+        nodes_by_id = {n.id: n for n in self.nodes}
+        source = nodes_by_id.get(source_id)
+        target = nodes_by_id.get(target_id)
+        if source is None:
+            raise ValueError(f"source_id 不存在: {source_id}")
+        if target is None:
+            raise ValueError(f"target_id 不存在: {target_id}")
+        expected_source, expected_target = RELATION_ENDPOINT_KINDS[relation]
+        if source.kind != expected_source or target.kind != expected_target:
+            raise ValueError(
+                f"{relation} 只能连接 {expected_source} → {expected_target}，"
+                f"当前为 {source.kind}({source_id}) → {target.kind}({target_id})"
+            )
+        edge = EvidenceEdge(src=source_id, dst=target_id, relation=relation, note=note[:200])
         self.edges.append(edge)
         self.updated_at = time.strftime("%Y-%m-%dT%H:%M:%S")
-        return f"{claim_id}--{relation}-->{evidence_id}"
+        return f"{source_id}--{relation}-->{target_id}"
 
     def set_claim_status(self, claim_id: str, status: str,
                          confidence: float | None = None, rationale: str = "") -> EvidenceNode:
@@ -213,12 +273,20 @@ class EvidenceGraph:
         raise ValueError(f"claim_id 不存在或不是 claim: {claim_id}")
 
     def merge_claims(self, keep_id: str, merge_ids: list, canonical: str, rationale: str = "") -> str:
-        ids = {n.id for n in self.nodes}
-        if keep_id not in ids:
+        nodes_by_id = {n.id: n for n in self.nodes}
+        keep = nodes_by_id.get(keep_id)
+        if keep is None:
             raise ValueError(f"keep_id 不存在: {keep_id}")
+        if keep.kind != "claim":
+            raise ValueError(f"keep_id 必须是 claim: {keep_id} 当前为 {keep.kind}")
+        if not isinstance(merge_ids, list):
+            raise ValueError("merge_ids 必须是 claim_id 列表")
         for mid in merge_ids:
-            if mid not in ids:
+            node = nodes_by_id.get(mid)
+            if node is None:
                 raise ValueError(f"merge_id 不存在: {mid}")
+            if node.kind != "claim":
+                raise ValueError(f"merge_id 必须是 claim: {mid} 当前为 {node.kind}")
             if mid == keep_id:
                 continue
         # 把被合并的节点的入边/出边转移给 keep_id
@@ -229,7 +297,7 @@ class EvidenceGraph:
             if src == dst:
                 continue  # 自环
             new_edges.append(EvidenceEdge(src=src, dst=dst, relation=e.relation, note=e.note))
-        self.edges = new_edges
+        self.edges = self._deduplicate_edges(new_edges)
         # 删除被合并的 claim 节点
         self.nodes = [n for n in self.nodes if not (n.id in merge_ids and n.id != keep_id)]
         # 更新 keep_id 的 title 为 canonical
@@ -241,6 +309,93 @@ class EvidenceGraph:
                 break
         self.updated_at = time.strftime("%Y-%m-%dT%H:%M:%S")
         return keep_id
+
+    @staticmethod
+    def _deduplicate_edges(edges: list[EvidenceEdge]) -> list[EvidenceEdge]:
+        """Keep one semantic edge per (source, target, relation).
+
+        When merging Claims, two formerly distinct edges can become the same
+        relation.  Preserve their first-seen order, but prefer a non-empty note
+        when the earlier copy has none.
+        """
+        unique: dict[tuple[str, str, str], EvidenceEdge] = {}
+        for edge in edges:
+            key = (edge.src, edge.dst, edge.relation)
+            previous = unique.get(key)
+            if previous is None or (not previous.note.strip() and edge.note.strip()):
+                unique[key] = edge
+        return list(unique.values())
+
+    def audit(self) -> dict:
+        """Return non-blocking, machine-readable graph-quality findings.
+
+        This deliberately reports structural and coverage gaps without deciding
+        whether a research judgement is correct.  The model can address the
+        findings before export; the same result is included in every export for
+        the UI and later evaluation.
+        """
+        outgoing: dict[str, list[EvidenceEdge]] = {n.id: [] for n in self.nodes}
+        incoming: dict[str, list[EvidenceEdge]] = {n.id: [] for n in self.nodes}
+        edge_groups: dict[tuple[str, str, str], list[EvidenceEdge]] = {}
+        for edge in self.edges:
+            outgoing.setdefault(edge.src, []).append(edge)
+            incoming.setdefault(edge.dst, []).append(edge)
+            edge_groups.setdefault((edge.src, edge.dst, edge.relation), []).append(edge)
+
+        def node_ref(node: EvidenceNode) -> dict[str, str]:
+            return {"id": node.id, "title": node.title}
+
+        claims_without_substantive_evidence = []
+        context_only_claims = []
+        for node in self.nodes:
+            if node.kind != "claim":
+                continue
+            relations = {edge.relation for edge in outgoing.get(node.id, [])}
+            if not relations.intersection({"supports", "contradicts"}):
+                claims_without_substantive_evidence.append(node_ref(node))
+                if relations == {"context"}:
+                    context_only_claims.append(node_ref(node))
+
+        orphan_evidence = [
+            node_ref(node) for node in self.nodes
+            if node.kind == "evidence" and not outgoing.get(node.id) and not incoming.get(node.id)
+        ]
+        unaddressed_missing = [
+            node_ref(node) for node in self.nodes
+            if node.kind == "missing"
+            and not any(edge.relation == "addresses" for edge in incoming.get(node.id, []))
+        ]
+        duplicate_edges = [
+            {
+                "source_id": src,
+                "target_id": dst,
+                "relation": relation,
+                "count": len(group),
+            }
+            for (src, dst, relation), group in edge_groups.items()
+            if len(group) > 1
+        ]
+        edges_missing_note = [
+            {
+                "source_id": edge.src,
+                "target_id": edge.dst,
+                "relation": edge.relation,
+            }
+            for edge in self.edges if not edge.note.strip()
+        ]
+        categories = {
+            "claims_without_substantive_evidence": claims_without_substantive_evidence,
+            "context_only_claims": context_only_claims,
+            "orphan_evidence": orphan_evidence,
+            "unaddressed_missing": unaddressed_missing,
+            "duplicate_edges": duplicate_edges,
+            "edges_missing_note": edges_missing_note,
+        }
+        counts = {name: len(items) for name, items in categories.items()}
+        return {
+            "summary": {**counts, "total_findings": sum(counts.values())},
+            **categories,
+        }
 
     def add_missing(self, aspect: str, why_missing: str, priority: int = 1) -> str:
         try:
@@ -278,6 +433,7 @@ class EvidenceGraph:
             "sufficient": self.sufficient,
             "stop_reason": self.stop_reason,
             "stats": self._counts(),
+            "audit": self.audit(),
             "markdown": self.to_markdown(),
             "created_at": self.created_at,
             "updated_at": self.updated_at,
@@ -340,6 +496,24 @@ class EvidenceGraph:
                 lines.append(f"- 🕳️ **[prio {n.priority}] {n.id}** {n.title}")
                 if n.body:
                     lines.append(f"  > {n.body[:300]}")
+
+        audit = self.audit()
+        audit_counts = audit["summary"]
+        if audit_counts["total_findings"]:
+            lines.append("")
+            lines.append("## 图谱自检（待处理）")
+            labels = {
+                "claims_without_substantive_evidence": "缺少 supports/contradicts 的 Claim",
+                "context_only_claims": "仅有 context 的 Claim",
+                "orphan_evidence": "孤立 Evidence",
+                "unaddressed_missing": "未被 addresses 补足的 Missing",
+                "duplicate_edges": "重复关系边",
+                "edges_missing_note": "缺少说明的关系边",
+            }
+            for key, label in labels.items():
+                count = audit_counts[key]
+                if count:
+                    lines.append(f"- ⚠️ {label}：{count}")
 
         return "\n".join(lines)
 
@@ -452,7 +626,8 @@ def _eg_add_claim(claim: str, rationale: str = "", status: str = "exploring",
     try:
         cid = g.add_claim(claim, rationale, status, confidence)
         return ok(
-            {"claim_id": cid, "graph_stats": g._counts()},
+            {"claim_id": cid, "graph_stats": g._counts(),
+             "title_check": check_claim_title(claim)},
             meta("evidence_graph", 1),
         )
     except Exception as e:  # noqa: BLE001
@@ -461,27 +636,31 @@ def _eg_add_claim(claim: str, rationale: str = "", status: str = "exploring",
 
 @skill(
     "_eg_link",
-    "把 evidence 链到 claim 上，标注关系 supports / contradicts / context / addresses。"
-    "claim_id 和 evidence_id 都来自之前 eg_add_claim / eg_add_evidence 的返回。",
+    "创建有语义约束的图关系：supports / contradicts / context 必须是 claim → evidence；"
+    "addresses 必须是 evidence → missing。source_id 和 target_id 来自此前图操作的返回。",
     _params(
         {
-            "claim_id": {"type": "string", "description": "claim 节点 ID（如 C1）"},
-            "evidence_id": {"type": "string", "description": "evidence 节点 ID（如 E1）"},
+            "source_id": {"type": "string", "description": "边起点 ID；claim→evidence 或 evidence→missing"},
+            "target_id": {"type": "string", "description": "边终点 ID；claim→evidence 或 evidence→missing"},
             "relation": {"type": "string",
                          "enum": ["supports", "contradicts", "context", "addresses"]},
-            "note": {"type": "string", "description": "可选：关系说明"},
+            "note": {"type": "string", "description": "简短说明此关系具体支持、反驳或补足什么"},
         },
-        ["claim_id", "evidence_id"],
+        ["source_id", "target_id"],
     ),
     internal=True,)
-def _eg_link(claim_id: str, evidence_id: str, relation: str = "supports",
-            note: str = "") -> dict:
+def _eg_link(source_id: str = "", target_id: str = "", relation: str = "supports",
+            note: str = "", claim_id: str = "", evidence_id: str = "") -> dict:
+    # Keep direct Python callers using the former claim_id/evidence_id names
+    # working for the three claim→evidence relations during the transition.
+    source_id = source_id or claim_id
+    target_id = target_id or evidence_id
     try:
         g = _require_graph()
     except ValueError as e:
         return err(str(e))
     try:
-        edge_id = g.link(claim_id, evidence_id, relation, note)
+        edge_id = g.link(source_id, target_id, relation, note)
         return ok(
             {"edge_id": edge_id, "graph_stats": g._counts()},
             meta("evidence_graph", 1),
@@ -632,7 +811,7 @@ def _eg_export(format: str = "markdown") -> dict:
             payload_str = json.dumps(g.to_payload(), ensure_ascii=False, default=str)
             return ok(
                 {"format": "json", "markdown": g.to_markdown(),
-                 "graph_stats": g._counts()},
+                 "graph_stats": g._counts(), "audit": g.audit()},
                 meta("evidence_graph", len(g.nodes) + len(g.edges)),
                 # JSON 单独不入主 artifact（太大），但 markdown 会进
             )
@@ -645,12 +824,28 @@ def _eg_export(format: str = "markdown") -> dict:
         }
         return ok(
             {"format": "markdown", "markdown": md,
-             "graph_stats": g._counts()},
+             "graph_stats": g._counts(), "audit": g.audit()},
             meta("evidence_graph", len(g.nodes) + len(g.edges)),
             artifact=artifact,
         )
     except Exception as e:  # noqa: BLE001
         return err(f"_eg_export 失败: {type(e).__name__}: {e}")
+
+
+@skill(
+    "_eg_audit",
+    "机械检查当前图谱质量：返回缺少 supports/contradicts 的 Claim、仅有 context 的 Claim、"
+    "孤立 Evidence、未被 addresses 补足的 Missing、重复边及缺少 note 的边。"
+    "不修改图谱；应在 export 前调用并尽量处理关键发现。",
+    _params({}, []),
+    internal=True,
+)
+def _eg_audit() -> dict:
+    try:
+        g = _require_graph()
+        return ok({"audit": g.audit(), "graph_stats": g._counts()}, meta("evidence_graph", 1))
+    except Exception as e:  # noqa: BLE001
+        return err(f"_eg_audit 失败: {type(e).__name__}: {e}")
 
 
 @skill(
