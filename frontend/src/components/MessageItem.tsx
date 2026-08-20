@@ -1,4 +1,4 @@
-import { CheckCircle2, ListChecks, RotateCcw, ShieldCheck, User } from "lucide-react";
+import { AlertCircle, CheckCircle2, ListChecks, RefreshCw, ShieldCheck, User, XCircle } from "lucide-react";
 import { useMemo } from "react";
 import type { Message, Part } from "../types";
 import { agentColor, agentName } from "../names";
@@ -341,17 +341,57 @@ export default function MessageItem({ message }: { message: Message }) {
           </div>
         )}
 
-        {message.error && !message.pending && (
-          <div className="mt-2 flex items-center gap-2">
-            <button
-              onClick={() => retryLastMessage()}
-              className="flex items-center gap-1.5 rounded-md border border-edge bg-paper px-2.5 py-1 text-[12px] font-medium text-ink transition-colors hover:bg-brand-soft hover:text-brand"
-            >
-              <RotateCcw size={12} />
-              重试
-            </button>
-          </div>
-        )}
+        {message.error && !message.pending && (() => {
+          const isStopped = message.errorMessage === "已停止生成";
+          const tone = isStopped
+            ? {
+                bg: "bg-amber-50",
+                border: "border-amber-300",
+                icon: AlertCircle,
+                iconColor: "text-amber-600",
+                title: "已暂停",
+                titleColor: "text-amber-800",
+                descColor: "text-amber-700/80",
+                btnBg: "bg-amber-600 hover:bg-amber-700",
+              }
+            : {
+                bg: "bg-rose-50",
+                border: "border-rose-300",
+                icon: XCircle,
+                iconColor: "text-rose-600",
+                title: "对话失败",
+                titleColor: "text-rose-800",
+                descColor: "text-rose-700/80",
+                btnBg: "bg-rose-600 hover:bg-rose-700",
+              };
+          const Icon = tone.icon;
+          return (
+            <div className={`mt-3 rounded-lg border ${tone.border} ${tone.bg} px-4 py-3 animate-fadeUp`}>
+              <div className="flex items-start gap-3">
+                <Icon size={18} className={`mt-0.5 shrink-0 ${tone.iconColor}`} />
+                <div className="min-w-0 flex-1">
+                  <div className={`text-[13px] font-semibold ${tone.titleColor}`}>
+                    {tone.title}
+                  </div>
+                  {message.errorMessage && (
+                    <p className={`mt-0.5 break-words text-[12.5px] leading-relaxed ${tone.descColor}`}>
+                      {message.errorMessage}
+                    </p>
+                  )}
+                  <div className="mt-2.5 flex items-center gap-2">
+                    <button
+                      onClick={() => retryLastMessage()}
+                      className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12.5px] font-medium text-white shadow-sm transition-colors ${tone.btnBg}`}
+                    >
+                      <RefreshCw size={13} />
+                      重新生成
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
       </div>
     </div>
   );

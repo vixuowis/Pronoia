@@ -416,6 +416,10 @@ export const useStore = create<FeverState>((set, get) => {
     switch (ev.type) {
       case "meta":
         if (ev.mode) patchPending((m) => ({ ...m, mode: ev.mode }));
+        // 后端可能新建了 case（前端传入的 case_id 无效时），同步到前端
+        if (ev.case_id && ev.case_id !== get().currentCaseId) {
+          set({ currentCaseId: ev.case_id });
+        }
         break;
       case "thinking":
         if (ev.delta) patchParts((p) => appendDelta(p, "thinking", ev.agent, ev.delta!));
@@ -501,6 +505,10 @@ export const useStore = create<FeverState>((set, get) => {
         break;
       case "done":
         finalizePending((m) => ({ ...m, id: ev.message_id ?? m.id }));
+        // 兜底：确保 currentCaseId 与后端一致
+        if (ev.case_id && ev.case_id !== get().currentCaseId) {
+          set({ currentCaseId: ev.case_id });
+        }
         // 刷新 case 列表（updated_at / message_count）
         api
           .cases()
@@ -508,8 +516,7 @@ export const useStore = create<FeverState>((set, get) => {
           .catch(() => void 0);
         break;
       case "error":
-        patchParts((p) => [...p, { type: "text", text: `⚠️ ${ev.message ?? "发生未知错误"}` }]);
-        finalizePending((m) => ({ ...m, error: true }));
+        finalizePending((m) => ({ ...m, error: true, errorMessage: ev.message ?? "发生未知错误" }));
         break;
     }
   };
@@ -612,8 +619,9 @@ export const useStore = create<FeverState>((set, get) => {
               {
                 id: uid(),
                 role: "assistant",
-                content: `⚠️ 创建研究失败：${e instanceof Error ? e.message : String(e)}`,
+                content: "",
                 error: true,
+                errorMessage: `创建研究失败：${e instanceof Error ? e.message : String(e)}`,
               },
             ],
           }));
@@ -654,17 +662,16 @@ export const useStore = create<FeverState>((set, get) => {
           // 页面隐藏/切 tab/关 preview 触发的 abort：不写"已停止生成"，让用户无感
           const silent = document.visibilityState === "hidden";
           if (!silent) {
-            patchParts((p) => [...p, { type: "text", text: "*已停止生成*" }]);
-            finalizePending((m) => ({ ...m, error: true }));
+            finalizePending((m) => ({ ...m, error: true, errorMessage: "已停止生成" }));
           } else {
             finalizePending();
           }
         } else {
-          patchParts((p) => [
-            ...p,
-            { type: "text", text: `⚠️ 请求失败：${e instanceof Error ? e.message : String(e)}` },
-          ]);
-          finalizePending((m) => ({ ...m, error: true }));
+          finalizePending((m) => ({
+            ...m,
+            error: true,
+            errorMessage: `请求失败：${e instanceof Error ? e.message : String(e)}`,
+          }));
         }
       } finally {
         abortCtl = null;
@@ -686,16 +693,24 @@ export const useStore = create<FeverState>((set, get) => {
       }
       if (lastUserIdx < 0) return;
       const lastUser = msgs[lastUserIdx];
-      // 移除最后一条 error assistant 消息
+      // 在 lastUser 之后找 error 的 assistant，优先保留它的 mode 用于重试
+      let errorMode: Message["mode"] | undefined;
+      for (let i = lastUserIdx + 1; i < msgs.length; i++) {
+        const m = msgs[i];
+        if (m.role === "assistant" && m.error && m.mode) {
+          errorMode = m.mode;
+          break;
+        }
+      }
+      // 移除 lastUser 之后所有 error assistant 消息
       const newMsgs = msgs.filter((m, i) => {
         if (m.role === "assistant" && m.error) {
-          // 只移除 lastUserIdx 之后的 error assistant
           return i <= lastUserIdx;
         }
         return true;
       });
       set({ messages: newMsgs });
-      await get().sendMessage(lastUser.content, lastUser.mode);
+      await get().sendMessage(lastUser.content, errorMode ?? lastUser.mode);
     },
 
     loadCase: async (id) => {

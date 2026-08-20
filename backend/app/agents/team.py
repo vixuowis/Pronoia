@@ -162,6 +162,7 @@ async def _run_expert_serial(
     prior_findings: dict[str, str] | None = None,
     prior_tool_trace: list[dict] | None = None,
     research_context: ResearchContext | None = None,
+    prior_conversation: str = "",
 ) -> AsyncIterator[dict]:
     """单 expert 串行执行：agent_start → events → agent_done 收尾。失败也收尾。
 
@@ -199,6 +200,7 @@ async def _run_expert_serial(
             {"role": "user", "content":
                 f"【用户原始问题】{question}\n\n【你的子任务】{task_text}\n\n"
                 "请调用你的技能获取真实数据后作答；最后用不超过600字总结发现（含关键数字+来源）。"
+                + prior_conversation
                 + evidence_context},
         ]
         async def team_skill_executor(name: str, args: dict) -> dict:
@@ -605,11 +607,22 @@ async def run_team(
                 用于 Synthesize 阶段路由到对应 Tier 1 analyzer skill。
     """
     # ------------------------------------------------------------ 1) plan --
+    # 构建历史上下文摘要（最近 3 轮），让 router 知道之前聊了什么
+    history_ctx = ""
+    if history:
+        recent = [m for m in history[-6:] if (m.get("content") or "").strip()]
+        if recent:
+            history_ctx = "\n\n【之前的对话记录（供参考，不要重复已有结论，聚焦用户当前追问）】\n" + "\n".join(
+                f"{m['role']}: {m['content'][:300]}" for m in recent
+            )
+
     plan: list[dict] = []
     try:
+        yield {"type": "thinking", "agent": "router",
+               "delta": "正在拆解研究任务，规划专家分工…"}
         plan_json = await complete_json(
             system_prompt("router") + "\n\n" + PLANNER_INSTRUCTION,
-            f"用户问题：{question}",
+            f"用户问题：{question}{history_ctx}",
             max_tokens=2000,
         )
         if plan_json:
@@ -654,12 +667,16 @@ async def run_team(
     # -------------------------------------------------------- 2) serial fan
     findings: dict[str, str] = {}
     research_context = ResearchContext()
-    for p in plan:
+    total_experts = len(plan)
+    for ei, p in enumerate(plan):
+        yield {"type": "thinking", "agent": "router",
+               "delta": f"正在调度第 {ei+1}/{total_experts} 位专家：{AGENTS.get(p['agent'], {}).get('name', p['agent'])}…"}
         async for ev in _run_expert_serial(
             p["agent"], p["task"], question, artifact_store,
             prior_findings=findings if p["agent"] == "deep_researcher" else None,
             prior_tool_trace=state["tool_trace"] if p["agent"] == "deep_researcher" else None,
             research_context=research_context,
+            prior_conversation=history_ctx,
         ):
             # 提取 agent_findings 写入 state + findings；其余原样 yield
             if ev.get("type") == "agent_findings":
@@ -765,6 +782,8 @@ async def run_team(
     if draft and not skip_verify:
         try:
             evidence = _evidence_digest(state["tool_trace"])
+            yield {"type": "thinking", "agent": "verifier",
+                   "delta": "正在复核研究结论的事实性与逻辑一致性…"}
             verdict_json = await complete_json(
                 system_prompt("verifier"),
                 f"【分析草稿】\n{draft[:4000]}\n\n【证据摘要（工具调用记录）】\n{evidence}",
@@ -820,6 +839,8 @@ async def run_team(
     final_answer = state["content"].strip()
     if final_answer and not skip_hypothesis:
         try:
+            yield {"type": "thinking", "agent": "router",
+                   "delta": "正在提炼可证伪的研究假设…"}
             extracted = await complete_json(
                 system_prompt("router") + "\n\n" + HYPOTHESIS_EXTRACT_INSTRUCTION,
                 f"用户原始问题：{question}\n\n【研究结论】\n{final_answer[:3500]}",

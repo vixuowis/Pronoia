@@ -158,6 +158,8 @@ export interface Message {
   /** 流式期间为 true，用于渲染打字光标/停止逻辑 */
   pending?: boolean;
   error?: boolean;
+  /** 具体错误信息，用于失败卡片展示 */
+  errorMessage?: string;
 }
 
 /** SSE 事件（design.md §7） */
