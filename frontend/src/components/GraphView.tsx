@@ -15,6 +15,15 @@ const STATUS_ORDER: Record<string, number> = {
   exploring: 4,
 };
 
+const AUDIT_LABELS: Record<string, string> = {
+  claims_without_substantive_evidence: "缺少实质证据的推论",
+  context_only_claims: "仅有背景关系的推论",
+  orphan_evidence: "孤立证据",
+  unaddressed_missing: "尚未补足的缺口",
+  duplicate_edges: "重复关系边",
+  edges_missing_note: "缺少说明的关系边",
+};
+
 /** 证据图（EvidenceGraph）渲染。payload 结构见 evidence_graph.EvidenceGraph.to_payload() */
 export default function GraphView({ payload }: { payload: any }) {
   const stats = payload?.stats || {};
@@ -26,6 +35,11 @@ export default function GraphView({ payload }: { payload: any }) {
   const scope: string = payload?.scope || "";
   const stopReason: string = payload?.stop_reason || "";
   const markdown: string = payload?.markdown || "";
+  const audit = payload?.audit || null;
+  const auditSummary: Record<string, number> = audit?.summary || {};
+  const auditItems = Object.entries(AUDIT_LABELS)
+    .map(([key, label]) => ({ key, label, count: Number(auditSummary[key] || 0) }))
+    .filter((item) => item.count > 0);
   const [showEdges, setShowEdges] = useState(false);
   const [viewMode, setViewMode] = useState<"graph" | "list">("list");
 
@@ -100,6 +114,35 @@ export default function GraphView({ payload }: { payload: any }) {
             : "研究尚未充分——可继续添加证据或标记缺口"}
         </span>
       </div>
+
+      {/* 图谱质量审计：后端 export 自动附带，只提示待复核的结构问题 */}
+      {audit && (
+        <div
+          className={cls(
+            "rounded-card border p-3 shadow-card",
+            auditItems.length > 0
+              ? "border-amber/40 bg-amber-soft"
+              : "border-jade/40 bg-jade-soft",
+          )}
+        >
+          <div className={cls("flex items-center gap-2 text-[12px] font-medium", auditItems.length > 0 ? "text-amber" : "text-jade")}>
+            {auditItems.length > 0 ? <AlertTriangle size={14} /> : <CheckCircle2 size={14} />}
+            <span>{auditItems.length > 0 ? "图谱自检：待复核" : "图谱自检：未发现结构性问题"}</span>
+          </div>
+          {auditItems.length > 0 && (
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              {auditItems.map((item) => (
+                <span key={item.key} className="rounded-full border border-amber/30 bg-card/70 px-2 py-0.5 text-[11px] text-amber">
+                  {item.label} · {item.count}
+                </span>
+              ))}
+            </div>
+          )}
+          <div className="mt-1.5 text-[11px] text-faint">
+            这是结构与覆盖提醒，不代表推论本身一定错误。
+          </div>
+        </div>
+      )}
 
       {/* markdown 摘要 */}
       {markdown && (

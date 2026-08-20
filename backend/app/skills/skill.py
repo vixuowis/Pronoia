@@ -96,12 +96,12 @@ def _collect_artifacts(results: list[dict]) -> list[dict]:
 
 
 # ============================================================ evidence_graph
-# 9 个 _eg_* 的高层 dispatcher。LLM 只看到 1 个 evidence_graph skill，
-# 通过 action 参数路由到对应 sub-tool。LLM 不需要记住 9 个 sub-tool 名。
+# 10 个 _eg_* 的高层 dispatcher。LLM 只看到 1 个 evidence_graph skill，
+# 通过 action 参数路由到对应 sub-tool。LLM 不需要记住 10 个 sub-tool 名。
 
 _VALID_GRAPH_ACTIONS = {
     "add_evidence", "add_claim", "link", "set_status", "merge",
-    "add_missing", "set_sufficient", "export", "clear",
+    "add_missing", "set_sufficient", "audit", "export", "clear",
 }
 
 # action -> _eg_* sub-tool 名 的显式映射（sub-tool 名不一定与 action 一一对应，
@@ -114,6 +114,7 @@ _GRAPH_ACTION_TO_SUB: dict[str, str] = {
     "merge": "_eg_merge_claims",
     "add_missing": "_eg_add_missing",
     "set_sufficient": "_eg_set_sufficient",
+    "audit": "_eg_audit",
     "export": "_eg_export",
     "clear": "_eg_clear",
 }
@@ -123,9 +124,11 @@ _GRAPH_ACTION_TO_SUB: dict[str, str] = {
     "evidence_graph",
     "证据图操作（建图/编辑/导出）。action 决定子操作："
     "add_evidence / add_claim / link / set_status / merge / add_missing / "
-    "set_sufficient / export / clear。"
-    "子操作需要的参数按 action 传递（除 action 外的所有参数透传给对应 sub-tool）。"
-    "导出时返回 markdown 摘要 + JSON 统计，可同时作为 graph 类型的 artifact 沉淀。",
+    "set_sufficient / audit / export / clear。"
+    "link 使用 source_id/target_id：supports、contradicts、context 为 claim→evidence；"
+    "addresses 为 evidence→missing。子操作需要的参数按 action 传递（除 action 外的所有参数透传给对应 sub-tool）。"
+    "audit 不修改图，返回孤立节点、缺少实质证据的 Claim、重复边和缺少 note 等质量发现；"
+    "export 也会附带相同 audit。导出时返回 markdown 摘要 + JSON 统计，可同时作为 graph 类型的 artifact 沉淀。",
     {
         "type": "object",
         "properties": {
@@ -140,7 +143,7 @@ _GRAPH_ACTION_TO_SUB: dict[str, str] = {
     composes=[
         "_eg_add_evidence", "_eg_add_claim", "_eg_link",
         "_eg_set_claim_status", "_eg_merge_claims",
-        "_eg_add_missing", "_eg_set_sufficient", "_eg_export", "_eg_clear",
+        "_eg_add_missing", "_eg_set_sufficient", "_eg_audit", "_eg_export", "_eg_clear",
     ],
 )
 async def evidence_graph(action: str, **kwargs) -> dict:
