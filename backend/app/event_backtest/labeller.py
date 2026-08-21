@@ -986,7 +986,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--events", required=True, help="events_phase1.jsonl")
     ap.add_argument("--out", required=True, help="labels.jsonl")
-    ap.add_argument("--epsilon", type=float, default=0.005, help="neutral threshold for label (default 0.5%)")
+    ap.add_argument("--epsilon", type=float, default=0.005, help="neutral threshold for label (default 0.5%%)")
     args = ap.parse_args()
 
     events = load_events(args.events)

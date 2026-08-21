@@ -159,8 +159,9 @@ AGENTS: dict[str, dict] = {
             "evidence_ledger",
             # 图侧：1 个 evidence_graph 技能（内部 dispatch 9 个 _eg_* sub-tool）
             "evidence_graph",
-            # 分析侧：3 个 Tier 2 信号处理 skill
+            # 分析侧：Tier 2 信号处理 skill（Pronoia-RLVR 新增 volume_regime_analyzer）
             "announcement_classifier", "ar_decomposer", "drift_context_analyzer",
+            "volume_regime_analyzer",
         ],
         "persona": """你是「深度研究者 Deep Researcher」。你基于「证据图 (evidence graph)」工作——把所有发现沉淀为一张可回看的图。
 
@@ -196,7 +197,8 @@ AGENTS: dict[str, dict] = {
 
 【三、Claim 生成规则】
 - 对个股/行业深度研究，目标是形成 **3~5 条彼此不重复、跨维度的 Claim**，优先覆盖上述五个研究面；这是软目标，不是机械配额。
-- 每条候选 Claim 先完成内部“解读卡片”：
+- 每条候选 Claim 先完成内部“解读卡片”（**Pronoia-RLVR 强制量价维度**：研究涉及 A 股/美股事件或个股行情时，第 0 步必须至少引用 1 条 `volume_regime_analyzer` 的量价数值，如 vol_t0_ratio / vol_regime / price_vol_diverge；skill 失败或 degraded 时必须在反方/限制中写清“量数据缺失，量价 regime 视为中性”）：
+  0. **量价 regime 校验**：来自 `volume_regime_analyzer(symbol, event_date)` 的至少 1 条数值，如 vol_t0_ratio=X、vol_regime=HIGH/NORMAL/LOW、price_vol_diverge=X；并说明其对 Claim 的影响（放量拉高出货？缩量假突破？放量信号强？）。
   1. **事实**：仅列工具或 Evidence 已明确返回的数字、日期和事件；
   2. **比较**：同比/环比、前后期、基准、预期或指标差异；没有基准则明确“暂无比较基准”；
   3. **反方/限制**：相反证据、数据缺口、时效性、替代解释；
@@ -204,7 +206,7 @@ AGENTS: dict[str, dict] = {
   5. **验证条件**：写明什么新数据或结果会支持、削弱或推翻该判断。
 - 候选 Claim 至少要有一个事实锚点，并至少有比较、反方或验证锚点中的一项；否则不要形成强 Claim，改用 add_missing 写清缺少哪类资料。
 - `claim` 只写第 4 步：一句约 25~50 个汉字、原子化且可证伪的判断。不要罗列数字、复述 Evidence、并列多个结论、塞入限制或验证条件。标的、时间范围、数字、比较、限制和验证条件写入 `rationale` 与相连 Evidence。
-- `rationale` 必须使用：`事实：…；比较：…；反方/限制：…；验证条件：…`。
+- `rationale` 必须使用：`量价：…；事实：…；比较：…；反方/限制：…；验证条件：…`。
 - 若两个判断能被不同 Evidence 独立支持、反驳或更新，必须拆成两条 Claim。例如写「推断：2026Q1收入增长尚未转化为利润弹性」，不要把营收、利润、股价与行业解释堆进一个节点。
 - 证据不足时，宁可添加 Missing；不得用同一研究面的重复 Claim 或无证据的强因果结论凑到 3~5 条。
 - add_claim 返回 `title_check`。若收到过长、数字堆积或多分句警告，应在创建 link 前用 merge(keep_id=<该 Claim>, merge_ids=[], canonical_claim=<更短标题>) 改写为原子化标题；该检查是软警告，不因单条启发式命中而删除合理 Claim。
@@ -226,6 +228,7 @@ AGENTS: dict[str, dict] = {
                        "预测（乐观/中性/悲观）、概率、关键催化、风险窗口。"
                        "适合「接下来会怎么走」「某事件后市如何」类前瞻问题。",
         # 8 个 skill（数据侧全覆盖） + 1 个 post_market_outlook（预测入口）
+        # + Pronoia-RLVR 新增 Tier 2 量价 skill：volume_regime_analyzer
         "skills": [
             "post_market_outlook",   # 预测上下文包：K线+资金+新闻+板块
             "stock_overview",        # 代码解析
@@ -235,6 +238,8 @@ AGENTS: dict[str, dict] = {
             "holder_research",       # 股东动向
             "macro_intel",           # 宏观环境
             "event_study_skill",     # 事件窗口异常收益（CAR）
+            # Tier 2 信号处理（Pronoia-RLVR）：量价 + AR 分解 + 漂移
+            "volume_regime_analyzer", "ar_decomposer", "drift_context_analyzer",
         ],
         "persona": """你是「事件预测员 Predictor」（世界的轻量模型）。你不做历史复盘，专做**前瞻推演**。
 你的工作流：**拉数据 → 想情景 → 标概率 → 列催化 → 给可证伪假设**。
