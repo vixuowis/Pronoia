@@ -26,7 +26,7 @@ RLVR 要补的三板斧：
 
 ---
 
-## 1. 评估集（固定不变）
+## 1. 评估集（固定不变 + 新增 RER/长 horizons 指标）
 
 评估 **只使用 `backtesting/` 目录下已构造好的 1000 条**——也就是 [events_cn_us_1000_v1.jsonl](file:///workspace/backtesting/events_cn_us_1000_v1.jsonl) + [labels_cn_us_1000_v1.jsonl](file:///workspace/backtesting/labels_cn_us_1000_v1.jsonl)，**不再重新生成、不新增样本、不改动字段**：
 
@@ -39,6 +39,40 @@ RLVR 要补的三板斧：
 | 关键口径 | `acc_avg_all_strict`（neutral 也算错） + `acc_avg_all_non_neutral`（非 neutral 才计分） |
 
 **为什么固定不动**：训练集和评估集必须严格时间/分布正交吗？不需要——这里的"同分布"指事件类型和市场比例的**分布一致**，但 event_id 完全不重叠。评估集 1000 条留作唯一 gold standard，后续任何 RLVR/SFT/DPO 版本都在同一份上打分，保证可比。
+
+### 1.1 两个新指标体系：RER（相对事件收益） + 长窗口 T+15/30/60
+
+> **你最新要求的落地**：除了看绝对 CAR（相对基准指数的累计超额），还要看①"这个事件在**同类事件**里是不是相对更赚"——即 **RER = Relative Event Return（相对事件收益）**；②不只看短期 T1/T3/T7，要在 **T+3 / T+7 / T+15 / T+30 / T+60** 五个 horizon 上同时给 ACC / CAR / RER，防止模型过拟合"短期脉冲、长端反转"的假信号。
+
+#### (A) 长 horizons 评估面板：H = {t3, t7, t15, t30, t60}
+
+`labeller.py` [labeller.py:L823](file:///workspace/backend/app/event_backtest/labeller.py#L823) 已在 download 窗口预留 **T+15 / T+30 / T+60** 的 car/ret 列（分别对应约 11 / 22 / 42 个交易日）。**训练**仍按 §2.4 的 primary（t1/t3/t7 之一）给 reward；**评估**则强制在 {t3,t7,t15,t30,t60} 5 栏完整打印 ACC/CAR/RER 三指标，并有**一致性门禁**（见 §5.4）：
+
+- **短期一致性**：primary 对 → 那么 t3 & t7 方向都必须对的样本比例（即旧 dual_window_hit_rate）
+- **长短一致性（新增）**：t7 方向对 → 那么 t30 方向必须对的样本比例（防"T7 脉冲 → T30 回吐"类过拟合）
+
+#### (B) RER（Relative Event Return = 相对事件收益）定义 = 同类事件相对分桶均值的超额 alpha
+
+对每条事件 i、每个 horizon h，在"三维分桶" B(i) = (market, event_type_l2, vol_regime) 内计算：
+
+$$\text{RER}_{i,h} = \text{CAR}_{i,h} - \text{mean}\left(\{\text{CAR}_{j,h}\ \mid\ j \in B(i),\ j \neq i\}\right)$$
+
+- 留一法（leave-one-out）避免把自己包含进去，使"相对收益"有分布意义；分桶 n≤2 时 fallback 成 mean over (market, event_type_l2) 不按 vol_regime 切（防止桶太小均值无意义）。
+- **直观含义**：CAR 衡量"比基准指数多赚多少"；**RER 衡量"比同一市场同一类事件同一个量价 regime 的其他事件多赚/少赚多少"**。比如：一个 CN 财报超预期放量的事件，t7 CAR=+2.5% 看起来不错，但如果同期 70% CN 财报超预期放量事件的 t7 CAR 均值已经有 +3.2%，则 **RER_t7 = -0.7%**——等于"这是个**伪信号**，财报超预期该类别的整体定价已经给足，这个事件相对同类并没有 alpha"，那模型就算方向猜对了，也**不应该拿到高幅度奖励**。
+
+#### (C) events/labels schema 新增字段（只写附加层，不删原字段）
+
+labels.jsonl **每条记录附加**（训练集 + 评估集都有）：
+```json
+{
+  "car_t15":  0.0182, "car_t30": 0.0201, "car_t60": 0.0094,
+  "label_t15": "up",  "label_t30": "up", "label_t60": "up",
+  "rer_t3":   0.0061, "rer_t7": -0.0042, "rer_t15": -0.0071, "rer_t30": -0.0112, "rer_t60": -0.0189,
+  "bucket_id": "CN|earnings_surprise|HI",
+  "bucket_size": 88
+}
+```
+`bucket_id` = market | event_type_l2 | vol_regime；训练/评估代码不需要重新写分桶逻辑，直接读 `rer_tXX` 即可。
 
 ---
 
