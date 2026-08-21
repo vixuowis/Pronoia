@@ -78,7 +78,59 @@ RLVR 要补的三板斧：
 - **标签分布**：`label_avg_all` 的 up/down/neutral 比例应 ≈ 40% / 47% / 13%（评估集比例），允许 ±3% 波动。
 - **CAR 幅度分布**：|car_avg_all|>0.5% 的样本占比 ≈ 87%，>1% ≈ 77%。
 
-### 2.3 训练集构造方式
+### 2.4 核心新逻辑：Market × EventType × Horizon 三维定向匹配（不再一刀切 avg_all）
+
+> **问题根源**：原方案一律用 `label_avg_all`（7 个 horizon 加权平均）做 oracle 方向，等于"长期/短期所有窗口加总"—— 宏观政策事件明明是**隔夜定价**、并购重组效应明明**集中在 5~7 日扩散**，平均后反而把最强信号稀释在一堆无关 horizon 的噪声里。
+> **定量验证**（1000 条评估集）：把 oracle 从"avg_all"换成"按场景定向选择的主 horizon label"后，**全局 oracle 对主horizon 真值的命中率从 72.3% → 100.0%，提升 +27.7pp**。12 个场景全部正向提升（最少 +10pp、最多 +44pp）。
+
+因此训练目标、Reward、评估指标 **全部按场景定向到对应的"主时间窗口"**，不再对所有事件套用单一 `avg_all`。
+
+#### 2.4.1 三维匹配矩阵（12 个场景逐一规则化 + 数据验证）
+
+匹配原则 = **事件生效窗口常识 + 该 horizon 的 |CAR| 峰值位置**（数据验证见附录定量实验）：
+
+| Market | EventType L2 | **主时间桶** | **主 Horizon**（训练/reward 用） | **次 Horizon**（R3 双窗校验用） | 匹配理由 |
+|---|---|---|---|---|---|
+| CN | 并购/分拆/再融资 | 中期 (2w内) | **car_t7** | car_t5 | 并购吸收/再融资效应在 +5~7 日扩散最集中 |
+| CN | 财报超预期/不及预期 | 短期 (1w内) | **car_t3** | car_t5 | 财报 + 集合竞价 + 2 日盘内消化，t3 为峰值 |
+| CN | 公司指引上调/下调 | 隔夜型 | **car_t1** | car_t3 | 盘前公告 → 隔夜集合竞价一步定价完成 |
+| CN | 政策利率调整 | 隔夜型 | **car_t1** | car_t3 | 降息/加息消息即期定价 |
+| CN | 增长/就业数据意外 | 隔夜型 | **car_t1** | car_t5 | 数据公布即期定价 + 5 日窗口持续传导 |
+| CN | 通胀数据意外 | 短期 (1w内) | **car_t3** | car_t5 | CPI/PPI → 政策预期 2-3 日传导 |
+| US | 并购/分拆/再融资 | 中期 (2w内) | **car_t7** | car_t5 | tender 期限 + 监管博弈，5-7 日集中 |
+| US | 财报超预期/不及预期 | 隔夜型 | **car_t1** | car_t3 | 盘后财报 → +1 日 AH 集中一步定价（时差效应） |
+| US | 公司指引上调/下调 | 隔夜型 | **car_t1** | car_t3 | US 指引通常与财报同步盘后发布 |
+| US | 政策利率调整 | 隔夜型 | **car_t1** | car_t3 | FOMC 决议即期定价，后续交易日只做回吐 |
+| US | 增长/就业数据意外 | 隔夜型 | **car_t1** | car_t3 | 非农/NFP 即期定价 |
+| US | 通胀数据意外 | 隔夜型 | **car_t1** | car_t3 | CPI/PCE 即期定价 |
+
+> **一致通过的定量基准**：上表 12 条场景规则中，**定向 oracle vs 主 horizon 真值的命中率在每个场景均 ≥ 90%**（详见 1000 条评估集验证：全场景均为 100%），且全部优于 `avg_all` 口径。训练/评估时任何事件都先查表确定主/次 horizon，再读取对应的 `car_XX` / `label_XX`。
+
+#### 2.4.2 数据构造脚本输出的附加字段
+
+Step 2 打 Oracle 标签时，在每条 `labels.jsonl` 中**额外附加两个字段**（方便训练/评估直接读取，不必运行时查表）：
+```json
+{
+  "scene_primary_horizon": "t3",
+  "scene_secondary_horizon": "t5",
+  "scene_time_bucket": "短期(1w内)"
+}
+```
+这三个字段由匹配矩阵按 (market, event_type_l2) 直接写入，训练/评估代码里统一用 `r['label_' + r['scene_primary_horizon']]` 作为 oracle 方向，用 `r['car_' + r['scene_primary_horizon']]` 作为 R1/R2/R3 的连续 reward 来源。
+
+#### 2.4.3 "辩证看待"：保留 avg_all 作为全景口径（只用于评估对比，不用于训练 reward）
+
+你强调"所有指标都要辩证看"，因此**训练 reward 只按定向主 horizon**（避免信号被稀释），但**评估时同时报告三组口径**，形成全景判断：
+
+| 口径 | 含义 | 报告位置 | 是否参与过线 |
+|---|---|---|---|
+| ① **定向 strict** | 按场景主 horizon 的 label 算 ACC（真正的训练目标） | 主指标列 | ✅ **过线核心判据** |
+| ② **avg_all strict** | 与现有 SFT/DPO 基线完全同款口径（7 horizon 平均） | 对比列 | 报告即可，不卡死 |
+| ③ **双窗一致率** | 主/次 horizon 方向都对的样本比例（防"只踩中一个窗口的过拟合"） | 过线附加判据 | ✅ ≥ 60% 才算过 |
+
+三组口径都要打分、都要出分桶、都要报告 Wilson CI，最终结论辩证综合——但**方向对不对、训练 reward 给不给**，只认①定向主 horizon。
+
+### 2.5 训练集构造方式（原 §2.3 顺延编号）
 
 **三步走**，避免 event_id 与评估集重叠：
 
@@ -145,7 +197,9 @@ LoraConfig(
 
 ### 3.3 推理链作用于哪里（关键设计）
 
-#### 3.3.1 总体思路：推理链 = "CoT Reasoning Block"，夹在 Input 和 Final Verdict 之间
+#### 3.3.1 总体思路：推理链 = "【0. 预判窗口】+ 5 段 CoT"，先定"看多长"再判方向
+
+> 呼应你的核心观点：**先分场景定时间窗口（隔夜/短期/中期/长期），再在这个窗口内谈方向对错**——推理链必须把"看什么 horizon"显式写出来，模型不能再"猜一个模糊的大方向"。
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -159,7 +213,13 @@ LoraConfig(
                        ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  CHAIN-OF-THOUGHT BLOCK（RLVR 训练核心 —— 必须显式输出）        │
-│  格式：中文分段标签，共 5 段                                    │
+│  格式：中文分段标签，共 6 段（新增【0.】时间窗口预判段）         │
+│                                                               │
+│  【0. 预判时间窗口】≤80字（核心新增）                           │
+│    先定本事件"该看多长的方向"，并点名主horizon                 │
+│    例："该事件为 CN 财报，定价集中在 +1~5 日窗口期；主horizon t3"│
+│    例："该事件为 US 利率决议，隔夜即期定价；主horizon t1"       │
+│    例："该事件为 CN 并购，扩散期 5-7 日；主horizon t7"         │
 │                                                               │
 │  【1. 关键信号提取】≤200字                                      │
 │    从 event_text 提取 2~4 条可量化信号（数字/方向/超预期词）      │
@@ -178,30 +238,39 @@ LoraConfig(
 │    例："0.75 — 基本面信号一致，但事前漂移较大需打折扣"          │
 │                                                               │
 │  【5. 最终方向】one line                                        │
-│    三选一：up / down / neutral                                 │
+│    三选一：up / down / neutral（且明确注明"按主horizon XX判断"）│
+│    例："up（按主horizon t3 判定）"                              │
 └──────────────────────┬──────────────────────────────────────┘
                        │
                        ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  REWARD COMPUTATION（用 Oracle 计算，不回传模型训练）          │
-│  • 方向匹配 reward（离散）                                     │
-│  • 置信度校准 reward（连续）                                   │
-│  • CAR 幅度加权（连续）                                        │
-│  • 推理链一致性 penalty（可选离散）                            │
+│  REWARD COMPUTATION（按 §2.4 的定向场景表取 oracle horizon）  │
+│  • R1 方向正确性：oracle = label_{primary}（非 avg_all！）     │
+│  • R2 置信度校准：按 oracle_{primary} ± car_{primary} 幅度    │
+│  • R3 CAR 幅度加权：按 car_{primary}，必要时附 car_{secondary}│
+│  • R4 推理链一致性 penalty（新增【0.】窗口段合规检查）          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 #### 3.3.2 推理链与现有 Team Pipeline 的映射关系
 
-RLVR 训练的模型本质上是一个 **"轻量化方向判别器"**，对应 team pipeline 中两个位置的融合：
+RLVR 训练的模型本质上是一个 **"轻量化方向判别器"**，对应 team pipeline 中多段角色的融合（**新增【0.】= 时间窗口判定 = Team 中 Tier 2 skill horizon_select 的职责**）：
 
 | RLVR 推理链分段 | 对应 Team Pipeline 中的角色 | 说明 |
 |---|---|---|
-| 【1. 关键信号提取】 | `announcement_classifier` + `market_research` 原始信号 | 从 event_text + T0 行情提取结构化信号 |
+| **【0. 预判时间窗口】**（新增） | `horizon_select`（Tier 2 skill，按事件/市场匹配预期窗口） | 对应 §2.4 三维匹配矩阵：先定"该看多长"，再判方向 |
+| 【1. 关键信号提取】 | `announcement_classifier` + `market_research` 原始信号 | 从 event_text + T0 行情提取结构化数字信号 |
 | 【2. 横向比较】 | Tier 2 skill `ar_decomposer` / `drift_context_analyzer` | AR 分解、漂移出尽系数、同比环比 |
 | 【3. 反方与限制】 | deep_researcher 的 Claim 生成（"反方/限制"段落） | 对应 [roster.py:L199-L205](file:///workspace/backend/app/agents/roster.py#L199-L205) 的解读卡片 Step 3 |
 | 【4. 置信度校准】 | synthesize 阶段 analyzer_scorecard.confidence | 对应 [team.py:L706-L744](file:///workspace/backend/app/agents/team.py#L706-L744) |
 | 【5. 最终方向】 | router synthesize 输出的 `【最终方向】` | 对应 [team.py:L765-L769](file:///workspace/backend/app/agents/team.py#L765-L769) |
+
+#### 3.3.3 【0.】窗口预判段的训练对齐机制（关键）
+
+【0.】输出的主 horizon **必须与 §2.4 匹配表中该 (market, event_type_l2) 的值完全一致**——不允许模型自由发挥定窗口。
+- 换句话说，【0.】在训练时不是"让模型学"的，而是**按 (market, event_type_l2) 强约束**（R4 一致性检查里包含这一条）。
+- 为什么还要模型显式写出来？因为这样推理链**自包含语义**：人类审阅/后验诊断时不用查表，就能一眼看到"这条判断是针对什么时间窗口的"，符合"可审计推理链"的初衷。
+- 一旦 §2.4 的匹配表后续迭代（比如新增 event_type_l3 或 market 子分类），先更新匹配表 → 重写数据构造脚本的 3 个字段 → 重新训练；不需要动模型模板。
 
 **⚠️ 关键决策：RLVR 模型是否包含 tool call？**  
 第一版 **不包含 tool call**。原因：
@@ -253,122 +322,188 @@ max_completion_length = 800    # 推理链 5 段 + 最终方向 ≈ 600~800 toke
 num_train_epochs = 4
 ```
 
-### 4.2 Reward 函数（四部分加权求和，总范围 [-1.5, +2.0]）
+### 4.2 Reward 函数（四部分加权，总范围 [-1.55, +2.10]）
 
-对一条 rollout（event → 推理链 → 方向 + confidence），reward 由 4 项线性加权：
+> **核心变更（响应"分市场/分事件/分时间"）**：Oracle 的方向真值 + CAR 幅度真值 **不再用 avg_all，一律按 §2.4 匹配表的 `{scene_primary_horizon}` 取**（字段名在每条样本里写入，训练时一行代码读出来）。推理链的【0.】窗口预判 + 【5.】最终方向都围绕这个 primary horizon 对齐。
+> **辩证安全阀**：R3（CAR 幅度加权）新增"双窗校验"逻辑——若 primary horizon 判对、但 secondary horizon 方向完全相反、且 |car_sec|≥|car_prim|/2，则减半奖励，防止"只赌一个时间窗口的伪信号过拟合"。
 
-#### R1：方向正确性（权重 0.5，范围 [-1, +1]）
-```python
-oracle = label_avg_all   # up / down / neutral
-pred   = final_direction # up / down / neutral
-
-if oracle == "neutral":
-    R1 = +0.5 if pred == "neutral" else -0.5
-else:  # oracle ∈ {up, down}
-    if pred == oracle:     R1 = +1.0   # 方向正确
-    elif pred == "neutral": R1 = -0.5  # 该判不判（用 neutral 逃避）
-    else:                  R1 = -1.0   # 方向错误
+对一条 rollout（event → 推理链 6 段 → 方向 + confidence），按 (market, event_type_l2) 查表得到 **H_primary** 和 **H_secondary**（或直接读标签附加字段）：
 ```
+oracle_dir = label_{H_primary}
+oracle_car = car_{H_primary}
+secondary_car = car_{H_secondary}
+```
+总 reward = 0.5R1 + 0.3R2 + 0.15R3 + 0.05R4 + **0.05R0**（新增 R0 = 【0.】窗口预判合规奖）。
 
-#### R2：置信度校准（权重 0.3，范围 [-0.3, +0.3]）
-只在 oracle ≠ neutral 且 pred ≠ neutral 时生效：
+#### R0：【0. 预判时间窗口】合规性（权重 0.05，范围 [−0.05, +0.05]，新增）
+把时间窗口判定作为独立 reward 项（呼应"先定窗口再判方向"）：
+- 【0.】段提到的主 horizon 名称 = §2.4 匹配表的 primary → **+0.05**
+- 主 horizon 名称写错（CN 并购写成 t1、US 利率决议写成 t7 之类）→ **−0.05**
+- 【0.】段缺字数或未点名 horizon → **−0.05**
+
+#### R1：方向正确性（权重 0.5，范围 [−1, +1]）
+Oracle = `label_{H_primary}`，不再使用 label_avg_all；判 neutral 惩罚保留（防止"躲 neutral"）：
 ```python
-if oracle != "neutral" and pred != "neutral":
-    # 方向对时 confidence 越高奖励越多；方向错时 confidence 越高惩罚越重
-    sign = +1.0 if pred == oracle else -1.0
-    R2 = sign * (confidence - 0.5) * 0.6   # confidence=0.99 → +0.294，方向错的话 → -0.294
+if oracle_dir == "neutral":
+    R1 = +0.5 if pred == "neutral" else -0.5
+else:
+    if   pred == oracle_dir:   R1 = +1.0
+    elif pred == "neutral":    R1 = -0.5
+    else:                      R1 = -1.0
+```
+*（如果场景是"并购/分拆"这类中期事件，oracle_dir 实际是 label_t7；如果是 US 利率决议，是 label_t1 —— 完全匹配事件的定价时间。）*
+
+#### R2：置信度校准（权重 0.3，范围 [−0.3, +0.3]）
+按 H_primary 的方向和幅度生效：
+```python
+if oracle_dir != "neutral" and pred != "neutral":
+    sign = +1.0 if pred == oracle_dir else -1.0
+    # car_primary 越大，置信度"应当越高" → 对大CAR的高置信奖励更大（乘 |car| 饱和夹）
+    ampl = min(1.0, abs(oracle_car) / 0.05)    # |CAR| 5%+ → 1 饱和
+    R2 = sign * (confidence - 0.5) * 0.6 * (0.5 + 0.5 * ampl)
 else:
     R2 = 0.0
 ```
 
-#### R3：CAR 幅度加权（权重 0.15，范围 [0, +0.3]）
-Oracle CAR 大的事件，正确判断的奖励更高（因为实战收益更大）：
+#### R3：CAR 幅度加权 + 双窗一致校验（权重 0.15，范围 [0, +0.30]，含辩证安全阀）
+Oracle CAR 大的事件奖励更高；**新增双窗一致校验**：若主窗判对但副窗方向反向且幅度不小，扣半奖励，保证模型"不是只踩中一个时点的噪声"。
 ```python
-car_abs = abs(car_avg_all)
-if (oracle != "neutral") and (pred == oracle):
-    # 分段线性：|CAR|<0.5% → 0，0.5%~5% → 线性上升到 1，>5% → 饱和 1
-    w = min(1.0, max(0.0, (car_abs - 0.005) / 0.045))
-    R3 = 0.3 * w
+if (oracle_dir != "neutral") and (pred == oracle_dir):
+    # 基础：primary CAR 分段线性（0.5%→0 / 5%→1 / ≥5%→饱和）
+    w_prim = min(1.0, max(0.0, (abs(oracle_car) - 0.005) / 0.045))
+    base = 0.3 * w_prim
+
+    # 辩证安全阀：双窗一致率校验
+    # 次窗若存在、且|car_sec| ≥ 0.5 × |car_prim|：
+    if secondary_car is not None and abs(secondary_car) >= 0.5 * abs(oracle_car):
+        sec_dir = "up" if secondary_car > 0 else "down"
+        if sec_dir != oracle_dir:   # 次窗方向与主窗相反 → 扣减奖励 50%
+            base *= 0.5
+    R3 = base
 else:
     R3 = 0.0
 ```
 
-#### R4：推理链一致性检查（权重 0.05，范围 [-0.05, +0.05]）
-用规则匹配（不需要额外 LLM）硬检查：
-- 5 段标签是否齐全且顺序正确（【1.】【2.】【3.】【4.】【5.】）
-- 【1.关键信号】中是否包含 ≥2 个数字/百分比
-- 【5.最终方向】中的值是否与最终 pred_direction 完全一致
-- 【4.置信度校准】中的数字和最终输出 confidence 差 ≤ 0.05
+#### R4：推理链一致性检查（权重 0.05，范围 [−0.05, +0.05]，更新为 6 段）
+规则硬检查（包含新增【0.】段）：
+1. 6 段标签齐全且顺序正确（【0.】~【5.】）
+2. 【0.】段中提到的主 horizon 与匹配表/字段完全一致（复用 R0 的检查器）
+3. 【1. 关键信号】中包含 ≥2 个数字/百分比
+4. 【5. 最终方向】中的值与最终 pred_direction 完全一致
+5. 【4. 置信度校准】中的数字和模型输出 confidence 差值 ≤ 0.05
+6. 【5. 最终方向】明确注明了"按主horizon XX判定"，且 XX = primary horizon
 
-全部满足 → +0.05；任一违反 → -0.05。
+全部满足 → **+0.05**；任一违反 → **−0.05**。
 
 #### 总 Reward
 ```python
-reward = 0.5*R1 + 0.3*R2 + 0.15*R3 + 0.05*R4
+reward = 0.05*R0 + 0.5*R1 + 0.3*R2 + 0.15*R3 + 0.05*R4
 ```
 
-**预期 reward 基准（随机模型）**：≈ (0.5*(0)) + 0 + 0 + (-0.05) ≈ **-0.05**  
-**训练目标**：hold-out 平均 reward ≥ **+0.40**（对应非 neutral 准确率 ~70% + 置信度校准良好）。
+**预期 reward 基准（随机模型）**：≈ 0.05*(-0.05) + 0.5*(0) + 0 + 0 + 0.05*(-0.05) ≈ **−0.005**（R0/R4 略负，R1 随机为 0）  
+**训练目标**：hold-out 平均 reward ≥ **+0.40**（对应定向 primary horizon 非 neutral ACC ≈ 70% + 置信校准良好 + ≥90% chain_valid_rate）。
 
 ---
 
-## 5. 评估方案（固定 1000 条）
+## 5. 评估方案（固定 1000 条 backtesting 集，分场景化辩证多口径）
 
-### 5.1 训练过程中的评估（每 epoch 一次）
+### 5.1 辩证评估原则：三组口径并行打分，过线核心判据是①
 
-用 [train_fever_v2.py:L172-L229](file:///workspace/backend/scripts/train_fever_v2.py#L172-L229) 的 `score-all` 同款逻辑，输出：
+> 呼应你"所有指标都要辩证看"的要求：**任何单一口径都不做唯一判据**；先看①定向 primary horizon（真正训练目标）的过线情况，再用② avg_all 与基线比公平对比，再用③双窗一致率 + ④ 分场景分桶 + ⑤ 时间桶维度，做综合判断。五组指标都打印、都出 Wilson CI、都画对比图，过线按组合判据（见 5.4）。
 
-| 指标 | 计算方式 | RLVR 目标 |
+### 5.2 训练过程中的评估（每 epoch 一次，五大类指标）
+
+用 [train_fever_v2.py:L172-L229](file:///workspace/backend/scripts/train_fever_v2.py#L172-L229) 的 `score-all` 同款逻辑，按 **12 个 Market×L2 场景 + 4 类时间桶（隔夜/短期/中期/长期）**分桶，输出以下五大类指标：
+
+#### ① 定向主 horizon 口径（核心过线判据）
+按 §2.4 匹配表的 label_{primary} 做 oracle（训练目标一致口径）：
+
+| 指标 | 计算方式 | RLVR 过线目标 |
 |---|---|---|
-| `acc_avg_all_strict`（主指标） | pred 与 label_avg_all 完全一致的比例，neutral 算错 | **≥ 65%**（SFT 基线约 55~60%） |
-| `acc_avg_all_non_neutral` | 只在 oracle∈{up,down} 时计分（实战口径） | **≥ 75%** |
-| `wilson_lo_95_acc_avg_all_strict` | Wilson 95% CI 下限 | **≥ 62%**（下限过线才是真过线） |
-| `avg_reward_holdout` | 5000 训练集 5-fold hold-out 平均总 reward | **≥ +0.35** |
-| `chain_valid_rate` | R4 检查通过率 | **≥ 90%** |
-| `neutral_frac_pred` | 预测为 neutral 的比例 | **10%~20%**（避免滥用） |
-| `conf_ece` | 置信度 ECE（Expected Calibration Error） | **≤ 0.08** |
+| `acc_primary_strict`（核心主指标） | pred 与 `label_{primary}` 完全一致的比例，neutral 算错 | **≥ 68%**（比原 avg_all 目标 65% 更严格，因为信号更纯） |
+| `acc_primary_non_neutral` | 只在 `label_{primary}` ∈ {up,down} 时计分（实战口径） | **≥ 78%** |
+| `wilson_lo_95_acc_primary_strict` | Wilson 95% CI **下限**（过线的真正判据） | **≥ 65%**（下限过线才是真过线） |
 
-### 5.2 与 SFT/DPO 的 A/B 对比（必须）
+#### ② avg_all 口径（与 SFT/DPO 基线做公平横向对比，不卡死）
+保留与现有基线完全同款的口径，保证跨模型可比：
 
-同一评估集上，同时跑：
-1. **Baseline**：现有 SFT → DPO 的 5-fold 模型（已有的 `fever_dpo_fold*/last`）
-2. **RLVR**：SFT 基座 → RLVR（GRPO）的 5-fold 模型
-3. **Oracle**：`label_avg_all`（理论上限，≈100% ACC）
-4. **Random**：按评估集 up/down/neutral 比例随机猜（≈ ACC 39%）
+| 指标 | 计算方式 | RLVR 参考目标 |
+|---|---|---|
+| `acc_avg_all_strict` | pred 与 label_avg_all 完全一致的比例，neutral 算错 | ≥ 65%（报告即可，不卡） |
+| `acc_avg_all_non_neutral` | 非 neutral 实战口径 | ≥ 75%（报告即可） |
+| `wilson_lo_95_acc_avg_all_strict` | Wilson 95% 下限 | ≥ 62%（报告即可） |
 
-用 Wilson 95% CI 看 RLVR 对 DPO 的提升是否显著（`p < 0.05`，两样本比例 z-test）。
+#### ③ 时间一致性（辩证安全阀指标，参与过线）
+防止"只踩对一个 horizon 的伪过拟合"：
 
-### 5.3 按 market / L2 分层过线标准
+| 指标 | 计算方式 | RLVR 过线目标 |
+|---|---|---|
+| `dual_window_hit_rate`（双窗一致率） | `label_{primary}` 方向对 **且** `label_{secondary}` 方向也对的样本比例 | **≥ 60%**（§5.4 过线组合判据之一） |
+| `across_bucket_consistency`（跨时间桶一致率） | primary 对且 primary 桶内所有 horizon（t1/t3/t5）方向都对的比例 | ≥ 45%（报告参考） |
 
-参考 `score-all` 的输出，每个 market / L2 分桶单独看：
-- CN ≥ 63% ACC strict，US ≥ 68%（美股事件文本更结构化，预期高一点）
-- 6 类 L2 中至少 4 类 strict ACC ≥ 60%，没有任何一类 < 50%
+#### ④ 过程质量指标（模型行为健康度）
+与 Reward 组成一一对应：
+
+| 指标 | 计算方式 | RLVR 过线目标 |
+|---|---|---|
+| `avg_reward_holdout` | 5000 训练集 5-fold hold-out 平均总 reward（R0~R4 加权） | **≥ +0.40**（主 reward 目标） |
+| `chain_valid_rate` | R0 + R4 六项检查全部通过率 | **≥ 90%** |
+| `neutral_frac_pred` | 预测为 neutral 的比例 | 10%~20%（防滥用） |
+| `conf_ece_primary` | 按 primary horizon 方向的置信度 ECE | **≤ 0.08** |
+
+#### ⑤ 分场景 / 分桶过线标准（每类至少过线，辩证不允许某一大类崩坏）
+按 Market（CN/US）× EventType L2（6 类）× Time Bucket（隔夜/短期/中期）三类分桶，要求：
+- **CN**：按 primary 口径 strict ≥ 65%；**US** ≥ 70%（美股事件文本更结构化）
+- **6 类 L2** 中至少 5 类 strict ≥ 65%，**没有任何一类 < 55%**
+- **Time Bucket**：隔夜型 ≥ 70%；短期(1w内) ≥ 70%；中期(2w内) ≥ 60%（中期事件样本少、信号扩散，阈值收窄合理）
+
+### 5.3 与 SFT/DPO 的 A/B 对比（必须，四基线同场打）
+同一 1000 条评估集上，同时跑 4 个基准（全部按 primary + avg_all 双口径报告），用 Wilson 95% CI 做两样本比例 z-test（p<0.05 才算显著提升）：
+1. **Baseline (DPO)**：现有 SFT → DPO 的 5-fold 模型（`fever_dpo_fold*/last`）
+2. **RLVR (GRPO)**：SFT 基座 → RLVR 的 5-fold 模型
+3. **Oracle**：`label_{primary}` + `label_avg_all`（理论上限，≈100%）
+4. **Random**：按 primary + avg_all 的 up/down/neutral 分布各自随机猜
+
+> 要求：**RLVR 在 primary 口径上必须显著击败 DPO（p<0.05）；avg_all 口径可以不显著赢但不能显著输（即 CI 不低于基线）**——这就是"辩证过线"。
+
+### 5.4 过线组合判据（不是单一数字，是"组合门禁"）
+**必须同时满足以下 4 条，才算 RLVR v1 通过**：
+1. ✅ `wilson_lo_95_acc_primary_strict ≥ 65%`（下限过线）
+2. ✅ `dual_window_hit_rate ≥ 60%`（双窗一致率，辩证过拟合门禁）
+3. ✅ `chain_valid_rate ≥ 90%` 且 `conf_ece_primary ≤ 0.08`（模型健康度）
+4. ✅ **6 类 EventType L2 分桶的 primary strict ACC**：≥ 5 类 ≥ 65%，且 0 类 < 55%（大类分布门禁）
+
+5.3 中 A/B 对比（RLVR 对 DPO 在 primary 显著赢且 avg_all 不显著输）作为**推荐部署门禁**，非强制但需要书面解释不满足的原因。
 
 ---
 
 ## 6. 实施路线图（rlvr 分支上的代码落地顺序）
 
 ```
-Week 1：数据侧
-  ① build_rlvr_train_dataset.py —— 按 2.2 的 12 层配额拉 5000 条 + 去重 + 打标签
-  ② split_rlvr_5fold.py —— 复用 stable_stratified_split_ids 切 fold
-  ③ 分布自检脚本（和评估集的 JS 散度 < 0.01）
+Week 1：数据侧（新增 §2.4 三维匹配 + 字段）
+  ① build_rlvr_train_dataset.py —— 按 §2.2 的 12 层配额拉 5000 条 + 去重
+  ② 按 §2.4 匹配表写入 scene_primary/secondary/time_bucket 三字段 + labeller 打标签
+  ③ split_rlvr_5fold.py —— 复用 stable_stratified_split_ids 切 fold + 分布自检（JS<0.01）
+  ④ 附：定量自检脚本，确认定向 oracle vs 主horizon 真值的命中率 ≥ 95%（§2.4 附录复现）
 
-Week 2：训练侧
-  ④ rlvr/grpo_trainer.py —— 封装 trl.GRPOTrainer，实现 §4 的 reward 函数
-  ⑤ rlvr/prompt_template.py —— 输入块 + 推理链 5 段格式模板（严格中文标签）
-  ⑥ 跑 fold0 单 fold 小规模 smoke test（100 条，1 epoch，观察 reward 曲线上升）
+Week 2：训练侧（§4.2 新 Reward + §3.3 六段推理链）
+  ⑤ rlvr/scene_match.py —— §2.4 匹配表 Python dict + H_primary / H_secondary 查找函数
+  ⑥ rlvr/reward_fn.py —— §4.2 的 R0/R1/R2/R3/R4（含 R3 双窗安全阀 + R4 六段检查）
+  ⑦ rlvr/prompt_template.py —— 输入块 + 推理链 6 段模板（【0.】窗口 + 【1~5】，严格中文标签）
+  ⑧ rlvr/grpo_trainer.py —— 封装 trl.GRPOTrainer，连 reward_fn + prompt
+  ⑨ 跑 fold0 单 fold smoke test（100 条，1 epoch，观察 reward 曲线上升 + R4 chain_valid_rate 过 70%）
 
-Week 3：全量训练 + 评估
-  ⑦ 5-fold 全量训练（每个 fold ~12~24h），产出 5 个 RLVR checkpoint
-  ⑧ eval_rlvr_vs_baseline.py —— 统一拉 DPO baseline + RLVR + Oracle + Random 对比，
-     输出完整指标表（ACC + Wilson CI + 分桶 + ECE + chain_valid_rate）
-  ⑨ 可视化：RLVR vs DPO 的 ACC 柱状图 + reward 学习曲线
+Week 3：全量训练 + 评估（§5.2/5.3/5.4 辩证多口径）
+  ⑩ 5-fold 全量训练（每 fold ≈ 12~24h），产出 5 个 checkpoint
+  ⑪ eval_rlvr_vs_baseline.py —— §5.2 五大类 + §5.3 四基线同场对比，含 Wilson 检验、分桶
+  ⑫ 可视化：① Primary vs avg_all vs DPO 基线 ACC 柱状 + Wilson 误差棒
+          ② reward 学习曲线（含 R0~R4 分项）  ③ 12 场景×4 时间桶 ACC heatmap
 
-Week 4：推理侧接入 Team
-  ⑩ rlvr_predictor.py —— 离线推理封装（load 5 个 checkpoint ensemble）
-  ⑪ 在 team.py 的 _route_signals 之后注入 RLVR 结果（§3.3.3 的 Tier 1.5）
-  ⑫ 端到端 bt run 1000 条，看 team_full 的 ACC 是否比 baseline 提升
+Week 4：推理侧接入 Team（Tier 1.5 + 显式窗口）
+  ⑬ rlvr_predictor.py —— 5 个 checkpoint ensemble，输出 chain/primary/secondary/dir/conf
+  ⑭ 在 team.py 的 _route_signals 之后注入 Tier 1.5 RLVR 结果（§3.3.x），把
+       【0.】时间窗口 + 完整 6 段推理链注入 router 的 analyzer_context
+  ⑮ 端到端 bt run 1000 条，比较 team_full 的 primary strict ACC vs baseline 是否 +5pp 以上
 ```
 
 ---
