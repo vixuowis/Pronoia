@@ -1,4 +1,5 @@
-# RLVR 后训练方案设计 v1（2026-08-22）
+# Pronoia RLVR 后训练方案设计 v1（2026-08-22）
+> 品牌说明：原 FEVER 系列统一重命名为 **Pronoia**（Pronoia = "先见之明，提前洞悉市场定价"），后缀 -RLVR / -MS 分别指代后训练单体方案 / 多尺度 MoE v2。
 
 > 分支：`rlvr`（已创建自 `main`）  
 > 目标：用 **RL from Verifiable Reward**（基于真实市场 CAR 的可验证奖励信号）替代/增强纯 SFT+DPO，让方向判别模型直接对最终正确的前瞻判断负责，并在输出中保留结构化推理链。
@@ -7,7 +8,7 @@
 
 ## 0. 背景与定位
 
-现有训练脚手架（[train_fever_v2.py](file:///workspace/backend/scripts/train_fever_v2.py)）已打通：
+现有训练脚手架（[train_pronoia_v2.py](file:///workspace/backend/scripts/train_pronoia_v2.py)，原 train_fever_v2.py）已打通：
 
 ```
 SFT（模仿 Oracle 方向标签）→ DPO（偏好排序） → 5-fold hold-out → ACC + Wilson CI
@@ -154,7 +155,7 @@ data/rlvr_train_v1_5000/
 └── distribution.json  # 分布自检报告（market/L2/年月/标签/CAR分位数）
 ```
 
-并复用 [train_fever_v2.py:L48-L88](file:///workspace/backend/scripts/train_fever_v2.py#L48-L88) 的 `stable_stratified_split_ids` 做 5-fold split（按 market×L2×ym 分层），产出：
+并复用 [train_pronoia_v2.py:L48-L88](file:///workspace/backend/scripts/train_pronoia_v2.py#L48-L88) 的 `stable_stratified_split_ids` 做 5-fold split（按 market×L2×ym 分层），产出：
 ```
 data/_rlvr_artifacts_v1/folds_rlvr_5000/
 ├── fold0/ (sft_train.jsonl, rlvr_train.jsonl, sft_test.jsonl, ids.json)
@@ -176,7 +177,7 @@ data/_rlvr_artifacts_v1/folds_rlvr_5000/
 
 **为什么选 Qwen3-8B**：
 - **中文金融语料覆盖更好**：Qwen3 在 A 股公告、政策文件、研报类中文文本上的分词/语义理解显著优于 Llama-3.1，正好匹配本任务 70% CN 样本的分布。
-- **复用现有管线**：现有 SFT 脚手架 [train_fever_v2.py:L143-L144](file:///workspace/backend/scripts/train_fever_v2.py#L143-L144) 的 LoRA r=16 配置、trl/peft 接口完全兼容，只改 `model_name` 一行。RLVR 阶段直接加载 SFT 的 LoRA 做 warm start。
+- **复用现有管线**：现有 SFT 脚手架 [train_pronoia_v2.py:L143-L144](file:///workspace/backend/scripts/train_pronoia_v2.py#L143-L144) 的 LoRA r=16 配置、trl/peft 接口完全兼容，只改 `model_name` 一行。RLVR 阶段直接加载 SFT 的 LoRA 做 warm start。
 - **长上下文足够**：推理链 5 段 + 最终方向 ≈ 600~800 tokens，加上 input block 1500 tokens，总 seq ≤ 2048，Qwen3-8B 128k ctx 轻松容纳。
 - **主要瓶颈不在参数量**：rollout 采样（4 条/event）+ reward 计算的 batch 吞吐是 GRPO 训练的真正瓶颈，8B vs 72B 差异在模型能力而非速度。
 
@@ -413,7 +414,7 @@ reward = 0.05*R0 + 0.5*R1 + 0.3*R2 + 0.15*R3 + 0.05*R4
 
 ### 5.2 训练过程中的评估（每 epoch 一次，五大类指标）
 
-用 [train_fever_v2.py:L172-L229](file:///workspace/backend/scripts/train_fever_v2.py#L172-L229) 的 `score-all` 同款逻辑，按 **12 个 Market×L2 场景 + 4 类时间桶（隔夜/短期/中期/长期）**分桶，输出以下五大类指标：
+用 [train_pronoia_v2.py:L172-L229](file:///workspace/backend/scripts/train_pronoia_v2.py#L172-L229) 的 `score-all` 同款逻辑，按 **12 个 Market×L2 场景 + 4 类时间桶（隔夜/短期/中期/长期）**分桶，输出以下五大类指标：
 
 #### ① 定向主 horizon 口径（核心过线判据）
 按 §2.4 匹配表的 label_{primary} 做 oracle（训练目标一致口径）：
@@ -459,7 +460,7 @@ reward = 0.05*R0 + 0.5*R1 + 0.3*R2 + 0.15*R3 + 0.05*R4
 
 ### 5.3 与 SFT/DPO 的 A/B 对比（必须，四基线同场打）
 同一 1000 条评估集上，同时跑 4 个基准（全部按 primary + avg_all 双口径报告），用 Wilson 95% CI 做两样本比例 z-test（p<0.05 才算显著提升）：
-1. **Baseline (DPO)**：现有 SFT → DPO 的 5-fold 模型（`fever_dpo_fold*/last`）
+1. **Baseline (DPO)**：现有 SFT → DPO 的 5-fold 模型（`pronoia_dpo_fold*/last`，原 fever_dpo）
 2. **RLVR (GRPO)**：SFT 基座 → RLVR 的 5-fold 模型
 3. **Oracle**：`label_{primary}` + `label_avg_all`（理论上限，≈100%）
 4. **Random**：按 primary + avg_all 的 up/down/neutral 分布各自随机猜
@@ -520,14 +521,14 @@ Week 4：推理侧接入 Team（Tier 1.5 + 显式窗口）
 
 ---
 
-## 附录 A：FEVER-MS 升级方向（频率 × 时效 × 量价 × MoE LoRA + RFT，简洁 elegant 架构）
+## 附录 A：Pronoia-MS 升级方向（频率 × 时效 × 量价 × MoE LoRA + RFT，简洁 elegant 架构）
 
-> **定位**：本附录把你在 FEVER-MS wiki 里的 MoE + Volume 多尺度思考，**向下兼容** §2~§6 的 RLVR v1 单体方案，作为 v2 升级蓝图。设计原则：**(a) 不引入新的基座模型、不搞独立的数值模型大工程**（复用 Qwen3-8B 基座 + 可解释的 4 维量价特征）；(b) MoE 只在 LoRA 层做、gating 只用 3 个信号（尺度能量比 + Volume regime + 场景标签），不搞训练成本爆炸的 learned-token router；(c) 训练顺序是"先 RFT 每个专家 → 再 GRPO 整端 MoE"，训练与推理都保持 O(1) 路由开销。
+> **定位**：本附录把你在 Pronoia-MS wiki（原 FEVER-MS wiki）里的 MoE + Volume 多尺度思考，**向下兼容** §2~§6 的 Pronoia-RLVR v1 单体方案，作为 v2 升级蓝图。设计原则：**(a) 不引入新的基座模型、不搞独立的数值模型大工程**（复用 Qwen3-8B 基座 + 可解释的 4 维量价特征）；(b) MoE 只在 LoRA 层做、gating 只用 3 个信号（尺度能量比 + Volume regime + 场景标签），不搞训练成本爆炸的 learned-token router；(c) 训练顺序是"先 RFT 每个专家 → 再 GRPO 整端 MoE"，训练与推理都保持 O(1) 路由开销。
 
 ### A.1 核心思想：先把事件分配给"擅长该市场/该时效/该 regime"的专家，再统一出方向
 
-原 RLVR v1 是**单体 LoRA**：用同一组权重对"US 隔夜利率决议"和"CN 中期并购"都做方向预测，模型权重互相打架、时间信号互相平均。  
-**FEVER-MS v2 = 单体基座 + K 个场景专家 LoRA + 可解释轻量 Router（无训练参数）**：
+原 Pronoia-RLVR v1 是**单体 LoRA**：用同一组权重对"US 隔夜利率决议"和"CN 中期并购"都做方向预测，模型权重互相打架、时间信号互相平均。  
+**Pronoia-MS v2 = 单体基座 + K 个场景专家 LoRA + 可解释轻量 Router（无训练参数）**：
 - K=6 个专家，每个专家只在自己擅长的分布上做**RFT（拒绝采样微调）**，不做跨分布训练。
 - Router 只看 3 个 O(1) 信号：`(market×event_type_l2 场景标签)` + `(Volume regime 三分类)` + `(price 尺度能量比 H/L)`，用一张**查表 + 平滑 softmax**搞定，不需要在 decoder 里塞 LoRA gating。
 
@@ -580,7 +581,7 @@ vol_regime = "HI"  if vol_t0_ratio >= 1.5 else \
 
 ### A.4 Router：3 信号查表 + 归一化加权，O(1)，**无训练参数**（Elegant 核心）
 
-Router 是 FEVER-MS 避免复杂的关键——**不搞学习的 token router（如 MixLoRA/Switch-Transformer 那种带 router weights 的路由）**，直接用 3 个 O(1) 信号做查表 + Dirichlet 平滑 softmax，路由权重在推理/训练 reward 时一致可复现：
+Router 是 Pronoia-MS 避免复杂的关键——**不搞学习的 token router（如 MixLoRA/Switch-Transformer 那种带 router weights 的路由）**，直接用 3 个 O(1) 信号做查表 + Dirichlet 平滑 softmax，路由权重在推理/训练 reward 时一致可复现：
 
 #### A.4.1 路由输入 3 个信号
 1. **信号 1：场景标签** `s = (market, event_type_l2)` → 查表得到 6 专家的**基权重 W_base[s]**（6 维，非零 ≤ 3 个，对应 A.2 覆盖表）。
@@ -612,7 +613,7 @@ final_chain  = argmax(W) 的专家产出的推理链（作为"主推理链"输�
 
 ### A.5 训练顺序：先 RFT 每个专家 → 再 GRPO 整端 MoE（两步走，效率高）
 
-MoE 如果直接端到端 GRPO，会有 router 冷启动、专家分工不均等坑；FEVER-MS v2 用"**先 RFT 单体专家 → 再 GRPO MoE**"两步走：
+MoE 如果直接端到端 GRPO，会有 router 冷启动、专家分工不均等坑；Pronoia-MS v2 用"**先 RFT 单体专家 → 再 GRPO MoE**"两步走：
 
 #### Step 1：RFT（拒绝采样微调）每个专家 LoRA（单体训练，并行 K=6 组）
 对每个专家 e：
@@ -630,9 +631,9 @@ MoE 如果直接端到端 GRPO，会有 router 冷启动、专家分工不均等
   ```
   R5 的作用：避免 Router 塌缩到只选一个专家（W 变成 one-hot），鼓励"专家混合"。
 
-### A.6 FEVER-MS v2 评估：在 v1 的五大类上新增 MoE 三类指标（辩证评估）
+### A.6 Pronoia-MS v2 评估：在 v1 的五大类上新增 MoE 三类指标（辩证评估）
 
-在 §5 五大类指标基础上，FEVER-MS v2 再新增三类（全部 1000 条评估集上报告）：
+在 §5 五大类指标基础上，Pronoia-MS v2 再新增三类（全部 1000 条评估集上报告）：
 | 指标 | 说明 | 过线目标 |
 |---|---|---|
 | `avg_winner_expert_acc` | 每个场景下 Router 的 argmax 专家（主推理链专家）的 primary strict ACC | ≥ 70%（比单体 RLVR +2pp） |
@@ -641,7 +642,7 @@ MoE 如果直接端到端 GRPO，会有 router 冷启动、专家分工不均等
 
 ### A.7 代码落地：增量极小（和 §6 的 15 步 v1 方案复用 95%）
 
-FEVER-MS v2 在 v1 Week 1~4 基础上，只需要新增 5 个文件 / 修改 3 处：
+Pronoia-MS v2 在 v1 Week 1~4 基础上，只需要新增 5 个文件 / 修改 3 处：
 | 新增/修改 | 路径 | 说明 |
 |---|---|---|
 | 新增 | `backend/scripts/rlvr/volume_features.py` | A.3.1 的 4 维 as-of 量价特征计算（供 build 脚本调用） |
@@ -655,8 +656,8 @@ FEVER-MS v2 在 v1 Week 1~4 基础上，只需要新增 5 个文件 / 修改 3 �
 
 > **Elegant 的原因**：A.2~A.7 的全部新增内容，都**复用** v1 的训练数据、评估集、Oracle 字段、Reward 函数骨架、推理链 6 段格式、GRPO trainer 框架——**没有新的大工程**，只是在 RLVR v1 上做了 6 个 LoRA 专家并行 + 一个 12 行无参数 Router + 4 个量价特征，符合你"尽量简洁而 elegant"的要求。
 
-### A.8 与 FEVER-MS wiki 提案的对应关系（收敛简化版）
-对比你在 wiki 里 §4.1 的总体架构描述，这里把复杂点统一做了**收敛简化**：
+### A.8 与 Pronoia-MS wiki 提案的对应关系（收敛简化版）
+对比你在 wiki（原 FEVER-MS wiki）里 §4.1 的总体架构描述，这里把复杂点统一做了**收敛简化**：
 - **频率×时效二维 Reward**：wiki 里的 `R(q,style)=Σ_f Σ_h λ·verify_f·hit_h·abstain_shape` → 在本附录里拆成 **A.3.2 的 kappa_vol（verify_f 简化）+ §4.2 的 oracle_primary（hit_h 定向）+ R3 双窗安全阀（abstain_shape 简化）**，不搞二维张量求和。
 - **MODWT/小波三通道 H/M/L**：wiki 里的 MODWT → 在 A.4.1 信号 3 中简化为 `ema(daily_ret^2, 2) / ema(daily_ret^2, 10)`（hl_ratio），不引入独立的数值骨干模型。
 - **Scale-Conditioned Router + UGA 门控优势 + CES 专家互斥正则**：wiki 里的三项训练技巧 → 在 A.5 Step2 中收敛为"R5 专家负熵正则 + 固定温度 T_router=0.6 + 单专家 RFT 预训练"，保证分工均衡同时不引入新训练超参。
@@ -668,7 +669,7 @@ FEVER-MS v2 在 v1 Week 1~4 基础上，只需要新增 5 个文件 / 修改 3 �
 | 新增/修改 | 路径 | 说明 |
 |---|---|---|
 | 新增 | `backend/scripts/rlvr/build_rlvr_train_dataset.py` | 5000 条训练集构造 + 打标签 |
-| 新增 | `backend/scripts/rlvr/grpo_trainer.py` | GRPO 训练主入口（对应 train_fever_v2.py 的 train-sft/train-dpo） |
+| 新增 | `backend/scripts/rlvr/grpo_trainer.py` | GRPO 训练主入口（对应 train_pronoia_v2.py 的 train-sft/train-dpo） |
 | 新增 | `backend/scripts/rlvr/prompt_template.py` | 输入块 + 推理链 5 段模板 |
 | 新增 | `backend/scripts/rlvr/reward_fn.py` | §4.2 的四组 reward 函数实现 |
 | 新增 | `backend/scripts/rlvr/eval_rlvr_vs_baseline.py` | 1000 条评估集统一对比脚本 |
