@@ -181,20 +181,68 @@ data/_rlvr_artifacts_v1/folds_rlvr_5000/
 - **长上下文足够**：推理链 5 段 + 最终方向 ≈ 600~800 tokens，加上 input block 1500 tokens，总 seq ≤ 2048，Qwen3-8B 128k ctx 轻松容纳。
 - **主要瓶颈不在参数量**：rollout 采样（4 条/event）+ reward 计算的 batch 吞吐是 GRPO 训练的真正瓶颈，8B vs 72B 差异在模型能力而非速度。
 
-### 3.2 LoRA 配置（复用 SFT 配置 + 微调 gate_proj）
+### 3.2 LoRA + MoE 专家配置（单体方案就是 K=6 的轻量 MoE）
 
-沿用 SFT 的 target_modules + 小幅扩范围，让 RLVR 的策略更新能影响推理链的 token 生成：
+> **架构升级（你最新要求）**：Pronoia-RLVR v1 **不再是单体重 LoRA**，而是「**Qwen3-8B 共享基座 + K=6 场景专家 LoRA + 3 信号可解释 Router**」的**内置 MoE 架构**。MoE 不在 v2 附录里做，就放在 v1 主方案里；所有专家共享同一份 Qwen3-8B 基座权重，仅用 LoRA 低秩（r=16）做场景差异化，总参数量增加 ≤ 1.2%。
+
+LoRA 配置（每个专家单独一份，但超参完全一致）：
 ```python
 LoraConfig(
     r=16,
     lora_alpha=32,
     target_modules=["q_proj","k_proj","v_proj","o_proj",
-                    "gate_proj","up_proj","down_proj"],  # ← 8B 全 MLP + Attn
+                    "gate_proj","up_proj","down_proj"],  # 8B 全 MLP + Attn
     lora_dropout=0.05,
     bias="none",
     task_type="CAUSAL_LM",
 )
 ```
+
+K=6 专家定义（每个专家 = 1 份 LoRA + 对应场景训练集）：
+| expert_id | 覆盖场景（market, time_bucket） | event_type_l2 偏好 | 训练样本数（≈5000 总配额） | 擅长方向 |
+|---|---|---|---|---|
+| `e_cn_overnight` | CN × 隔夜型 | preann（业绩预告）、macro（宏观数据） | ≈ 650 | 事件当隔夜消化干净的 CN 短事件 |
+| `e_cn_short` | CN × 短期型 | earnings、buyback、policy | ≈ 1600（CN 主） | 5 天内完成定价的 CN 财报/回购/政策 |
+| `e_cn_mid` | CN × 中期型 | M&A / 重组 | ≈ 350 | 7 天左右才扩散完的 CN 并购 |
+| `e_us_overnight` | US × 隔夜型 | earnings、guidance、FDA、Fed/macro | ≈ 1300 | 美股盘后/转天隔夜即定价的 4 类 |
+| `e_us_short` | US × 短期型 | M&A/buyback/corporate、company_news | ≈ 950 | 美股 3-5 天定价的公司行为/新闻 |
+| `e_volume_regime` | Market × ALL × volume HI/LOW（**量价专家**） | 全 L2，只在 volume 偏离阈值时高权重 | ≈ 150（+ 其它每个专家掺 15%） | 「量价偏离」「放量突破」「缩量横盘」场景 |
+
+**为什么 K=6（而不是更多）**：保持简洁 elegant；每个专家样本数 ≥ 350，在 RFT + GRPO 下不至于欠拟合。e_volume_regime 是**全局跨市场专家**，专门做「量与价不一致、该怎么校准方向判断」的工作——直接回应你"光考虑价没考虑量也是个问题"。
+
+#### 3.2.1 轻量 Router（3 信号 O(1) 查表+softmax，无训练参数）
+Pronoia-RLVR v1 的 MoE 刻意简洁：**不引入 MixLoRA/Switch Transformer 的 router weights**，router 仅用 3 个 as-of 信号做 12 行查表代码（训练/推理一致、可复现、可审计）：
+
+```python
+# scene_match.py 的 router(market, event_type_l2, H_primary, vol_regime)
+# vol_regime = "HI"（vol_t0_ratio>2.0 或 vol_pre5_ratio>1.5）/ "LOW"（<0.5）/ "NORMAL"
+def route(market, event_type_l2, H_primary, vol_regime, time_bucket):
+    base = {e_cn_overnight:0.05, e_cn_short:0.05, e_cn_mid:0.05,
+            e_us_overnight:0.05, e_us_short:0.05, e_volume_regime:0.05}
+    # ① 场景先验（匹配哪个专家，给大头 0.55）
+    exp_id = _scene_to_expert[market, time_bucket]     # 上表 lookup
+    base[exp_id] += 0.55
+    # ② Volume regime 增量（HI/LOW 时给量价专家 +0.25）
+    if vol_regime in ("HI", "LOW"):
+        base[e_volume_regime] += 0.25
+    # ③ Dirichlet 平滑 softmax（α=0.3，给冷门专家保底）
+    return dirichlet_softmax(base, α=0.3)   # 总和=1 的专家权重
+```
+每个 rollout 不是"选一个专家"而是"6 个专家各自出推理链，再按 router 权重加权融合方向与 confidence"——实现你要的"动态融合不同市场/事件/时效，同时考虑量价"。
+
+#### 3.2.2 基本面量价 skill：`volume_regime_analyzer`（新增 Tier 2 skill / tool）
+你要的「把量的信息补到基本面里面，增加 skill / tool」**就放在这里**，同时服务 Team Pipeline + RLVR input block。
+
+| 维度 | 说明（as-of T0，**严格未来不可见**） | 数值口径 |
+|---|---|---|
+| `vol_t0_ratio` | 当日成交量 / 过去 20 日平均成交量 | ≥2.0 → HI；≤0.5 → LOW |
+| `vol_pre5_ratio` | pre5（事件前 5 日）平均成交量 / 20 日均量 | ≥1.5 → HI；≤0.7 → LOW |
+| `price_vol_diverge` | pre5 价涨但量跌（或价跌量涨）的背离信号 | {-1,0,+1} |
+| `range_t0_normalized` | (当日最高-最低) / 20 日真实波幅均值 | ≥1.5 → 高波动 regime |
+
+Team Pipeline 接入：在 [roster.py](file:///workspace/backend/app/agents/roster.py) 中 predictor / deep_researcher 的 skill 列表都加 `volume_regime_analyzer`（取代之前只靠 `market_research` 取 OHLCV 的间接方式），并在 deep_researcher 解读卡片的「事实 → 比较 → 反方/限制」模板里明确**必须引用至少 1 条量价 regime 数字**。
+RLVR 训练直接读取 backtesting events.jsonl 中预处理好的上述 4 维字段——等价于**推理时 Team 把这个 skill 的输出预先灌进 INPUT BLOCK**。
+
 
 ### 3.3 推理链作用于哪里（关键设计）
 
@@ -204,82 +252,89 @@ LoraConfig(
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  INPUT BLOCK（固定，不可见未来信息）                          │
+│  INPUT BLOCK（固定，严格 as-of T0，不可见未来信息）           │
 │  • event_id / market / symbol / event_time / event_type_l2  │
 │  • title + event_text（截断到 ≤ 1500 chars）                  │
-│  • 【STRICT AS-OF】T0 当日涨跌 / pre5 漂移（若可用）          │
+│  • 【STRICT AS-OF 价】T0 当日涨跌 / pre5 漂移（若可用）       │
+│  • 【STRICT AS-OF 量 — 新增 §3.2.2 volume_regime_analyzer】   │
+│    - vol_t0_ratio = 当日量 / 20日均量   vol_pre5_ratio        │
+│    - price_vol_diverge {-1,0,+1}        range_t0_normalized  │
+│    - vol_regime ∈ {HI, NORMAL, LOW}（上面 4 维打桶）           │
 │  • benchmark 名称                                            │
 └──────────────────────┬──────────────────────────────────────┘
-                       │
+                       │ 3.2.1 Router（3 信号查表：场景+horizon+vol_regime）
                        ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  CHAIN-OF-THOUGHT BLOCK（RLVR 训练核心 —— 必须显式输出）        │
-│  格式：中文分段标签，共 6 段（新增【0.】时间窗口预判段）         │
+│  K=6 MoE EXPERTS（并行 rollout，每专家 4 条：4×6=24 条总）    │
+│  每个专家各自输出 6 段推理链 + dir_final（one-hot up/dn/neu） │
+│  + conf_i （每个专家给一个置信度）                             │
+└──────────────────────┬──────────────────────────────────────┘
+                       │ 按 w_i = router(...) 加权融合最终判断
+                       ▼
+┌─────────────────────────────────────────────────────────────┐
+│  CHAIN-OF-THOUGHT BLOCK（主输出 = winner 专家 chain）         │
+│  格式：中文分段标签，共 7 段（在原 6 段基础上新增【0.5】量价段） │
 │                                                               │
-│  【0. 预判时间窗口】≤80字（核心新增）                           │
-│    先定本事件"该看多长的方向"，并点名主horizon                 │
-│    例："该事件为 CN 财报，定价集中在 +1~5 日窗口期；主horizon t3"│
-│    例："该事件为 US 利率决议，隔夜即期定价；主horizon t1"       │
-│    例："该事件为 CN 并购，扩散期 5-7 日；主horizon t7"         │
+│  【0. 预判时间窗口】≤80字（原逻辑保留）                        │
+│  【0.5 量价 regime 校验】≤80字（**新增，必须提§3.2.2 四个数**） │
+│    例："T0 量比 2.4（HI 放量），pre5 量比 1.7；价+3.2%且价量同向"│
+│    例："T0 量比 0.4（LOW 缩量），pre5 价-1.8%但量增 → 背离信号" │
 │                                                               │
-│  【1. 关键信号提取】≤200字                                      │
-│    从 event_text 提取 2~4 条可量化信号（数字/方向/超预期词）      │
-│    例："① 营收+12% YoY；② 毛利率环比-0.5pp；③ 北向T0净买+1.2亿"│
-│                                                               │
-│  【2. 横向比较】≤150字                                          │
-│    同比/环比/一致预期/同业 比较，明确"超/不及/符合预期"          │
-│    例："营收增速高于一致预期的 9%，但毛利率低于同业均值 28%"     │
-│                                                               │
-│  【3. 反方与限制】≤150字                                        │
-│    列出 1~2 条反面证据或不确定性（漂移出尽/政策窗口/季节性）     │
-│    例："反方：pre5 已涨 8%，可能利好出尽；限制：单季数据"        │
-│                                                               │
-│  【4. 置信度校准】≤100字                                        │
-│    给出 confidence 值（0.50~0.99）+ 1 句理由                    │
-│    例："0.75 — 基本面信号一致，但事前漂移较大需打折扣"          │
-│                                                               │
-│  【5. 最终方向】one line                                        │
-│    三选一：up / down / neutral（且明确注明"按主horizon XX判断"）│
-│    例："up（按主horizon t3 判定）"                              │
+│  【1. 关键信号提取】≤240字（要求至少 1 条量价 regime 佐证）      │
+│    例："①营收+12% YoY；②T0 量比 2.4（放量确认）；③北向净买+1.2亿│
+│  【2. 横向比较】≤150字（保留）                                 │
+│  【3. 反方与限制】≤150字（保留；新增 1 条量价反方可选）         │
+│  【4. 置信度校准】≤100字（保留）                                │
+│  【5. 最终方向】one line：up/down/neutral + 主horizon XX + 融合来源
+│    例："up（按主horizon t3 判定；主专家 e_cn_short 0.65 + e_volume_regime 0.25）"
 └──────────────────────┬──────────────────────────────────────┘
                        │
                        ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  REWARD COMPUTATION（按 §2.4 的定向场景表取 oracle horizon）  │
-│  • R1 方向正确性：oracle = label_{primary}（非 avg_all！）     │
-│  • R2 置信度校准：按 oracle_{primary} ± car_{primary} 幅度    │
-│  • R3 CAR 幅度加权：按 car_{primary}，必要时附 car_{secondary}│
-│  • R4 推理链一致性 penalty（新增【0.】窗口段合规检查）          │
+│  REWARD COMPUTATION（按 §2.4 primary oracle + §4.x 量价校准）│
+│  • R0 窗口合规 + R0.5 量价段合规（新增）= 两项规则检查        │
+│  • R1 方向正确性（融合方向 vs label_primary）                 │
+│  • R2 置信度校准（按 car_primary × κ_vol 辩证乘子）            │
+│  • R3 CAR 幅度 + 双窗一致 + Volume regime 校准（κ_vol）       │
+│  • R4 推理链一致性（7 段检查：含【0.5】量价段合规 + 主专家标注）│
+│  • R5 专家熵正则（新增，MoE 分工均衡：防止喂 1-2 个专家）       │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 #### 3.3.2 推理链与现有 Team Pipeline 的映射关系
 
-RLVR 训练的模型本质上是一个 **"轻量化方向判别器"**，对应 team pipeline 中多段角色的融合（**新增【0.】= 时间窗口判定 = Team 中 Tier 2 skill horizon_select 的职责**）：
+RLVR 训练的模型本质上是一个 **"K=6 轻量 MoE 方向判别器"**，对应 team pipeline 中多段角色的融合（新增【0.】时间窗口判定 + 新增【0.5】量价 regime 校验 = 两个 Tier 2 skill）：
 
 | RLVR 推理链分段 | 对应 Team Pipeline 中的角色 | 说明 |
 |---|---|---|
-| **【0. 预判时间窗口】**（新增） | `horizon_select`（Tier 2 skill，按事件/市场匹配预期窗口） | 对应 §2.4 三维匹配矩阵：先定"该看多长"，再判方向 |
-| 【1. 关键信号提取】 | `announcement_classifier` + `market_research` 原始信号 | 从 event_text + T0 行情提取结构化数字信号 |
-| 【2. 横向比较】 | Tier 2 skill `ar_decomposer` / `drift_context_analyzer` | AR 分解、漂移出尽系数、同比环比 |
-| 【3. 反方与限制】 | deep_researcher 的 Claim 生成（"反方/限制"段落） | 对应 [roster.py:L199-L205](file:///workspace/backend/app/agents/roster.py#L199-L205) 的解读卡片 Step 3 |
-| 【4. 置信度校准】 | synthesize 阶段 analyzer_scorecard.confidence | 对应 [team.py:L706-L744](file:///workspace/backend/app/agents/team.py#L706-L744) |
-| 【5. 最终方向】 | router synthesize 输出的 `【最终方向】` | 对应 [team.py:L765-L769](file:///workspace/backend/app/agents/team.py#L765-L769) |
+| **【0. 预判时间窗口】** | `horizon_select`（Tier 2 skill） | 对应 §2.4 三维匹配矩阵：先定"该看多长"，再判方向 |
+| **【0.5 量价 regime 校验】（新增）** | `volume_regime_analyzer`（**新增 Tier 2 skill / tool**，§3.2.2） | 把成交量/波动率/价量背离 **补进基本面研究**，在事实/比较/反方各环节都必须引用 |
+| 【1. 关键信号提取】 | `announcement_classifier` + `market_research` + 新 `volume_regime_analyzer` | 要求 ≥1 条量价佐证（不再光写营收/利润，必须有放量/缩量/背离信号之一） |
+| 【2. 横向比较】 | Tier 2 `ar_decomposer` / `drift_context_analyzer` / `volume_regime_analyzer` | AR 分解、漂移出尽系数 + 量价 regime 对比 |
+| 【3. 反方与限制】 | deep_researcher 的 Claim 生成 | 至少 1 条反方可来自量价维度（例："pre5 量缩价涨 → 假突破"） |
+| 【4. 置信度校准】 | synthesize analyzer_scorecard.confidence | 置信度受 κ_vol（价量同向/背离）乘子校准（§4.2 R2） |
+| 【5. 最终方向】 | router synthesize `【最终方向】`（+ MoE 融合权重标注） | 融合的主专家、量价专家权重都写明，保证推理链可审计 |
+| **（路由层，模型内部）** | K=6 LoRA MoE + 3 信号 Router（§3.2.1） | 无训练参数，12 行查表代码；训练/推理一致 |
 
-#### 3.3.3 【0.】窗口预判段的训练对齐机制（关键）
+#### 3.3.3 【0.】+【0.5】两段的训练对齐机制（关键）
 
 【0.】输出的主 horizon **必须与 §2.4 匹配表中该 (market, event_type_l2) 的值完全一致**——不允许模型自由发挥定窗口。
 - 换句话说，【0.】在训练时不是"让模型学"的，而是**按 (market, event_type_l2) 强约束**（R4 一致性检查里包含这一条）。
 - 为什么还要模型显式写出来？因为这样推理链**自包含语义**：人类审阅/后验诊断时不用查表，就能一眼看到"这条判断是针对什么时间窗口的"，符合"可审计推理链"的初衷。
 - 一旦 §2.4 的匹配表后续迭代（比如新增 event_type_l3 或 market 子分类），先更新匹配表 → 重写数据构造脚本的 3 个字段 → 重新训练；不需要动模型模板。
 
-**⚠️ 关键决策：RLVR 模型是否包含 tool call？**  
-第一版 **不包含 tool call**。原因：
-1. RL with tool call（即多轮 function call 的 PPO）sample efficiency 极低，5000 条不够塞牙缝。
-2. STRICT AS-OF 模式下 tool call 能拿到的只有 T0/pre5 行情，这些直接拼进 INPUT BLOCK 即可，不需要动态调。
-3. 先把"纯文本 + 预灌信号 → 推理链 → 方向"这条链路跑通，后续再加 tool call 作为 Level 2。
+【0.5】量价段同样按 **INPUT BLOCK 里的 4 维量价特征强约束**（R0.5 + R4 检查）：
+- 必须完整引用 `vol_t0_ratio / vol_pre5_ratio / price_vol_diverge / range_t0_normalized` 的具体数值（或至少 2 个），不许只写"放量/缩量"。
+- `price_vol_diverge` 的符号必须与事实一致（价涨量增 → +1；价涨量缩 → -1）。
+- 在 Team 里，`volume_regime_analyzer` 这个 Tier 2 skill 就是专门生产这 4 个数的；RLVR 训练时直接从 events.jsonl 里读 as-of 预处理好的值，等于直接让这条推理链对这个 skill 的输出负责——把"量"完全补进了基本面链路。
 
-#### 3.3.3 推理链的输出如何在推理时接入 Team Pipeline
+**⚠️ 关键决策：RLVR 模型是否包含 tool call？**  
+第一版 **不包含 tool call 机制**（但在 Team 里会把 `volume_regime_analyzer` 作为 Tier 2 skill 先预灌好 as-of 数值给 RLVR）。原因：
+1. RL with tool call（即多轮 function call 的 PPO）sample efficiency 极低，5000 条不够塞牙缝。
+2. STRICT AS-OF 模式下 volume_regime_analyzer 能拿到的只有 T0/pre5 量价，这些直接拼进 INPUT BLOCK 即可，不需要动态调。
+3. 先把"纯文本 + 预灌量价/漂移/horizon → K=6 推理链 → 融合方向"这条链路跑通，后续再加 tool call。
+
+#### 3.3.4 推理链的输出如何在推理时接入 Team Pipeline
 
 训练完成后，RLVR 模型作为 **Tier 1.5 分析器** 插入：
 ```
@@ -323,201 +378,263 @@ max_completion_length = 800    # 推理链 5 段 + 最终方向 ≈ 600~800 toke
 num_train_epochs = 4
 ```
 
-### 4.2 Reward 函数（四部分加权，总范围 [-1.55, +2.10]）
+### 4.2 Reward 函数（七部分加权：MoE + 量价 + 主方向三位一体，总范围 [-1.60, +2.10]）
 
-> **核心变更（响应"分市场/分事件/分时间"）**：Oracle 的方向真值 + CAR 幅度真值 **不再用 avg_all，一律按 §2.4 匹配表的 `{scene_primary_horizon}` 取**（字段名在每条样本里写入，训练时一行代码读出来）。推理链的【0.】窗口预判 + 【5.】最终方向都围绕这个 primary horizon 对齐。
-> **辩证安全阀**：R3（CAR 幅度加权）新增"双窗校验"逻辑——若 primary horizon 判对、但 secondary horizon 方向完全相反、且 |car_sec|≥|car_prim|/2，则减半奖励，防止"只赌一个时间窗口的伪信号过拟合"。
+> **核心变更 1（MoE + 量价进 RLVR v1 本体）**：Oracle 的方向真值 + CAR 幅度真值按 §2.4 匹配表的 `{scene_primary_horizon}` 取；方向是 K=6 专家推理链的融合方向（不是单一专家的）；**R2/R3 新增 Volume regime 辩证乘子 κ_vol**（量价背离时给正确方向的置信/幅度奖励打折，反过来对背离假信号/假突破不给出错前的满奖励）。
+> **核心变更 2（训练两步走：先 RFT 单体专家，再小学习率 GRPO MoE）**：Reward 函数里新增 **R0.5**（【0.5】量价段合规检查）和 **R5**（MoE 专家熵正则），前者把量信息补进推理链合规，后者保证 K=6 专家不会被 Router 冷启动时全部堆到 1 个专家上。
+> **辩证安全阀**：R3 保留原"双窗一致率校验"，再额外叠上"量价一致率校验"——主方向对但量价明显背离时，R3 再乘 0.5 双重打折，防止"放量拉高出货/缩量假突破"类过拟合。
 
-对一条 rollout（event → 推理链 6 段 → 方向 + confidence），按 (market, event_type_l2) 查表得到 **H_primary** 和 **H_secondary**（或直接读标签附加字段）：
+对一条 rollout（event → K=6 专家各出一条 7 段推理链 → 按 router( w_i ) 加权融合为最终 (dir, conf)），查表得到 H_primary / H_secondary 和 4 维量价字段，定义 **κ_vol**（量价校准乘子，∈ [0.4, 1.2]）：
+```python
+# κ_vol 核心想法：价量同向 → 奖励放 1.2 倍；价量背离 → 奖励打 0.4~0.6 折
+# diverge=+1（价涨量增 / 价跌量缩）同向；0=无异；-1 背离
+sign_car = +1 if oracle_car>0 else (-1 if oracle_car<0 else 0)
+diverge_concur = (sign_car == price_vol_diverge) or (price_vol_diverge==0)
+if   vol_regime == "HI"    and diverge_concur:  κ_vol = 1.20  # 放量确认，奖励放大
+elif vol_regime == "NORMAL" and diverge_concur:  κ_vol = 1.00  # 基准
+elif vol_regime == "LOW"   and diverge_concur:  κ_vol = 0.70  # 缩量但同向；可信度一般
+elif price_vol_diverge != 0:                     κ_vol = 0.40  # 明确价量背离；奖励大打折
+else:                                            κ_vol = 0.80  # 其它模糊情形
 ```
-oracle_dir = label_{H_primary}
-oracle_car = car_{H_primary}
-secondary_car = car_{H_secondary}
-```
-总 reward = 0.5R1 + 0.3R2 + 0.15R3 + 0.05R4 + **0.05R0**（新增 R0 = 【0.】窗口预判合规奖）。
 
-#### R0：【0. 预判时间窗口】合规性（权重 0.05，范围 [−0.05, +0.05]，新增）
-把时间窗口判定作为独立 reward 项（呼应"先定窗口再判方向"）：
-- 【0.】段提到的主 horizon 名称 = §2.4 匹配表的 primary → **+0.05**
-- 主 horizon 名称写错（CN 并购写成 t1、US 利率决议写成 t7 之类）→ **−0.05**
-- 【0.】段缺字数或未点名 horizon → **−0.05**
+总 reward = 0.04R0 + 0.04R0.5 + 0.50R1 + 0.27R2 + 0.13R3 + 0.04R4 + **0.02R5**（7 项，给量价/MoE 权重腾空间，R1/R2/R3 占比保持 ≥ 0.9）。
 
-#### R1：方向正确性（权重 0.5，范围 [−1, +1]）
-Oracle = `label_{H_primary}`，不再使用 label_avg_all；判 neutral 惩罚保留（防止"躲 neutral"）：
+#### R0：【0. 预判时间窗口】合规性（权重 0.04，范围 [-0.04, +0.04]）
+- 【0.】段主 horizon 与匹配表一致 → +0.04；否则 −0.04。
+
+#### R0.5：【0.5 量价 regime 校验】合规性（权重 0.04，范围 [-0.04, +0.04]，新增）
+把"量补进基本面"作为 reward 直接对齐：
+- 【0.5】段完整引用了 vol_t0_ratio / vol_pre5_ratio（至少 2 个具体数）且 price_vol_diverge 判定符号正确 → **+0.04**
+- 只写"放量/缩量"不给具体比例；或符号错（价涨量缩说成同向）→ **−0.04**
+- 同时要求【1. 关键信号提取】里至少有 1 处调用 volume_regime_analyzer 的数字/标签作为佐证（否则 R4 一并扣）。
+
+#### R1：方向正确性（权重 0.50，范围 [-1, +1]）
+Oracle = `label_{primary}`，融合方向（按 router w_i 对各专家的 up/down/neu one-hot 加权，argmax 得到 final_dir）：
 ```python
 if oracle_dir == "neutral":
-    R1 = +0.5 if pred == "neutral" else -0.5
+    R1 = +0.5 if final_dir == "neutral" else -0.5
 else:
-    if   pred == oracle_dir:   R1 = +1.0
-    elif pred == "neutral":    R1 = -0.5
-    else:                      R1 = -1.0
+    if   final_dir == oracle_dir: R1 = +1.0
+    elif final_dir == "neutral":  R1 = -0.5
+    else:                         R1 = -1.0
 ```
-*（如果场景是"并购/分拆"这类中期事件，oracle_dir 实际是 label_t7；如果是 US 利率决议，是 label_t1 —— 完全匹配事件的定价时间。）*
+*（并购 = label_t7；US 利率决议 = label_t1，按匹配表对齐。）*
 
-#### R2：置信度校准（权重 0.3，范围 [−0.3, +0.3]）
-按 H_primary 的方向和幅度生效：
+#### R2：置信度校准 × κ_vol（权重 0.27，范围 [-0.27, +0.27]，原 0.3）
+按 primary 方向/幅度生效，并乘量价校准乘子——价量背离时"模型说自己有信心"不算数：
 ```python
-if oracle_dir != "neutral" and pred != "neutral":
-    sign = +1.0 if pred == oracle_dir else -1.0
-    # car_primary 越大，置信度"应当越高" → 对大CAR的高置信奖励更大（乘 |car| 饱和夹）
-    ampl = min(1.0, abs(oracle_car) / 0.05)    # |CAR| 5%+ → 1 饱和
-    R2 = sign * (confidence - 0.5) * 0.6 * (0.5 + 0.5 * ampl)
+if oracle_dir != "neutral" and final_dir != "neutral":
+    sign = +1.0 if final_dir == oracle_dir else -1.0
+    ampl = min(1.0, abs(oracle_car) / 0.05)
+    R2 = sign * (confidence - 0.5) * 0.6 * (0.5 + 0.5 * ampl) * κ_vol
 else:
     R2 = 0.0
 ```
 
-#### R3：CAR 幅度加权 + 双窗一致校验（权重 0.15，范围 [0, +0.30]，含辩证安全阀）
-Oracle CAR 大的事件奖励更高；**新增双窗一致校验**：若主窗判对但副窗方向反向且幅度不小，扣半奖励，保证模型"不是只踩中一个时点的噪声"。
+#### R3：CAR 幅度 + 双窗一致 + 量价一致（三重辩证乘子，权重 0.13，范围 [0, +0.30]）
 ```python
-if (oracle_dir != "neutral") and (pred == oracle_dir):
-    # 基础：primary CAR 分段线性（0.5%→0 / 5%→1 / ≥5%→饱和）
+if (oracle_dir != "neutral") and (final_dir == oracle_dir):
     w_prim = min(1.0, max(0.0, (abs(oracle_car) - 0.005) / 0.045))
     base = 0.3 * w_prim
-
-    # 辩证安全阀：双窗一致率校验
-    # 次窗若存在、且|car_sec| ≥ 0.5 × |car_prim|：
+    # 安全阀1：双窗一致率
     if secondary_car is not None and abs(secondary_car) >= 0.5 * abs(oracle_car):
         sec_dir = "up" if secondary_car > 0 else "down"
-        if sec_dir != oracle_dir:   # 次窗方向与主窗相反 → 扣减奖励 50%
-            base *= 0.5
+        if sec_dir != oracle_dir: base *= 0.5
+    # 安全阀2（新增）：量价一致率 κ_vol < 0.5 时再乘 0.5
+    if κ_vol < 0.5:
+        base *= 0.5
     R3 = base
 else:
     R3 = 0.0
 ```
 
-#### R4：推理链一致性检查（权重 0.05，范围 [−0.05, +0.05]，更新为 6 段）
-规则硬检查（包含新增【0.】段）：
-1. 6 段标签齐全且顺序正确（【0.】~【5.】）
-2. 【0.】段中提到的主 horizon 与匹配表/字段完全一致（复用 R0 的检查器）
-3. 【1. 关键信号】中包含 ≥2 个数字/百分比
-4. 【5. 最终方向】中的值与最终 pred_direction 完全一致
-5. 【4. 置信度校准】中的数字和模型输出 confidence 差值 ≤ 0.05
-6. 【5. 最终方向】明确注明了"按主horizon XX判定"，且 XX = primary horizon
+#### R4：推理链一致性检查（权重 0.04，范围 [-0.04, +0.04]，改 7 段）
+1. 7 段标签齐全且顺序正确（【0.】【0.5】【1.】~【5.】）
+2. 【0.】段主 horizon = 匹配表值；【0.5】段 4 维量价数值与 input block 值一致
+3. 【1. 关键信号】≥2 个数字（其中 ≥1 个来自 volume_regime_analyzer 的 4 维）
+4. 【5. 最终方向】值 = final_dir；置信度差 ≤0.05；**标注了主horizon + 融合来源（主专家 + 量价专家的权重）**
+5. 没有编造数字、编造 vol_t0_ratio / price_vol_diverge
 
-全部满足 → **+0.05**；任一违反 → **−0.05**。
+全部满足 → **+0.04**；任一违反 → **−0.04**。
+
+#### R5：MoE 专家熵正则（权重 0.02，范围 [-0.02, +0.02]，新增）
+训练中对每个 batch 统计 router 分布，专家分工太不均匀（基尼 > 0.6）就扣，鼓励把任务分散给 6 个专家：
+```python
+gini = gini_coef(batch_router_w.sum(0))   # 每个专家的被路由总和
+if   gini < 0.45: R5 = +0.02
+elif gini < 0.60: R5 =  0.00
+else:             R5 = -0.02
+```
+*（R5 权重仅 2%：避免熵正则抢走主任务奖励。主要依靠 Router 的 Dirichlet 平滑 + 每个专家独立 RFT 预训练来保证分工）*
 
 #### 总 Reward
 ```python
-reward = 0.05*R0 + 0.5*R1 + 0.3*R2 + 0.15*R3 + 0.05*R4
+reward = 0.04*R0 + 0.04*R0.5 + 0.50*R1 + 0.27*R2 + 0.13*R3 + 0.04*R4 + 0.02*R5
 ```
 
-**预期 reward 基准（随机模型）**：≈ 0.05*(-0.05) + 0.5*(0) + 0 + 0 + 0.05*(-0.05) ≈ **−0.005**（R0/R4 略负，R1 随机为 0）  
-**训练目标**：hold-out 平均 reward ≥ **+0.40**（对应定向 primary horizon 非 neutral ACC ≈ 70% + 置信校准良好 + ≥90% chain_valid_rate）。
+**预期 reward 基准（随机）** ≈ 0.04×(-0.04) + 0.04×(-0.04) + 0 + 0 + 0 + 0.04×(-0.04) + 0 ≈ **−0.005**（R0/R0.5/R4 略负，R1 随机 0）  
+**训练目标**：hold-out 平均 reward ≥ **+0.40**（primary non-neutral ACC≈70% + κ_vol≈0.85×校准良好 + ≥90% chain_valid_rate + Gini≤0.55）  
+**训练两步走**（MoE 专用）：
+- Step1 RFT：每个专家单独在对应场景子样本上 SFT 1 epoch（warm start = 共用 SFT 基座 LoRA，r=16）
+- Step2 GRPO MoE：lr=3e-7（比单体 1e-6 小），rollout=4/专家=24/event；batch=12 event（≈288 rollout）
+
 
 ---
 
-## 5. 评估方案（固定 1000 条 backtesting 集，分场景化辩证多口径）
+## 5. 评估方案（固定 1000 条，辩证多口径：MoE + 量价 + 时间三维）
 
-### 5.1 辩证评估原则：三组口径并行打分，过线核心判据是①
+### 5.1 辩证评估原则：六组口径并行打分，过线核心判据是①
 
-> 呼应你"所有指标都要辩证看"的要求：**任何单一口径都不做唯一判据**；先看①定向 primary horizon（真正训练目标）的过线情况，再用② avg_all 与基线比公平对比，再用③双窗一致率 + ④ 分场景分桶 + ⑤ 时间桶维度，做综合判断。五组指标都打印、都出 Wilson CI、都画对比图，过线按组合判据（见 5.4）。
+> 呼应你最新要求：RLVR v1 就是内置 K=6 MoE + 量价融合的方案，因此评估在原来的 primary/avg_all/双窗/过程/分桶 5 大类基础上，**新增 ⑥ MoE+Volume 3 类健康度**，并把 Volume regime 3 桶（HI/NORMAL/LOW）加进所有分桶打印。**任何单一口径都不做唯一判据**；Wilson 下限 + 组合门禁 6 条（见 5.4）才是过线标准。
 
-### 5.2 训练过程中的评估（每 epoch 一次，五大类指标）
+### 5.2 训练过程中的评估（每 epoch 一次，六大类指标）
 
-用 [train_pronoia_v2.py:L172-L229](file:///workspace/backend/scripts/train_pronoia_v2.py#L172-L229) 的 `score-all` 同款逻辑，按 **12 个 Market×L2 场景 + 4 类时间桶（隔夜/短期/中期/长期）**分桶，输出以下五大类指标：
+沿用 [train_pronoia_v2.py:L172-L229](file:///workspace/backend/scripts/train_pronoia_v2.py#L172-L229) 的 `score-all` 同款逻辑，按 **12 Market×L2 × 4 TimeBucket × 3 VolumeBucket（HI/NORMAL/LOW）**三类交叉分桶，输出以下六大类指标：
 
 #### ① 定向主 horizon 口径（核心过线判据）
-按 §2.4 匹配表的 label_{primary} 做 oracle（训练目标一致口径）：
+按 §2.4 匹配表的 label_{primary} 做 oracle：
 
-| 指标 | 计算方式 | RLVR 过线目标 |
+| 指标 | 计算方式 | Pronoia-RLVR-MoE 过线目标 |
 |---|---|---|
-| `acc_primary_strict`（核心主指标） | pred 与 `label_{primary}` 完全一致的比例，neutral 算错 | **≥ 68%**（比原 avg_all 目标 65% 更严格，因为信号更纯） |
-| `acc_primary_non_neutral` | 只在 `label_{primary}` ∈ {up,down} 时计分（实战口径） | **≥ 78%** |
-| `wilson_lo_95_acc_primary_strict` | Wilson 95% CI **下限**（过线的真正判据） | **≥ 65%**（下限过线才是真过线） |
+| `acc_primary_strict`（核心主指标） | MoE 融合 final_dir 与 `label_{primary}` 完全一致，neutral 算错 | **≥ 69%**（比单体目标 68% +1pp，MoE 预期分场景加成） |
+| `acc_primary_non_neutral` | oracle∈{up,down} 时计分（实战口径） | **≥ 79%** |
+| `wilson_lo_95_acc_primary_strict` | Wilson 95% CI 下限（过线真正判据） | **≥ 66%** |
 
-#### ② avg_all 口径（与 SFT/DPO 基线做公平横向对比，不卡死）
-保留与现有基线完全同款的口径，保证跨模型可比：
+#### ② avg_all 口径（公平基线对比，不卡死）
+保留与 DPO/SFT 基线完全同款的口径，保证跨模型可比：
+| 指标 | 目标（报告即可，不硬卡） |
+|---|---|
+| `acc_avg_all_strict` | ≥ 66% |
+| `acc_avg_all_non_neutral` | ≥ 76% |
+| `wilson_lo_95_acc_avg_all_strict` | ≥ 63% |
 
-| 指标 | 计算方式 | RLVR 参考目标 |
+#### ③ 时间 × 量价一致性（辩证安全阀 × 2 层）
+同时看 horizon 一致性 + 量价一致性：
+| 指标 | 计算方式 | 过线目标 |
 |---|---|---|
-| `acc_avg_all_strict` | pred 与 label_avg_all 完全一致的比例，neutral 算错 | ≥ 65%（报告即可，不卡） |
-| `acc_avg_all_non_neutral` | 非 neutral 实战口径 | ≥ 75%（报告即可） |
-| `wilson_lo_95_acc_avg_all_strict` | Wilson 95% 下限 | ≥ 62%（报告即可） |
+| `dual_window_hit_rate` | primary 方向对 **且** secondary 方向也对的样本比例 | **≥ 61%**（组合门禁项） |
+| `across_bucket_consistency` | primary 对 且 primary 桶内 t1/t3/t5 全对的比例 | ≥ 46%（参考） |
+| **`volume_price_hit_rate`（新增，量价一致率）** | 量价同向样本（κ_vol≥1.0）里 primary strict 的比例 | **≥ 75%**（量价背离样本 ≥ 56%，分开打印即可，不硬卡） |
 
-#### ③ 时间一致性（辩证安全阀指标，参与过线）
-防止"只踩对一个 horizon 的伪过拟合"：
-
-| 指标 | 计算方式 | RLVR 过线目标 |
+#### ④ 过程质量指标（MoE + 量价 3 项新增）
+| 指标 | 计算方式 | 过线目标 |
 |---|---|---|
-| `dual_window_hit_rate`（双窗一致率） | `label_{primary}` 方向对 **且** `label_{secondary}` 方向也对的样本比例 | **≥ 60%**（§5.4 过线组合判据之一） |
-| `across_bucket_consistency`（跨时间桶一致率） | primary 对且 primary 桶内所有 horizon（t1/t3/t5）方向都对的比例 | ≥ 45%（报告参考） |
-
-#### ④ 过程质量指标（模型行为健康度）
-与 Reward 组成一一对应：
-
-| 指标 | 计算方式 | RLVR 过线目标 |
-|---|---|---|
-| `avg_reward_holdout` | 5000 训练集 5-fold hold-out 平均总 reward（R0~R4 加权） | **≥ +0.40**（主 reward 目标） |
-| `chain_valid_rate` | R0 + R4 六项检查全部通过率 | **≥ 90%** |
-| `neutral_frac_pred` | 预测为 neutral 的比例 | 10%~20%（防滥用） |
+| `avg_reward_holdout` | 5-fold hold-out 平均总 reward（R0/R0.5/R1/R2/R3/R4/R5 7 项加权） | **≥ +0.40** |
+| `chain_valid_rate` | R0 + R0.5 + R4 共 7 段检查**全部**通过的比例 | **≥ 90%**（新增【0.5】段合规 + 融合来源标注合规） |
+| `neutral_frac_pred` | 融合方向为 neutral 的比例 | 10%~20%（防滥用） |
 | `conf_ece_primary` | 按 primary horizon 方向的置信度 ECE | **≤ 0.08** |
+| **`avg_volume_quoted_rate`（新增，量价段覆盖率）** | 【0.5】段完整给出 4 维量价数字的比例 | **≥ 95%**（证明"把量补进基本面"真的被训练对齐） |
+| **`volume_regime_quoted_acc`（新增，量价符号正确率）** | 【0.5】段 price_vol_diverge 与事实一致的样本比例 | **≥ 98%**（绝不允许编造价量背离方向） |
 
-#### ⑤ 分场景 / 分桶过线标准（每类至少过线，辩证不允许某一大类崩坏）
-按 Market（CN/US）× EventType L2（6 类）× Time Bucket（隔夜/短期/中期）三类分桶，要求：
-- **CN**：按 primary 口径 strict ≥ 65%；**US** ≥ 70%（美股事件文本更结构化）
-- **6 类 L2** 中至少 5 类 strict ≥ 65%，**没有任何一类 < 55%**
-- **Time Bucket**：隔夜型 ≥ 70%；短期(1w内) ≥ 70%；中期(2w内) ≥ 60%（中期事件样本少、信号扩散，阈值收窄合理）
+#### ⑤ MoE 分工健康度（新增 3 类，对应 §4.2 R5）
+| 指标 | 计算方式 | 过线目标 |
+|---|---|---|
+| `avg_winner_expert_acc` | Router argmax 主专家（给最大权重的专家）单独看 primary strict ACC | **≥ 71%**（主专家不比融合差太多，MoE 没做"反融合"） |
+| `expert_usage_gini` | Router 权重分布的基尼系数（衡量分工均衡度） | **≤ 0.55**（组合门禁项：不允许只喂 1-2 个专家） |
+| `e_volume_regime_weighted_acc`（量价专家专属） | e_volume_regime 权重占比>0.2 的样本里，融合方向 primary strict | **≥ 68%**（量价专家真的贡献价值，而不是一直 0 权重混饭吃） |
 
-### 5.3 与 SFT/DPO 的 A/B 对比（必须，四基线同场打）
-同一 1000 条评估集上，同时跑 4 个基准（全部按 primary + avg_all 双口径报告），用 Wilson 95% CI 做两样本比例 z-test（p<0.05 才算显著提升）：
-1. **Baseline (DPO)**：现有 SFT → DPO 的 5-fold 模型（`pronoia_dpo_fold*/last`，原 fever_dpo）
-2. **RLVR (GRPO)**：SFT 基座 → RLVR 的 5-fold 模型
-3. **Oracle**：`label_{primary}` + `label_avg_all`（理论上限，≈100%）
-4. **Random**：按 primary + avg_all 的 up/down/neutral 分布各自随机猜
+#### ⑥ 分场景 / 分桶过线标准（新增 Volume 3 桶）
+Market×L2×Time 分桶与原要求一致，新增 **Volume 3 桶硬性门禁**：
+- Volume **HI** 桶：primary strict ≥ **72%**（放量是最容易"事件定价充分"的 regime，应该更好）
+- Volume **NORMAL** 桶：primary strict ≥ **68%**（基准）
+- Volume **LOW** 桶：primary strict ≥ **58%**（缩量样本信号弱，过线阈值宽松，但不能 < 58%；否则说明模型在"没量就没方向"时完全乱猜）
+- 其它不变：CN≥65% / US≥70%；6 L2 ≥5 类过 65% 且 0 类<55%；隔夜≥70%/短期≥70%/中期≥60%
 
-> 要求：**RLVR 在 primary 口径上必须显著击败 DPO（p<0.05）；avg_all 口径可以不显著赢但不能显著输（即 CI 不低于基线）**——这就是"辩证过线"。
+### 5.3 与 SFT/DPO 的 A/B 对比（必须，四基线同场）
+同一 1000 条，同时跑 4 个基准（双口径 + 3 Volume 桶都打印），Wilson 95% CI 两样本比例 z-test（p<0.05 显著）：
+1. **Baseline (DPO)**：SFT→DPO 5-fold（`pronoia_dpo_fold*/last`，原 fever_dpo）
+2. **Pronoia-RLVR-MoE**：本方案 v1（K=6 MoE + 量价融合）
+3. **Oracle**：`label_{primary}` + `label_avg_all`（理论上限）
+4. **Random**：按 primary + avg_all 分布随机猜
 
-### 5.4 过线组合判据（不是单一数字，是"组合门禁"）
-**必须同时满足以下 4 条，才算 RLVR v1 通过**：
-1. ✅ `wilson_lo_95_acc_primary_strict ≥ 65%`（下限过线）
-2. ✅ `dual_window_hit_rate ≥ 60%`（双窗一致率，辩证过拟合门禁）
-3. ✅ `chain_valid_rate ≥ 90%` 且 `conf_ece_primary ≤ 0.08`（模型健康度）
-4. ✅ **6 类 EventType L2 分桶的 primary strict ACC**：≥ 5 类 ≥ 65%，且 0 类 < 55%（大类分布门禁）
+> **辩证过线**：primary 必须显著赢 DPO（p<0.05）；avg_all 不允许显著输；**VOLUME HI 桶**必须显著赢 DPO（放量 regime 是我们最应该拉开差距的场景，这是"量价融合"有效性的实锤）。
 
-5.3 中 A/B 对比（RLVR 对 DPO 在 primary 显著赢且 avg_all 不显著输）作为**推荐部署门禁**，非强制但需要书面解释不满足的原因。
+### 5.4 过线组合判据（6 条必须同时满足）
+**必须同时满足以下 6 条，才算 Pronoia-RLVR-MoE v1 通过**：
+1. ✅ `wilson_lo_95_acc_primary_strict ≥ 66%`
+2. ✅ `dual_window_hit_rate ≥ 61%`（双窗一致率）
+3. ✅ `chain_valid_rate ≥ 90%`、`conf_ece_primary ≤ 0.08`、`avg_volume_quoted_rate ≥ 95%`、`volume_regime_quoted_acc ≥ 98%`（四项健康度）
+4. ✅ **6 类 L2 分桶**：≥ 5 类 primary strict ≥65%，且 0 类<55%
+5. ✅ **Volume 3 桶门禁**：HI≥72% ∧ NORMAL≥68% ∧ LOW≥58%
+6. ✅ **MoE 分工门禁**：`expert_usage_gini ≤ 0.55` 且 `e_volume_regime_weighted_acc ≥ 68%`
 
----
-
-## 6. 实施路线图（rlvr 分支上的代码落地顺序）
-
-```
-Week 1：数据侧（新增 §2.4 三维匹配 + 字段）
-  ① build_rlvr_train_dataset.py —— 按 §2.2 的 12 层配额拉 5000 条 + 去重
-  ② 按 §2.4 匹配表写入 scene_primary/secondary/time_bucket 三字段 + labeller 打标签
-  ③ split_rlvr_5fold.py —— 复用 stable_stratified_split_ids 切 fold + 分布自检（JS<0.01）
-  ④ 附：定量自检脚本，确认定向 oracle vs 主horizon 真值的命中率 ≥ 95%（§2.4 附录复现）
-
-Week 2：训练侧（§4.2 新 Reward + §3.3 六段推理链）
-  ⑤ rlvr/scene_match.py —— §2.4 匹配表 Python dict + H_primary / H_secondary 查找函数
-  ⑥ rlvr/reward_fn.py —— §4.2 的 R0/R1/R2/R3/R4（含 R3 双窗安全阀 + R4 六段检查）
-  ⑦ rlvr/prompt_template.py —— 输入块 + 推理链 6 段模板（【0.】窗口 + 【1~5】，严格中文标签）
-  ⑧ rlvr/grpo_trainer.py —— 封装 trl.GRPOTrainer，连 reward_fn + prompt
-  ⑨ 跑 fold0 单 fold smoke test（100 条，1 epoch，观察 reward 曲线上升 + R4 chain_valid_rate 过 70%）
-
-Week 3：全量训练 + 评估（§5.2/5.3/5.4 辩证多口径）
-  ⑩ 5-fold 全量训练（每 fold ≈ 12~24h），产出 5 个 checkpoint
-  ⑪ eval_rlvr_vs_baseline.py —— §5.2 五大类 + §5.3 四基线同场对比，含 Wilson 检验、分桶
-  ⑫ 可视化：① Primary vs avg_all vs DPO 基线 ACC 柱状 + Wilson 误差棒
-          ② reward 学习曲线（含 R0~R4 分项）  ③ 12 场景×4 时间桶 ACC heatmap
-
-Week 4：推理侧接入 Team（Tier 1.5 + 显式窗口）
-  ⑬ rlvr_predictor.py —— 5 个 checkpoint ensemble，输出 chain/primary/secondary/dir/conf
-  ⑭ 在 team.py 的 _route_signals 之后注入 Tier 1.5 RLVR 结果（§3.3.x），把
-       【0.】时间窗口 + 完整 6 段推理链注入 router 的 analyzer_context
-  ⑮ 端到端 bt run 1000 条，比较 team_full 的 primary strict ACC vs baseline 是否 +5pp 以上
-```
+5.3 中的 A/B（primary 显著赢 DPO + VOLUME HI 桶显著赢 DPO）作为**推荐部署门禁**，非强制但要书面解释。
 
 ---
 
-## 7. 风险与回退路径
+## 6. 实施路线图（rlvr 分支，5 周 v1 = MoE + 量价 + 新增 skill，20 步）
+
+```
+Week 1：数据侧（三维匹配 + Volume 4 维 + 专家配额）
+  ①  backtesting/build_volume_features.py（新增 §3.2.2 skill）：
+       对 1000 评估集 + 5000 训练集，严格 as-of T0 写 vol_t0_ratio /
+       vol_pre5_ratio / price_vol_diverge / range_t0_normalized 4 个字段
+       + vol_regime ∈ {HI,NORMAL,LOW}（events.jsonl 新增一层）
+  ②  build_rlvr_train_dataset.py —— 12 层配额拉 5000 条 + 去重
+       同时写 scene_primary/secondary/time_bucket/expert_preference 4 字段
+  ③  按 §2.4 匹配表 + §3.2.2 Volume 口径 → 跑 labeller 打标签
+  ④  split_rlvr_5fold.py —— 按 market×L2×ym×vol_regime 4 维分层切 fold
+  ⑤  定量自检脚本：(a) 定向 oracle 命中率 ≥ 25pp 增益复现；
+                    (b) Volume 4 字段与 research_context volumes 对齐
+                    （复用 [research_context.py:L107-L109](file:///workspace/backend/app/agents/research_context.py#L107-L109)）
+
+Week 2：skill/tool 工程（把 volume_regime_analyzer 补进 Team）
+  ⑥  backend/app/skills/volume_regime_analyzer.py（新增 Tier 2 skill）：
+       对外接口 = volume_regime_analyzer(symbol, event_date) → dict 4 个数
+       （复用 backtesting OHLCV 历史；strict as-of：不用 event_date 之后任何 bar）
+  ⑦  roster.py 修改：在 deep_researcher / predictor 的 skills 列表里
+       加上 `volume_regime_analyzer`（见 [roster.py:L155-L164](file:///workspace/backend/app/agents/roster.py#L155-L164)
+       与 [roster.py:L229-L238](file:///workspace/backend/app/agents/roster.py#L229-L238)）
+  ⑧  deep_researcher persona 更新：解读卡片 Step 1/2/3 必须至少引用
+       1 条 volume_regime_analyzer 的数字（把量补进基本面）
+
+Week 3：训练侧 A — 6 专家 RFT（§4.2 训练两步走 Step 1）
+  ⑨  rlvr/scene_match.py：§2.4 匹配表 + §3.2.1 route() K=6 路由器
+       （3 信号 O(1) 查表 + Dirichlet 平滑 softmax，无训练参数）
+  ⑩  rlvr/expert_definitions.py：K=6 专家定义（配额表 + 采样偏好 +
+       每个专家都随机掺 15% 全场景样本防过拟合）
+  ⑪  rlvr/prompt_template.py：INPUT BLOCK（4 维量价 + vol_regime）
+       + 推理链 7 段模板（【0.】+【0.5】+【1~5】）
+  ⑫  6 专家各自 RFT（SFT 基座 warm start，r=16）：每条专家样本只做
+       对应场景子集；smoke test：单专家 100 条 1 epoch，R0+R0.5+R4≥60%
+
+Week 4：训练侧 B — GRPO MoE（Step 2） + 评估
+  ⑬  rlvr/reward_fn.py：§4.2 七元 Reward（κ_vol 乘子 / R0.5 / R5 熵正则
+       / R3 双安全阀）
+  ⑭  rlvr/grpo_trainer.py：MoE 版封装（load 6 个 RFT LoRA，每事件
+       4×6=24 rollout，按 router w_i 融合，跑 GRPO，lr=3e-7）
+  ⑮  5-fold 全量训练（fold×MoE，每 fold≈24~36h）
+  ⑯  eval_rlvr_vs_baseline.py：§5.2 六大类指标 + §5.3 四基线 +
+       Wilson 检验 + 12×4×3（场景×时间×量价）分桶 + MoE 健康度
+  ⑰  可视化：Primary vs avg_all vs DPO ACC（+Volume 3 桶分别画）
+          reward 学习曲线（R0/R0.5/R1/R2/R3/R4/R5 分项）
+          12×4×3 三因子 ACC heatmap
+
+Week 5：Team Tier 1.5 接入（MoE + 量价信息进 Team）
+  ⑱  rlvr_predictor.py：K=6 LoRA + Router 推理封装（输入符号/日期/事件
+       → 调用 volume_regime_analyzer → 路由 → 融合 → 输出 7 段推理链）
+  ⑲  team.py 注入 Tier 1.5：把【0.】时间窗口 + 【0.5】量价 regime
+       + 主专家/量价专家融合权重 + 最终方向，注入 router analyzer_context
+       （Team synthesize 阶段也能看到 MoE 的量价判断，不再"光看价"）
+  ⑳  端到端 bt run 1000 条：team_full primary strict ≥ baseline+5pp；
+       Volume HI 桶 team_full ≥ baseline+8pp（量价融合在高量 regime
+       必须有可见收益）
+```
+
+---
+
+## 7. 风险与回退路径（RLVR v1 = MoE + Volume 升级版）
 
 | 风险 | 可能性 | 影响 | 回退路径 |
 |---|---|---|---|
-| GRPO 训练不稳定，reward 震荡不收敛 | 中 | 高 | Fallback 到 PPO（加 critic）；或把 RLVR 降级为 RFT（拒绝采样微调，离线做） |
-| 推理链格式不服从，chain_valid_rate < 70% | 中 | 中 | 在 SFT 阶段先做推理链格式的多轮 SFT（用 GPT-4o 生成 1000 条正确格式的 chain，先 SFT 基座再 RLVR） |
-| Neutral 被滥用（pred neutral > 40%） | 高 | 中 | 增大 R1 中"oracle 有方向但判 neutral"的惩罚（从 -0.5 → -0.8）；或在采样时手动给 oracle≠neutral 的样本更高采样权重 |
-| 5000 条样本不够，PPO/GRPO 过拟合 | 中 | 高 | 扩展到 10000 条（按 §2.2 配额同比例 ×2）；或加更强的 KL 惩罚 |
-| RLVR 的 ACC 跑不赢 DPO baseline | 中 | 高 | 先验证 R1/R2/R3/R4 的 reward 设计有没有 bug；再调 beta/学习率/rollout 数量；最后用 RLVR 模型和 DPO 模型做 7:3 加权 ensemble（保下限） |
+| MoE 训练不稳定/分工不均（基尼 > 0.7） | 中 | 高 | 把 R5 权重从 2% → 4%；Router Dirichlet α 从 0.3→0.5；再不行直接回退成"硬路由 + 单专家"（取消 softmax，每条事件只激活一个专家） |
+| 量价 4 维字段缺失率 > 10%（US OTC/小市值没量） | 低 | 中 | 缺失时给 vol_t0_ratio=1.0 + diverge=0（中性值）；并在【0.5】段强制写"量数据缺失，量价 regime 视为中性" |
+| volume_regime_analyzer skill 与 events.jsonl 数值不一致 | 中 | 中 | 工程侧做双重检查：Team 里调 skill 后，和 events.jsonl 字段值做 diff；diff>±0.1 的样本打标"量值不一致"不参与训练 |
+| GRPO MoE 不收敛 | 中 | 高 | Fallback 成"6 专家纯 RFT + 固定权重静态融合"（不做 GRPO），仍能拿到分场景收益；或降级为单体 RLVR（附录 v1） |
+| VOLUME LOW 桶 ACC 不达标（<58%） | 高 | 中 | 该桶默认把 neutral 惩罚从 -0.5 放宽到 -0.2（没量时允许谨慎）；或 3 桶分别调 κ_vol 下限 |
+| RLVR ACC 不赢 DPO baseline | 中 | 高 | 先验证 κ_vol 设计；再在 Volume HI 桶做加权采样（放量样本更值钱、采样 ×1.5）；最后 MoE 和 DPO 按 (0.55,0.45) ensemble |
+
+---
 
 ---
 
