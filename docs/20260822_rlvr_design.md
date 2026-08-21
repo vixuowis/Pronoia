@@ -27,7 +27,7 @@ RLVR 要补的三板斧：
 
 ## 1. 评估集（固定不变）
 
-评估 **只在现有 1000 条** [events_cn_us_1000_v1.jsonl](file:///workspace/backtesting/events_cn_us_1000_v1.jsonl) + [labels_cn_us_1000_v1.jsonl](file:///workspace/backtesting/labels_cn_us_1000_v1.jsonl) 上做，**不新增、不改动**：
+评估 **只使用 `backtesting/` 目录下已构造好的 1000 条**——也就是 [events_cn_us_1000_v1.jsonl](file:///workspace/backtesting/events_cn_us_1000_v1.jsonl) + [labels_cn_us_1000_v1.jsonl](file:///workspace/backtesting/labels_cn_us_1000_v1.jsonl)，**不再重新生成、不新增样本、不改动字段**：
 
 | 项 | 值 |
 |---|---|
@@ -114,18 +114,19 @@ data/_rlvr_artifacts_v1/folds_rlvr_5000/
 
 ## 3. 模型方案
 
-### 3.1 模型大小：**8B（起步） + LoRA**
+### 3.1 模型大小：**Qwen3-8B（起步） + LoRA**
 
 | 模型规格 | 适用场景 | 显存（单卡 A100 80G） | 训练吞吐 | 结论 |
 |---|---|---|---|---|
-| **Llama-3.1-8B-Instruct + LoRA r=16** | RLVR 起步，和现有 SFT/DPO 管线对齐 | ≈32G（fp16 + LoRA + PPO optimizer） | batch=128 seq=2048 ≈ 3h/epoch | ✅ **起步首选** |
-| Llama-3.1-70B-Instruct + QLoRA 4bit | 如果 8B 的 ACC Wilson 下限仍 <70% 再考虑 | ≈60G | 约 8B 的 1/5~1/6 | ⚠️ 后续升级项 |
+| **Qwen3-8B-Instruct + LoRA r=16** | RLVR 起步，中文金融语义理解优于 Llama | ≈32G（bf16 + LoRA + GRPO optimizer） | batch=128 seq=2048 ≈ 2.5h/epoch | ✅ **起步首选** |
+| Qwen3-72B-Instruct + QLoRA 4bit | 如果 8B 的 ACC Wilson 下限仍 <70% 再考虑 | ≈60G | 约 8B 的 1/5~1/6 | ⚠️ 后续升级项 |
 | 自研 <2B 小模型蒸馏 | 部署端到端低延迟 | 低 | 高 | ❌ 先不搞，SFT/Reward 模型都还没稳 |
 
-**为什么 8B 足够起步**：
-- 现有 SFT 脚手架就是 8B + LoRA r=16（见 [train_fever_v2.py:L143-L144](file:///workspace/backend/scripts/train_fever_v2.py#L143-L144)），RLVR 直接复用 LoRA 权重做 warm start，不用从零训。
-- 推理链 + 方向判断的 token 长度 ≈ 1500~2000，8B 的 128k ctx 绰绰有余。
-- 主要瓶颈在 rollout 采样 + reward 计算的 batch 吞吐，不在参数量。
+**为什么选 Qwen3-8B**：
+- **中文金融语料覆盖更好**：Qwen3 在 A 股公告、政策文件、研报类中文文本上的分词/语义理解显著优于 Llama-3.1，正好匹配本任务 70% CN 样本的分布。
+- **复用现有管线**：现有 SFT 脚手架 [train_fever_v2.py:L143-L144](file:///workspace/backend/scripts/train_fever_v2.py#L143-L144) 的 LoRA r=16 配置、trl/peft 接口完全兼容，只改 `model_name` 一行。RLVR 阶段直接加载 SFT 的 LoRA 做 warm start。
+- **长上下文足够**：推理链 5 段 + 最终方向 ≈ 600~800 tokens，加上 input block 1500 tokens，总 seq ≤ 2048，Qwen3-8B 128k ctx 轻松容纳。
+- **主要瓶颈不在参数量**：rollout 采样（4 条/event）+ reward 计算的 batch 吞吐是 GRPO 训练的真正瓶颈，8B vs 72B 差异在模型能力而非速度。
 
 ### 3.2 LoRA 配置（复用 SFT 配置 + 微调 gate_proj）
 
