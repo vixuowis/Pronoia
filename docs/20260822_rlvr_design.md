@@ -520,6 +520,149 @@ Week 4：推理侧接入 Team（Tier 1.5 + 显式窗口）
 
 ---
 
+## 附录 A：FEVER-MS 升级方向（频率 × 时效 × 量价 × MoE LoRA + RFT，简洁 elegant 架构）
+
+> **定位**：本附录把你在 FEVER-MS wiki 里的 MoE + Volume 多尺度思考，**向下兼容** §2~§6 的 RLVR v1 单体方案，作为 v2 升级蓝图。设计原则：**(a) 不引入新的基座模型、不搞独立的数值模型大工程**（复用 Qwen3-8B 基座 + 可解释的 4 维量价特征）；(b) MoE 只在 LoRA 层做、gating 只用 3 个信号（尺度能量比 + Volume regime + 场景标签），不搞训练成本爆炸的 learned-token router；(c) 训练顺序是"先 RFT 每个专家 → 再 GRPO 整端 MoE"，训练与推理都保持 O(1) 路由开销。
+
+### A.1 核心思想：先把事件分配给"擅长该市场/该时效/该 regime"的专家，再统一出方向
+
+原 RLVR v1 是**单体 LoRA**：用同一组权重对"US 隔夜利率决议"和"CN 中期并购"都做方向预测，模型权重互相打架、时间信号互相平均。  
+**FEVER-MS v2 = 单体基座 + K 个场景专家 LoRA + 可解释轻量 Router（无训练参数）**：
+- K=6 个专家，每个专家只在自己擅长的分布上做**RFT（拒绝采样微调）**，不做跨分布训练。
+- Router 只看 3 个 O(1) 信号：`(market×event_type_l2 场景标签)` + `(Volume regime 三分类)` + `(price 尺度能量比 H/L)`，用一张**查表 + 平滑 softmax**搞定，不需要在 decoder 里塞 LoRA gating。
+
+### A.2 专家 LoRA 设计（K=6，每个 16×16 LoRA，参数量 ≤ 2.2% / 专家）
+
+与 §2.4 的三维匹配矩阵对齐，**直接按 12 场景×时间桶聚类成 6 个专家**：
+
+| 专家 LoRA ID | 覆盖场景（12 场景×时间桶 → 聚类） | 训练数据量 | 训练方法 | 推理链窗口倾向 |
+|---|---|---|---|---|
+| **E_cn_s** CN 短期型 | CN 财报(t3)/CN 回购(t3)/CN 政策(t3) | ≈ 1600 条（≈32%） | RFT（单体先采 oracle 正确样本 → SFT-LoRA） | t1/t3 倾向，shortterm |
+| **E_cn_m** CN 中期型 | CN 并购/重组(t7) + CN 政策扩散(t5) | ≈ 700 条（≈14%） | RFT（方向对 + 双窗一致的样本加权） | t5/t7 倾向，midterm |
+| **E_cn_o** CN 隔夜型 | CN 业绩预告(t1)/CN 宏观数据(t1) | ≈ 500 条（≈10%） | RFT（对 pre5 漂移 + T0 量价异常样本权重×2） | t1 强倾向，overnight |
+| **E_us_o** US 隔夜型 | US 财报(t1)/US 指引(t1)/US FDA(t1)/US FOMC(t1) | ≈ 1200 条（≈24%） | RFT（盘后 AH 成交量×事件方向一致的样本加权） | t1 强倾向，overnight |
+| **E_us_s** US 短期型 | US M&A/buyback(t3)/US 其他 company_news(t3) | ≈ 700 条（≈14%） | RFT（双窗一致样本权重×1.5） | t1/t3/t5，shortterm |
+| **E_vol** Volume 专家（全局 regime 专家） | **所有场景**里高 Volume 样本（top 30% abnormal volume） | ≈ 1500 条（≈30%，与其他专家共享样本） | RFT（只采样量价背离/量价确认两类典型情形） | 自适应，依赖 Volume regime |
+
+> **设计原则简洁性体现**：6 个专家完全由 §2.4 的 (market×horizon) 聚类得出，没有额外自由度；E_vol 仅补充 Volume 维度，不独立出方向——实际输出由 Router 加权叠加。
+
+### A.3 Volume 量价体系的三处融合（不搞复杂 MODWT/小波，4 维可解释特征够了）
+
+之前 RLVR v1 只看"价"(CAR)，现在把"量"融入 3 个位置：**(1) Input 块增加 4 维 as-of 量价特征；(2) Oracle CAR 做"量加权置信"校准（异常成交量事件 oracle 可信度更高）；(3) Router 用 Volume regime 决定 E_vol 专家权重。**
+
+#### A.3.1 Input 块新增 4 维 as-of 量价特征（严格 AS-OF：T0 及之前）
+
+在 §3.3.1 Input Block 的末尾追加 4 个数字字段（由数据构造脚本在训练/评估集里一次性计算写入，不需要 LLM 运行时算）：
+
+| 字段名 | 定义（严格 AS-OF） | 为什么有效 |
+|---|---|---|
+| `vol_t0_ratio` | T0 当日成交量 / 近 20 日成交量均值（无未来） | 异常放量=市场关注=定价效率更高，confidence 可以给得高 |
+| `vol_pre5_ratio` | pre5（事件前5天）累计成交量 / 近20日×5均值 | 漂移时放量=知情交易者入场概率高，反方证据需更重视 |
+| `price_vol_diverge` | pre5 收益率方向 与 pre5 净量方向（量×sign）的一致性：−1=背离 / 0=中性 / +1=一致 | 价升量缩=弱信号，价升量增=强信号 |
+| `range_t0_normalized` | (T0 最高 − T0 最低) / 收盘价（归一化振幅） | 振幅大=分歧大，confidence 要打折扣 |
+
+> 这 4 个量价特征全部写进 Input Block 末尾的一段文本（例如"量价特征：vol_t0=1.8x，pre5_vol=0.9x，pv_diverge=+1，range=3.1%"），让推理链【1. 关键信号提取】和【3. 反方与限制】可以引用。**不需要独立的"数值通道"或"小波模型"，靠 Qwen3-8B 在 SFT/RFT 阶段直接学习这些量价词。**
+
+#### A.3.2 Oracle CAR 增加"量加权置信"系数 κ（融入 §4.2 的 R2/R3 Reward）
+
+对每条样本额外增加一个 `kappa_vol = clamp(0.6, vol_t0_ratio / 1.5, 1.4)`（vol_t0_ratio=1 时 κ=0.87；放量 1.5× 时 κ=1.0；放量 3× 时 κ=1.4；缩量 0.3× 时 κ=0.6）。  
+**Reward 里的 R2（置信度校准）和 R3（CAR 幅度加权）乘以 κ_vol**：
+- **逻辑**：异常放量的事件"市场定价更认真，oracle CAR 信息量更大"，正确判对的奖励更大；缩量事件（可能是噪声样本）的奖励更小。
+- **效果**：RFT 的拒绝采样阶段，放量且方向对的样本更容易被选中成为专家的训练正例。
+
+#### A.3.3 Router 用 Volume regime（3 分类）决定 E_vol 专家权重（§A.4）
+
+```python
+vol_regime = "HI"  if vol_t0_ratio >= 1.5 else \
+             "LOW" if vol_t0_ratio <= 0.7 else \
+             "NORMAL"
+```
+
+### A.4 Router：3 信号查表 + 归一化加权，O(1)，**无训练参数**（Elegant 核心）
+
+Router 是 FEVER-MS 避免复杂的关键——**不搞学习的 token router（如 MixLoRA/Switch-Transformer 那种带 router weights 的路由）**，直接用 3 个 O(1) 信号做查表 + Dirichlet 平滑 softmax，路由权重在推理/训练 reward 时一致可复现：
+
+#### A.4.1 路由输入 3 个信号
+1. **信号 1：场景标签** `s = (market, event_type_l2)` → 查表得到 6 专家的**基权重 W_base[s]**（6 维，非零 ≤ 3 个，对应 A.2 覆盖表）。
+2. **信号 2：Volume regime** = HI / NORMAL / LOW → 查表给 **E_vol 叠加 ΔW_vol**：HI +0.25，NORMAL +0.08，LOW +0.0。
+3. **信号 3：价格尺度能量比 H/L**（简化版，不需要 MODWT）：
+   ```python
+   # as-of：用 pre10 日收益率的 2 日 EMA 波动率 / 10 日 EMA 波动率
+   hl_ratio = ema(daily_ret^2, 2) / (ema(daily_ret^2, 10) + 1e-8)
+   freq_hi = hl_ratio > 2.0   # 高频突发型 → 给 隔夜型专家(E_cn_o/E_us_o) 再 +0.12
+   freq_lo = hl_ratio < 0.5   # 低频延续型 → 给 中期型专家(E_cn_m) 再 +0.12
+   ```
+
+#### A.4.2 路由公式（简洁到一张表 + 两次归一化）
+```
+W_raw = W_base[s]          # 信号1：场景基权重
+W_raw[IDX_vol] += ΔW_vol   # 信号2：Volume 叠加
+if freq_hi: W_raw[IDX_cn_o] += 0.12 if market=="CN" else 0.0
+           W_raw[IDX_us_o] += 0.12 if market=="US" else 0.0
+if freq_lo: W_raw[IDX_cn_m] += 0.12
+W = softmax(W_raw / T_router)     # T_router = 0.6（固定温度，不学习）
+```
+**K=6 个专家加权输出**：
+```
+final_dir_logits = Σ_{e=1..6} W[e] * LoRA_e(dir_logits)
+final_chain  = argmax(W) 的专家产出的推理链（作为"主推理链"输出，可审计）
+```
+
+> **简洁性体现**：Router 只有 12 行代码（查表+叠加+softmax），没有可训练权重，不会出现"router 塌缩到单专家"的训练不稳定性；同时输出的主推理链是 argmax 专家的 6 段链，人类可审计性和 v1 一样好。
+
+### A.5 训练顺序：先 RFT 每个专家 → 再 GRPO 整端 MoE（两步走，效率高）
+
+MoE 如果直接端到端 GRPO，会有 router 冷启动、专家分工不均等坑；FEVER-MS v2 用"**先 RFT 单体专家 → 再 GRPO MoE**"两步走：
+
+#### Step 1：RFT（拒绝采样微调）每个专家 LoRA（单体训练，并行 K=6 组）
+对每个专家 e：
+1. **采样集 D_e**：从 5000 条总训练集中，按该专家覆盖场景（A.2 表）抽样本；对 oracle 方向正确（非 neutral oracle 方向 == label_primary）的样本，按 `(1 + 0.5 * kappa_vol)` 概率被保留（放量正确样本入选概率更高）。
+2. **保留比率**：每条样本 rollout 4 个方向，取 R_total 排名 top-1（≥ 0.3 的才留），对每个专家 RFT 只接受高 reward 样本 → RFT-LoRA 微调单体。
+3. 输出：6 个 `lora_e/` 目录（r=16，target_modules 同 §4.1）。
+
+> RFT 是 RLVR 的"低配版"（离线拒绝采样 + SFT，没有 PPO/GRPO 在线更新），训练成本低、分布稳，每个专家 500~1000 条样本足够收敛。
+
+#### Step 2：GRPO 整端 MoE（§4 的 RLVR 框架改造，Router 作为固定组合器）
+把 K=6 个 RFT 专家 LoRA 同时挂在 Qwen3-8B 基座（LoRA 叠加，W_raw 加权），在完整 5000 条训练集上再做一次**小学习率 GRPO**（只微调 Router 温度？不，温度固定为 0.6；GRPO 只微调 K=6 个 LoRA 的 ΔW，不碰任何基座权重）：
+- Reward 函数同 §4.2（R0~R4），新增一项 **R5=0.05 × expert_entropy_reg**：
+  ```python
+  R5 = 0.05 * min(1.0, - Σ W[e] log W[e] / log(6))   # 负熵归一化
+  ```
+  R5 的作用：避免 Router 塌缩到只选一个专家（W 变成 one-hot），鼓励"专家混合"。
+
+### A.6 FEVER-MS v2 评估：在 v1 的五大类上新增 MoE 三类指标（辩证评估）
+
+在 §5 五大类指标基础上，FEVER-MS v2 再新增三类（全部 1000 条评估集上报告）：
+| 指标 | 说明 | 过线目标 |
+|---|---|---|
+| `avg_winner_expert_acc` | 每个场景下 Router 的 argmax 专家（主推理链专家）的 primary strict ACC | ≥ 70%（比单体 RLVR +2pp） |
+| `vol_regime_split_acc` | Volume HI/NORMAL/LOW 三桶的 primary strict ACC 分别打印 | HI 桶 ≥ 72%，LOW 桶 ≥ 60% |
+| `expert_usage_gini` | Router 权重分布的基尼系数（衡量专家分工均衡度） | ≤ 0.55（不允许只喂 1-2 个专家） |
+
+### A.7 代码落地：增量极小（和 §6 的 15 步 v1 方案复用 95%）
+
+FEVER-MS v2 在 v1 Week 1~4 基础上，只需要新增 5 个文件 / 修改 3 处：
+| 新增/修改 | 路径 | 说明 |
+|---|---|---|
+| 新增 | `backend/scripts/rlvr/volume_features.py` | A.3.1 的 4 维 as-of 量价特征计算（供 build 脚本调用） |
+| 新增 | `backend/scripts/rlvr/experts/definitions.py` | A.2 的 6 专家覆盖场景表 + `W_base[s]` 查表 |
+| 新增 | `backend/scripts/rlvr/experts/router.py` | A.4 的 O(1) Router（12 行查表 + softmax） |
+| 新增 | `backend/scripts/rlvr/experts/rft_train_e.py` | A.5 Step1：单专家 RFT 训练脚本（并行 K=6） |
+| 新增 | `backend/scripts/rlvr/experts/grpo_moe_trainer.py` | A.5 Step2：6 LoRA 叠加的 MoE GRPO，新增 R5 专家熵正则 |
+| 修改 | `backend/scripts/rlvr/reward_fn.py` | §4.2 中 R2/R3 乘以 A.3.2 的 kappa_vol |
+| 修改 | `backend/scripts/rlvr/prompt_template.py` | Input Block 末尾添加 4 维量价特征的文本段落（A.3.1） |
+| 修改 | `backend/scripts/rlvr/build_rlvr_train_dataset.py` | Week1 脚本中调用 volume_features.py 写 4 个量价附加字段 + kappa_vol |
+
+> **Elegant 的原因**：A.2~A.7 的全部新增内容，都**复用** v1 的训练数据、评估集、Oracle 字段、Reward 函数骨架、推理链 6 段格式、GRPO trainer 框架——**没有新的大工程**，只是在 RLVR v1 上做了 6 个 LoRA 专家并行 + 一个 12 行无参数 Router + 4 个量价特征，符合你"尽量简洁而 elegant"的要求。
+
+### A.8 与 FEVER-MS wiki 提案的对应关系（收敛简化版）
+对比你在 wiki 里 §4.1 的总体架构描述，这里把复杂点统一做了**收敛简化**：
+- **频率×时效二维 Reward**：wiki 里的 `R(q,style)=Σ_f Σ_h λ·verify_f·hit_h·abstain_shape` → 在本附录里拆成 **A.3.2 的 kappa_vol（verify_f 简化）+ §4.2 的 oracle_primary（hit_h 定向）+ R3 双窗安全阀（abstain_shape 简化）**，不搞二维张量求和。
+- **MODWT/小波三通道 H/M/L**：wiki 里的 MODWT → 在 A.4.1 信号 3 中简化为 `ema(daily_ret^2, 2) / ema(daily_ret^2, 10)`（hl_ratio），不引入独立的数值骨干模型。
+- **Scale-Conditioned Router + UGA 门控优势 + CES 专家互斥正则**：wiki 里的三项训练技巧 → 在 A.5 Step2 中收敛为"R5 专家负熵正则 + 固定温度 T_router=0.6 + 单专家 RFT 预训练"，保证分工均衡同时不引入新训练超参。
+
+---
+
 ## 8. 关键文件改动清单（rlvr 分支）
 
 | 新增/修改 | 路径 | 说明 |
