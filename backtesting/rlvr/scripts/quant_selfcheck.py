@@ -3,7 +3,7 @@
 5 项自检（任何一项 FAIL → 阻断训练，必须先修数据）：
   ✅ Q1 分层配额：Market × EventTypeL2 12 层实际比例 vs 评估集比例的 JS 散度 ≤ 0.02
   ✅ Q2 标签完整度：horizons_complete 比例 ≥ 0.90（即 90% 样本 5 主 horizon 全有效）
-  ✅ Q3 RER↔CAR 一致性：t7 RER↔CAR 同号率 ≥ 0.70（太低说明数据源有问题）
+  ✅ Q3 RET↔CAR 一致性：t7 RET（事件后标的自身收益）与 CAR（相对基准超额）同号率 ≥ 0.70
   ✅ Q4 时间分布：2024-01 ~ 2026-06 样本覆盖 ≥ 18 个月（不能集中在某几个月）
   ✅ Q5 去重 & 泄漏：同评估集 event_id 交集 = 0；训练集内部重复率 = 0
 
@@ -36,7 +36,7 @@ from scene_match import ALL_SCENE_KEYS  # noqa: E402
 THRESHOLDS = {
     "Q1_JS_DIVERGENCE_MAX": 0.02,
     "Q2_HORIZONS_COMPLETE_MIN": 0.90,
-    "Q3_RER_CAR_AGREE_T7_MIN": 0.70,
+    "Q3_RET_CAR_AGREE_T7_MIN": 0.70,
     "Q4_MONTHS_COVERED_MIN": 18,
     "Q5_INTERNAL_DUP_MAX": 0,
     "Q5_EVAL_OVERLAP_MAX": 0,
@@ -116,23 +116,23 @@ def run_checks(train_events: list[dict], train_labels: list[dict],
     }
     if not q2_pass: results["pass_all"] = False
 
-    # ============ Q3：RER↔CAR t7 同号率 ============
+    # ============ Q3：RET↔CAR t7 同号率（事件后收益率 vs 相对超额收益）============
     agree = 0; total = 0
     for e in train_events:
         eid = str(e.get("event_id") or "")
         lb = labels_map.get(eid)
         if not lb: continue
-        if isinstance(lb.get("rer_car_agree_t7"), bool):
+        if isinstance(lb.get("ret_car_agree_t7"), bool):
             total += 1
-            if lb["rer_car_agree_t7"]: agree += 1
+            if lb["ret_car_agree_t7"]: agree += 1
     ratio = agree / max(1, total)
-    q3_pass = (ratio >= THRESHOLDS["Q3_RER_CAR_AGREE_T7_MIN"]) and (total >= 100)
-    results["Q3_rer_car_agree_t7"] = {
+    q3_pass = (ratio >= THRESHOLDS["Q3_RET_CAR_AGREE_T7_MIN"]) and (total >= 100)
+    results["Q3_ret_car_agree_t7"] = {
         "pass": q3_pass,
         "ratio": ratio,
         "agree_n": agree,
         "valid_n": total,
-        "threshold": THRESHOLDS["Q3_RER_CAR_AGREE_T7_MIN"],
+        "threshold": THRESHOLDS["Q3_RET_CAR_AGREE_T7_MIN"],
         "note": "n>=100 才有效；低于 70% 说明行情下载/复权路径异常",
     }
     if not q3_pass: results["pass_all"] = False
@@ -208,7 +208,7 @@ def main():
 
     # 终端打印摘要
     print("\n========== QUANT SELFCHECK ==========")
-    for k in ["Q1_layer_distribution", "Q2_horizons_complete", "Q3_rer_car_agree_t7",
+    for k in ["Q1_layer_distribution", "Q2_horizons_complete", "Q3_ret_car_agree_t7",
               "Q4_months_coverage", "Q5_dedup_and_no_leakage"]:
         r = report[k]
         status = "✅ PASS" if r["pass"] else "❌ FAIL"

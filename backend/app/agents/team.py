@@ -24,16 +24,16 @@ EXPERT_IDS = ["event_scout", "market_analyst", "fundamentals_analyst", "deep_res
 # - Tier 1.5 RLVR_ANALYZER 作为独立 agent 与 Tier 1 analyzer 并行输出（可选，默认关闭）。
 # - 开关 ENABLE_RLVR_TIER15 默认 False（因为需要先跑完 §6 路线图的模型训练才能加载权重）。
 # - 合成阶段把 Tier 1.5 的 7 段 CoT 结果（【0.预判时间窗口】+【0.5 量价 regime 校验】
-#   + … + 最终方向 + 置信度 + RER↔CAR 是否一致标志）拼进 synthesis 上下文，
+#   + … + 最终方向 + 置信度 + RET↔CAR 是否一致标志）拼进 synthesis 上下文，
 #   按方案 3 信号加权融合，不取代人工分析。
 ENABLE_RLVR_TIER15: bool = False
 
 RLVR_ANALYZER_INSTRUCTION_IF_ENABLED = """【Tier 1.5 · Pronoia-RLVR 可验证奖励分析器（并行注入）】
 - 先调用 rlvr_predictor(event_text, symbol, event_date) 拿 7 段推理链输出，
   得到：primary_horizon、vol_regime、direction_pred、confidence、
-        car_t3_expected_pct、rer_car_agree_flag、融合权重来源说明。
+        car_t3_expected_pct、ret_car_agree_flag、融合权重来源说明。
 - 只把【0.预判时间窗口】【0.5 量价 regime 校验】两段的数值，以及最终方向 +
-  置信度 + RER↔CAR 一致标志拼进 synthesis；不整段复制避免污染。
+  置信度 + RET↔CAR 一致标志拼进 synthesis；不整段复制避免污染。
 - 若 ENABLE_RLVR_TIER15=False，则本节静默跳过，不影响默认 Team Pipeline 行为。"""
 
 PLANNER_INSTRUCTION = """你是任务规划器。把用户问题拆成 2~4 个子任务，每个子任务指定一个专家 Agent：

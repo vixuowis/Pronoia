@@ -106,9 +106,9 @@ def build_input_block(event: dict, label: Optional[dict] = None,
         block["_gt"] = {
             f"label_{primary_h}": label.get(f"label_{primary_h}"),
             f"car_{primary_h}":   label.get(f"car_{primary_h}"),
-            f"rer_{primary_h}":   label.get(f"rer_{primary_h}"),
+            f"ret_{primary_h}":   label.get(f"ret_{primary_h}"),
             "horizons_complete":  label.get("horizons_complete"),
-            "rer_car_agree_5h":   label.get("rer_car_agree_5h"),
+            "ret_car_agree_5h":   label.get("ret_car_agree_5h"),
         }
     return block
 
@@ -157,9 +157,9 @@ def build_rft_reference(block: dict, strict: bool = True) -> str:
     s = block["scene"]; v = block["volume_features"]; b = block
     dir_gt = gt.get(f"label_{s['primary_horizon']}", "neutral") or "neutral"
     car_gt = gt.get(f"car_{s['primary_horizon']}")
-    rer_gt = gt.get(f"rer_{s['primary_horizon']}")
+    ret_gt = gt.get(f"ret_{s['primary_horizon']}")
     complete = bool(gt.get("horizons_complete"))
-    agree5h = bool(gt.get("rer_car_agree_5h"))
+    agree5h = bool(gt.get("ret_car_agree_5h"))
 
     # 基于 car_gt 大小给一个合理的 confidence 启发式（RFT 启动用，GRPO 阶段模型会自己学会校准）
     try:
@@ -203,11 +203,11 @@ def build_rft_reference(block: dict, strict: bool = True) -> str:
         f"【2. 横向比较】同类 {b['market']} × {b['event_type_l2']} 事件历史表现：定向 T+{s['primary_horizon'][1:]} CAR 均值见训练集分桶统计；本次主 benchmark 收益相对位置正常。",
         "",
         f"【3. 反方与限制】失效条件：① T+{s['secondary_horizons'][0][1:]} 方向与主窗口相反（双窗不一致）；"
-        f"② RER↔CAR 同号率低于 70%（alpha 不纯）；③ vol_regime 从 {regime} 跳到反向桶。",
+        f"② RET↔CAR 同号率低于 70%（alpha 不纯：事件后标的自身收益 vs 相对基准超额方向背离）；③ vol_regime 从 {regime} 跳到反向桶。",
         "",
         f"【4. 置信度校准】confidence={conf_naive:.2f}（来源：主窗口 CAR 幅度启发 {car_abs*100:.2f}% → 基础分，"
         f"{'horizons_complete=✓' if complete else 'horizons 不全 -0.10'}，"
-        f"{'RER 5h 同号=✓' if agree5h else 'RER 5h 不全同号 -0.05'}，量价 regime 修正已计入）。",
+        f"{'RET 5h 同号=✓' if agree5h else 'RET 5h 不全同号 -0.05'}，量价 regime 修正已计入）。",
         "",
         f"【5. 最终方向】direction: {dir_gt}，融合来源：专家组合 {top2}（Router 先验权重 Top2，加上量价 regime 修正后得到最终判断）。",
     ]

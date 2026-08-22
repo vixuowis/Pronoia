@@ -1,16 +1,16 @@
-"""build_rer_metrics.py — Pronoia-RLVR §1.2 RER 指标生成器。
+"""build_ret_metrics.py — Pronoia-RLVR §1.2 RET（事件后收益率）指标生成器。
 
 输入 labels.jsonl（由 labeller.py 生成，含 ret_tXX/car_tXX），输出增强版 labels：
-  · 显式 RER 字段：rer_t3 / rer_t7 / rer_t15 / rer_t30 / rer_t60
-    （= ret_tXX，即标的自身累计收益，与 CAR 构成正交维度）
+  · 用 labeller 原生的 ret_t3 / ret_t7 / ret_t15 / ret_t30 / ret_t60 作为事件后收益率
+    （即标的自身累计收益，与 CAR（相对基准超额收益）构成正交评估维度）
   · horizons_complete：5 个 horizon 全部 ret/car 有效（非 None 且 abs<10）才为 True
-  · rer_car_agree_tXX：RER 与 CAR 同号；若两者都为 0 也算一致；任一无效→False
-  · rer_car_agree_5h：5 个 horizon 全部 agree 才算 True
-  · long_short_agree_t3_t60：rer_t3 与 rer_t60 同号（长短 horizon 反转惩罚用）
+  · ret_car_agree_tXX：RET 与 CAR 同号；若两者都为 0 也算一致；任一无效→False
+  · ret_car_agree_5h：5 个 horizon 全部 agree 才算 True
+  · long_short_agree_t3_t60：ret_t3 与 ret_t60 同号（长短 horizon 反转惩罚用）
   · long_short_agree_short：{t1,t3,t7} 三元多数与 {t15,t30,t60} 三元多数同号
 
 用法：
-    python3 backtesting/rlvr/scripts/build_rer_metrics.py \
+    python3 backtesting/rlvr/scripts/build_ret_metrics.py \
         --labels-in  backtesting/labels_cn_us_1000_v1.jsonl \
         --labels-out backtesting/labels_cn_us_1000_v1.jsonl   # 原地覆写允许
 """
@@ -19,7 +19,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import statistics
 from collections import Counter
 from pathlib import Path
 
@@ -42,12 +41,17 @@ def _sign(x) -> int:
 
 
 def augment_label(lb: dict) -> dict:
-    """给单条 label 写入 RER 字段。返回同一条 dict（原地修改）。"""
-    # ---- 1) RER = ret_tXX（显式复制，便于下游直接引用字段名）----
-    for h in PRIMARY_HORIZONS:
-        lb[f"rer_{h}"] = lb.get(f"ret_{h}")
+    """给单条 label 写入 RET↔CAR 一致 / horizons_complete / long_short_agree 字段。
 
-    # ---- 2) horizons_complete：5 主 horizon 全部 ret/car 有效 ----
+    原地修改并返回；ret_tXX 直接使用 labeller 原生写入的字段，不再额外复制。
+    同时清理历史遗留的 `rer_*` 字段，统一叫 RET。
+    """
+    # ---- 0) 清理旧命名：所有以 "rer_" 开头的字段全部 pop（保证 labels 命名一致）----
+    legacy_keys = [k for k in list(lb.keys()) if isinstance(k, str) and k.startswith("rer_")]
+    for k in legacy_keys:
+        lb.pop(k, None)
+
+    # ---- 1) horizons_complete：5 主 horizon 全部 ret/car 有效 ----
     ok_all = True
     for h in PRIMARY_HORIZONS:
         r = lb.get(f"ret_{h}"); c = lb.get(f"car_{h}")
@@ -56,7 +60,7 @@ def augment_label(lb: dict) -> dict:
             break
     lb["horizons_complete"] = ok_all
 
-    # ---- 3) rer_car_agree_tXX（单 horizon）& 5h 汇总 ----
+    # ---- 2) ret_car_agree_tXX（单 horizon）& 5h 汇总 ----
     agree_5h = True
     for h in PRIMARY_HORIZONS:
         r = lb.get(f"ret_{h}"); c = lb.get(f"car_{h}")
@@ -64,13 +68,12 @@ def augment_label(lb: dict) -> dict:
             agree = (_sign(r) == _sign(c))
         else:
             agree = False
-        lb[f"rer_car_agree_{h}"] = agree
+        lb[f"ret_car_agree_{h}"] = agree
         if not agree:
             agree_5h = False
-    lb["rer_car_agree_5h"] = agree_5h
+    lb["ret_car_agree_5h"] = agree_5h
 
-    # ---- 4) long_short_agree：长短 horizon 反转检测 ----
-    # t3 vs t60 直接比较
+    # ---- 3) long_short_agree：长短 horizon 反转检测（基于标的自身收益 ret）----
     r3 = lb.get("ret_t3"); r60 = lb.get("ret_t60")
     if _valid(r3) and _valid(r60):
         lb["long_short_agree_t3_t60"] = (_sign(r3) == _sign(r60))
@@ -105,7 +108,6 @@ def process(labels_in: Path, labels_out: Path) -> dict:
                 rows.append(json.loads(line))
     print(f"[INFO] 读取 labels: {len(rows)} 条  ← {labels_in}")
 
-    # 统计
     cnt_complete = 0
     agree_cnt = Counter()  # key=horizon, value=agree 条数
     agree_total_valid = Counter()
@@ -119,7 +121,7 @@ def process(labels_in: Path, labels_out: Path) -> dict:
             r = lb.get(f"ret_{h}"); c = lb.get(f"car_{h}")
             if _valid(r) and _valid(c):
                 agree_total_valid[h] += 1
-                if lb[f"rer_car_agree_{h}"]:
+                if lb[f"ret_car_agree_{h}"]:
                     agree_cnt[h] += 1
         if lb["long_short_agree_t3_t60"]: ls_agree_360 += 1
         if lb["long_short_agree_short"]: ls_agree_short += 1
@@ -133,20 +135,19 @@ def process(labels_in: Path, labels_out: Path) -> dict:
             f.write(json.dumps(lb, ensure_ascii=False) + "\n")
     os.replace(tmp, labels_out)
 
-    # 汇总统计报告
     report = {
         "total": len(rows),
         "horizons_complete": cnt_complete,
         "horizons_complete_ratio": cnt_complete / max(1, len(rows)),
-        "rer_car_agree_ratio": {
+        "ret_car_agree_ratio": {
             h: (agree_cnt[h] / max(1, agree_total_valid[h]))
             for h in PRIMARY_HORIZONS
         },
-        "rer_car_agree_n": {h: agree_total_valid[h] for h in PRIMARY_HORIZONS},
+        "ret_car_agree_n": {h: agree_total_valid[h] for h in PRIMARY_HORIZONS},
         "long_short_agree_t3_t60_ratio": ls_agree_360 / max(1, len(rows)),
         "long_short_agree_short_ratio": ls_agree_short / max(1, len(rows)),
     }
-    print(f"\n[RER REPORT] 写出 → {labels_out}")
+    print(f"\n[RET REPORT] 写出 → {labels_out}")
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return report
 

@@ -20,9 +20,9 @@
         --out-dir     backtesting/rlvr/data/rlvr_train_v1_5000 \
         --target-size 5000
 
-后续步骤（需要 labeller 和 RER 增强）：
+后续步骤（需要 labeller + RET 增强）：
     · 调用 labeller.py --events events.jsonl --out labels.jsonl
-    · 调用 build_rer_metrics.py --labels-in labels.jsonl --labels-out labels.jsonl
+    · 调用 build_ret_metrics.py --labels-in labels.jsonl --labels-out labels.jsonl
     · 调用 build_volume_features.py --events events.jsonl --out events.jsonl
     · 调用 quant_selfcheck.py 做 5 项定量自检
 """

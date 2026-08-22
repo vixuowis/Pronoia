@@ -5,7 +5,7 @@ Reward = Σ w_i * R_i
   R05 4%   量价段合规：【0.5】段引用了 ≥1 条量价数值 + 有 regime 判断
   R1  50%  方向正确：【5】段 direction 与 label_{primary_h} 一致（主项）
   R2  27%  置信度校准 × κ_vol：|confidence - 1(correct)| 的指数衰减 + 高 vol 时惩罚过自信
-  R3  13%  CAR 幅度 + 双窗一致 + 量价安全阀 + RER↔CAR 一致 + 长短不反转
+  R3  13%  CAR 幅度 + 双窗一致 + 量价安全阀 + RET↔CAR 一致 + 长短不反转
   R4  4%   推理链一致性：7 段标题齐全 + 无自相矛盾（如 【1】说利多 但 【3】说无效条件=利多失败）
   R5  2%   专家熵正则：Router 权重 Shannon entropy 居中（防某专家独霸 → MoE 崩塌）
 
@@ -199,20 +199,20 @@ def _R3_car_magnitude_and_safeties(direction_pred: Optional[str], primary_h: str
     # 否则此安全阀跳过（返回 1.0，不扣）
     s2 = 1.0
 
-    # 安全阀3：RER↔CAR 一致（η_rer 权重）
+    # 安全阀3：RET↔CAR 一致（η_rer 权重；变量名保留 η_rer 兼容 config，但语义=事件后标的自身收益 ret）
     s3 = 1.0
-    rer = label.get(f"rer_{primary_h}")
-    if isinstance(rer, (int, float)) and isinstance(car, (int, float)):
-        if (car > 0 and rer < -0.02) or (car < 0 and rer > 0.02):
+    ret = label.get(f"ret_{primary_h}")
+    if isinstance(ret, (int, float)) and isinstance(car, (int, float)):
+        if (car > 0 and ret < -0.02) or (car < 0 and ret > 0.02):
             # 方向相反且幅度 ≥2% → 惩罚
             s3 = 1.0 - eta_rer
 
     # 安全阀4：长短 horizon 反转（η_long 权重）
     s4 = 1.0
-    rer_t3  = label.get("rer_t3")
-    rer_t60 = label.get("rer_t60")
-    if isinstance(rer_t3, (int, float)) and isinstance(rer_t60, (int, float)):
-        if (rer_t3 > 0.02 and rer_t60 < -0.03) or (rer_t3 < -0.02 and rer_t60 > 0.03):
+    ret_t3  = label.get("ret_t3")
+    ret_t60 = label.get("ret_t60")
+    if isinstance(ret_t3, (int, float)) and isinstance(ret_t60, (int, float)):
+        if (ret_t3 > 0.02 and ret_t60 < -0.03) or (ret_t3 < -0.02 and ret_t60 > 0.03):
             s4 = 1.0 - eta_long
 
     # 加权相乘（都是 ≤1 的系数，越多越不安全）

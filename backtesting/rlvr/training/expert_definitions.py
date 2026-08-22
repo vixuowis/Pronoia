@@ -172,12 +172,12 @@ class RLVRHyperparams:
         "R05":  0.04,    # 量价段合规
         "R1":   0.50,    # 方向正确（主项）
         "R2":   0.27,    # 置信度校准 × κ_vol
-        "R3":   0.13,    # CAR 幅度 + 双窗 + 量价安全阀 + RER 一致 + 长短一致
+        "R3":   0.13,    # CAR 幅度 + 双窗 + 量价安全阀 + RET↔CAR 一致 + 长短一致
         "R4":   0.04,    # 推理链一致性
         "R5":   0.02,    # 专家熵正则（MoE 健康度）
     })
     # R3 子项系数
-    R3_eta_rer:  float = 0.30   # RER↔CAR 不一致惩罚系数
+    R3_eta_rer:  float = 0.30   # RET↔CAR 不一致惩罚系数（变量名保留 R3_eta_rer 兼容配置）
     R3_eta_long: float = 0.25   # 长短 horizon 反转惩罚系数
 
 

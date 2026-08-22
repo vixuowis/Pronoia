@@ -2,7 +2,7 @@
 
 核心逻辑：
   · 每个 (Market, EventTypeL2) 对 → 分配一个**主 horizon**（primary_horizon），
-    训练/评估用定向 label（car_t{primary} / label_t{primary} / rer_t{primary}），
+    训练/评估用定向 label（car_t{primary} / label_t{primary} / ret_t{primary}），
     避免用 label_avg_all 稀释信号。
   · 次级 horizon（secondary_horizons）用于双窗一致率、长短反转检测。
   · scene_priority：场景信号强度分桶（用于 Router 的场景先验 + 训练样本权重）。

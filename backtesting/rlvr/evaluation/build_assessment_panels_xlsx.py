@@ -3,7 +3,7 @@
 把 eval_rlvr_vs_baseline.py 输出的 JSON 报告转成多 sheet xlsx：
   Sheet1 OVERVIEW        ：RLVR vs 四基线，primary/avg_all/双窗 三主指标 + Wilson CI
   Sheet2 VOLUME_3BUCKET  ：HIGH/NORMAL/LOW 三桶 ACC × 各模型
-  Sheet3 RER_5H          ：5 个 horizon（t3/t7/t15/t30/t60）× RER 均值 + 同号率 + ACC_vs_RER
+  Sheet3 RET_5H          ：5 个 horizon（t3/t7/t15/t30/t60）× RET（事件后标的自身收益）均值 + 同号率 + ACC_vs_RET
   Sheet4 SCENE_BUCKET    ：Market × EventType × vol_regime 3D 小格 ACC（heatmap 数值）
   Sheet5 MOE_HEALTH      ：Router 熵 + active experts 分布
   Sheet6 COMBINED_GATES  ：8 条组合门禁 PASS/FAIL（§5.3）
@@ -86,17 +86,17 @@ def _8_combined_gates(report: dict) -> dict[str, dict]:
     g5 = (acc_normal > 0) and (acc_high >= acc_normal * 0.90)
     gates["G5_HIGH_bucket_ge_90pct_NORMAL"] = {"pass": g5, "HIGH_acc": acc_high, "NORMAL_acc": acc_normal}
 
-    # G6: RER↔CAR t7 同号率 ≥ 70%（alpha 纯度）
-    rp = rlvr.get("rer_panel") or {}
-    agree_t7 = ((rp.get("t7") or {}).get("RER_CAR_agree_ratio", 0.0))
+    # G6: RET↔CAR t7 同号率 ≥ 70%（alpha 纯度：事件后自身收益 vs 相对超额一致）
+    rp = rlvr.get("ret_panel") or {}
+    agree_t7 = ((rp.get("t7") or {}).get("RET_CAR_agree_ratio", 0.0))
     g6 = agree_t7 >= 0.70
-    gates["G6_RER_CAR_agree_t7_ge_70pct"] = {"pass": g6, "value": agree_t7}
+    gates["G6_RET_CAR_agree_t7_ge_70pct"] = {"pass": g6, "value": agree_t7}
 
-    # G7: 长短 horizon 反转：t3 vs t60 rer_car_agree 差 < 10pp
-    agree_t3  = ((rp.get("t3")  or {}).get("RER_CAR_agree_ratio", 0.0))
-    agree_t60 = ((rp.get("t60") or {}).get("RER_CAR_agree_ratio", 0.0))
+    # G7: 长短 horizon 反转：t3 vs t60 ret↔car 同号率差 < 10pp
+    agree_t3  = ((rp.get("t3")  or {}).get("RET_CAR_agree_ratio", 0.0))
+    agree_t60 = ((rp.get("t60") or {}).get("RET_CAR_agree_ratio", 0.0))
     g7 = abs(agree_t3 - agree_t60) <= 0.10
-    gates["G7_RER_agree_t3_t60_gap_le_10pp"] = {"pass": g7, "t3": agree_t3, "t60": agree_t60, "gap_abs": abs(agree_t3-agree_t60)}
+    gates["G7_RET_agree_t3_t60_gap_le_10pp"] = {"pass": g7, "t3": agree_t3, "t60": agree_t60, "gap_abs": abs(agree_t3-agree_t60)}
 
     # G8: MoE router_entropy ∈ [0.4*ln6, 0.85*ln6]（≈ [0.716, 1.521]）
     import math
@@ -187,19 +187,19 @@ def main():
         row += 1
     for col in range(1, 8): ws2.column_dimensions[get_column_letter(col)].width = 16
 
-    # ========= Sheet3 RER_5H =========
-    ws3 = wb.create_sheet("RER_5H")
-    headers = ["Model", "Horizon", "n_valid", "RER_mean(%)", "CAR_mean(%)",
-               "RER_pos_ratio", "RER_CAR_agree", "ACC_vs_RER"]
+    # ========= Sheet3 RET_5H（事件后标的自身收益 ret）=========
+    ws3 = wb.create_sheet("RET_5H")
+    headers = ["Model", "Horizon", "n_valid", "RET_mean(%)", "CAR_mean(%)",
+               "RET_pos_ratio", "RET_CAR_agree", "ACC_vs_RET"]
     _write_header(ws3, headers)
     row = 2
     for name, rr in report.items():
-        if not isinstance(rr, dict) or "rer_panel" not in rr: continue
-        rp = rr["rer_panel"] or {}
+        if not isinstance(rr, dict) or "ret_panel" not in rr: continue
+        rp = rr["ret_panel"] or {}
         for h in ["t3","t7","t15","t30","t60"]:
             d = rp.get(h) or {}
-            vals = [name, h, d.get("n_valid",0), d.get("RER_mean_pct",0), d.get("CAR_mean_pct",0),
-                    d.get("RER_positive_ratio",0), d.get("RER_CAR_agree_ratio",0), d.get("ACC_vs_RER_direction",0)]
+            vals = [name, h, d.get("n_valid",0), d.get("RET_mean_pct",0), d.get("CAR_mean_pct",0),
+                    d.get("RET_positive_ratio",0), d.get("RET_CAR_agree_ratio",0), d.get("ACC_vs_RET_direction",0)]
             for j, v in enumerate(vals, 1):
                 c = ws3.cell(row=row, column=j, value=v); c.alignment = center
             row += 1

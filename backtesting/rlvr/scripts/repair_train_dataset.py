@@ -10,7 +10,7 @@
   2. 每条坏行生成同层（Market × EventTypeL2）替换：新 symbol + 新日期 ∈ [2024-01-02, 2026-05-10]
      （日期封顶保证 t60 = 60 交易日前瞻窗口可得），避开现有 (sym,date,etl2) 键与评估集 (sym,date)；
   3. 仅对替换行调 labeller 拉真实 K 线 → 合并回 5000 条；
-  4. 重跑 build_rer_metrics（幂等）→ 输出待复检。
+  4. 重跑 build_ret_metrics（幂等）→ 输出待复检。
 
 用法：
   python3 repair_train_dataset.py --base backtesting/rlvr/data/rlvr_train_v1_5000 \
@@ -201,7 +201,7 @@ def main() -> None:
 
     dist = Counter((e["market"], e["event_type_l2"]) for e in merged_events)
     print(f"[MERGED] {len(merged_events)} 条（保持 12 层：{dict(dist)}）")
-    print("[NEXT] 请重跑：build_rer_metrics → quant_selfcheck（期望 Q1-Q5 全 GREEN）")
+    print("[NEXT] 请重跑：build_ret_metrics → quant_selfcheck（期望 Q1-Q5 全 GREEN）")
 
 
 if __name__ == "__main__":

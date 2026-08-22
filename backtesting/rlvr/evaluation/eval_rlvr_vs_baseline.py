@@ -11,7 +11,7 @@
   ③ 双窗一致率                  → direction=primary 且 direction=secondary[0]
   ④ 量价一致率                  → vol_regime 桶内 ACC 分布（HIGH/NORMAL/LOW 三桶）
   ⑤ MoE 健康度                  → Router 权重 entropy / active experts 分布
-  ⑥ RER 独立面板                → ACC(RER) + RER 均值 + 正收益占比 + RER↔CAR 同号率
+  ⑥ RET 独立面板（事件后标的自身收益，5 horizons）→ ACC(vs RET) + RET 均值 + 正收益占比 + RET↔CAR 同号率
   ⑦ 分场景分桶 ACC              → Market × EventType × vol_regime 3D 小格 ACC
 
 四基线：
@@ -171,33 +171,33 @@ def evaluate(events: list[dict], labels_map: dict[str, dict],
         "active_experts_distribution": dict(Counter(active_counts)),
     }
 
-    # ========== ⑥ RER 独立面板（5 horizons） ==========
-    rer_panel = {}
+    # ========== ⑥ RET 独立面板（事件后标的自身收益 ret，5 horizons） ==========
+    ret_panel = {}
     for h in HORIZONS:
-        rets = []; cars = []; agree = 0; valid = 0; pos_rer = 0
-        acc_rer_aligned = 0  # 预测方向与 RER 符号一致（alpha 纯度验证）
+        rets = []; cars = []; agree = 0; valid = 0; pos_ret = 0
+        acc_ret_aligned = 0  # 预测方向与 RET 符号一致（alpha 纯度验证）
         for e, lb, pr in pairs:
-            r = lb.get(f"rer_{h}"); c = lb.get(f"car_{h}")
+            r = lb.get(f"ret_{h}"); c = lb.get(f"car_{h}")
             if not isinstance(r,(int,float)) or not isinstance(c,(int,float)): continue
             if abs(r) >= 10 or abs(c) >= 10: continue
             valid += 1; rets.append(float(r)); cars.append(float(c))
             if (r > 0 and c > 0) or (r < 0 and c < 0): agree += 1
-            if r > 0: pos_rer += 1
-            # 预测方向 vs RER 符号
-            rer_sign = "up" if r > 0 else "down" if r < 0 else "neutral"
-            if rer_sign != "neutral" and pr["direction"] == rer_sign:
-                acc_rer_aligned += 1
+            if r > 0: pos_ret += 1
+            # 预测方向 vs RET 符号
+            ret_sign = "up" if r > 0 else "down" if r < 0 else "neutral"
+            if ret_sign != "neutral" and pr["direction"] == ret_sign:
+                acc_ret_aligned += 1
         p_agree, _, _ = _wilson_ci(agree, valid)
-        p_pos, _, _   = _wilson_ci(pos_rer, valid)
-        p_acc, lo6, hi6 = _wilson_ci(acc_rer_aligned, valid)
-        rer_panel[h] = {
+        p_pos, _, _   = _wilson_ci(pos_ret, valid)
+        p_acc, lo6, hi6 = _wilson_ci(acc_ret_aligned, valid)
+        ret_panel[h] = {
             "n_valid": valid,
-            "RER_mean_pct": round(_safe_mean(rets) * 100, 3),
+            "RET_mean_pct": round(_safe_mean(rets) * 100, 3),
             "CAR_mean_pct": round(_safe_mean(cars) * 100, 3),
-            "RER_positive_ratio": round(p_pos, 4),
-            "RER_CAR_agree_ratio":  round(p_agree, 4),
-            "ACC_vs_RER_direction":  round(p_acc, 4),
-            "ACC_vs_RER_CI": [round(lo6, 4), round(hi6, 4)],
+            "RET_positive_ratio": round(p_pos, 4),
+            "RET_CAR_agree_ratio":  round(p_agree, 4),
+            "ACC_vs_RET_direction":  round(p_acc, 4),
+            "ACC_vs_RET_CI": [round(lo6, 4), round(hi6, 4)],
         }
 
     # ========== ⑦ 分场景分桶 ACC（Market × EventType × vol_regime） ==========
@@ -225,7 +225,7 @@ def evaluate(events: list[dict], labels_map: dict[str, dict],
                                        "n_valid": n_double_valid, "n_correct_and_same": k_double},
         "volume_3bucket_ACC": bucket_acc,
         "moe_health": moe,
-        "rer_panel": rer_panel,
+        "ret_panel": ret_panel,
         "scene_bucket_ACC": scene_acc,
         "meta": {
             "primary_h_distribution": dict(Counter(
@@ -296,8 +296,8 @@ def main():
         if "n_matched_pairs" not in rr: continue
         p1 = rr["primary_strict_ACC"]["value"]
         p2 = rr["avg_all_strict_ACC"]["value"]
-        rer_t7 = rr["rer_panel"].get("t7", {}).get("RER_CAR_agree_ratio", None)
-        print(f"  {name:<22}  primary ACC={p1*100:5.1f}%  avg_all ACC={p2*100:5.1f}%  RER-CAR t7 agree={rer_t7*100 if rer_t7 else 0:.1f}%")
+        ret_t7 = rr["ret_panel"].get("t7", {}).get("RET_CAR_agree_ratio", None)
+        print(f"  {name:<22}  primary ACC={p1*100:5.1f}%  avg_all ACC={p2*100:5.1f}%  RET-CAR t7 agree={ret_t7*100 if ret_t7 else 0:.1f}%")
     print(f"\n[DONE] → {rep_path}")
 
 
