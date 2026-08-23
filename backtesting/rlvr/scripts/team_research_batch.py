@@ -30,7 +30,7 @@ import sys
 import time
 from pathlib import Path
 
-BACKEND = Path("/workspace/backend")
+BACKEND = Path(__file__).resolve().parents[3] / "backend"  # 自动定位 repo/backend
 sys.path.insert(0, str(BACKEND))
 
 
