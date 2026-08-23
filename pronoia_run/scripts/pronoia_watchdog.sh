@@ -18,10 +18,12 @@ LOG=$RUN_DIR/logs/watchdog.log
 CHECK_INTERVAL_SEC=30            # 主循环 tick
 BACKUP_EVERY_SEC=900             # 每 15 分钟做一次数据快照
 HEARTBEAT_EVERY_SEC=600          # 每 10 分钟无论如何打一条 heartbeat
+REPORT_EVERY_SEC=1800            # 每 30 分钟产出 progress_report 归档（配合外部 Schedule 触发）
 MAX_BACKUPS=24                   # 最多保留 24 份（≈ 6 小时 / 15m 一份；够用）
 
 PROCFEATURE='team_research_batch.py.*audit/research_cache_team'  # 稳定特征，避免误匹配
 PY=python3
+REPORT_SCRIPT=$SCRIPTS/progress_report.sh
 
 mkdir -p "$BACKUP_DIR" "$RUN_DIR/logs"
 
@@ -31,6 +33,7 @@ err()   { printf '[wdog] %s  ERROR %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" | t
 
 last_backup=0
 last_heartbeat=0
+last_report=0
 
 # ---------- helper: 快照 ----------
 snapshot(){
@@ -173,6 +176,24 @@ while :; do
         traj_n=0;  [ -d "$TRAJ" ] && traj_n=$(find "$TRAJ" -maxdepth 1 -name "*.json" | wc -l)
         log "heartbeat OK. pid_worker=${PIDS:-<none>}  rc_lines=$rc_lines  traj=$traj_n"
         last_heartbeat=$now
+    fi
+
+    # ---- (5) 30 分钟进度汇报（容器内兜底触发，确保 Schedule 断了也能产出归档）----
+    if [ $(( now - last_report )) -ge "$REPORT_EVERY_SEC" ] || [ "$last_report" -eq 0 ]; then
+        if [ -x "$REPORT_SCRIPT" ]; then
+            log "触发 30min 进度汇报（watchdog 端归档）..."
+            # 只取 REPORT_PATH 行写到 wdog 日志 + 单独 LOG，不要把整篇 md 塞 wdog.log
+            out=$("$REPORT_SCRIPT" 2>/dev/null | grep -E '^===REPORT_PATH=.*===$' | head -1 | sed -E 's/^===REPORT_PATH=(.*)===$/\1/')
+            if [ -n "$out" ]; then
+                log "✅ 汇报完成 → $out"
+                echo "$(date -Iseconds) watchdog_triggered $out" >> "$RUN_DIR/logs/report_triggers.log"
+            else
+                warn "30min 汇报执行但未拿到 REPORT_PATH，可能 progress_report.sh 出错，检查日志 $RUN_DIR/logs/watchdog.log 附近 stderr"
+            fi
+        else
+            warn "progress_report.sh 不存在或不可执行: $REPORT_SCRIPT"
+        fi
+        last_report=$now
     fi
 
     sleep "$CHECK_INTERVAL_SEC"
