@@ -1,13 +1,6 @@
 #!/usr/bin/env python3
-"""patch_leakfix2.py — 第二轮泄漏修复。
-
-P0 market.py  get_us_stock_daily：全量拉取后按 start/end_date 过滤再 tail(250)
-P1 skill.py   financial_research / holder_research / macro_intel 接受 as_of_date；
-              strict 模式过滤事件后表行 + 跳过当前快照子技能；
-              market_research / stock_overview 增强过滤
-P1 llm.py     注入列表扩充
-helper        _asof_filter_result 追加到 skill.py 末尾（运行时解析，安全）
-"""
+"""patch_leakfix2b.py — 修复片段#4（类型注解）后重放 skill.py 全部片段 + llm.py。
+market.py 已由 patch_leakfix2.py 完成，helper 已追加，此处不重复。"""
 import sys
 
 def patch(path, replacements):
@@ -23,129 +16,11 @@ def patch(path, replacements):
         f.write(src)
     print(f"[OK] {path}: {len(replacements)} 处")
 
-MARKET = "/root/Pronoia/backend/app/skills/market.py"
 SKILL = "/root/Pronoia/backend/app/skills/skill.py"
 LLM = "/root/Pronoia/backend/app/llm.py"
 
-# ================= market.py =================
-patch(MARKET, [(
-    '        df = df.dropna(subset=["close"]).sort_values("date").reset_index(drop=True)\n'
-    '        truncated = False\n'
-    '        if len(df) > 250:',
-    '        df = df.dropna(subset=["close"]).sort_values("date").reset_index(drop=True)\n'
-    '        # P0 as-of 过滤：接口返回全历史，按调用方窗口裁剪后再取尾部，\n'
-    '        # 否则严格 as-of 回测会把「今天」的行情喂给历史事件（未来函数泄漏）。\n'
-    '        _sd = str(start_date or "").replace("-", "")[:8]\n'
-    '        _ed = str(end_date or "").replace("-", "")[:8]\n'
-    '        if _sd and len(_sd) == 8:\n'
-    '            df = df[df["date"] >= f"{_sd[:4]}-{_sd[4:6]}-{_sd[6:8]}"].reset_index(drop=True)\n'
-    '        if _ed and len(_ed) == 8:\n'
-    '            df = df[df["date"] <= f"{_ed[:4]}-{_ed[4:6]}-{_ed[6:8]}"].reset_index(drop=True)\n'
-    '        truncated = False\n'
-    '        if len(df) > 250:',
-)])
-
-# ================= skill.py =================
-ASOF_HELPER = '''
-
-# ============================================================== strict as-of 过滤
-def _asof_iso(as_of_date) -> "str | None":
-    if not as_of_date:
-        return None
-    s = str(as_of_date)[:10]
-    try:
-        from datetime import datetime as _dt
-        _dt.strptime(s, "%Y-%m-%d")
-        return s
-    except ValueError:
-        return None
-
-
-def _looks_like_date(cell) -> bool:
-    if not isinstance(cell, str) or len(cell) < 10:
-        return False
-    try:
-        from datetime import datetime as _dt
-        _dt.strptime(cell[:10], "%Y-%m-%d")
-        return True
-    except ValueError:
-        return False
-
-
-def _asof_filter_artifact(art: dict, asof_iso: str) -> dict:
-    """裁剪单个 artifact 到 as-of 日：table 按日期列过滤行；kline/line 按日期轴过滤。"""
-    if not isinstance(art, dict):
-        return art
-    payload = art.get("payload")
-    if not isinstance(payload, dict):
-        return art
-    kind = str(art.get("kind") or "")
-    if kind == "table":
-        cols = payload.get("columns") or []
-        rows = payload.get("rows")
-        if not isinstance(rows, list) or not rows:
-            return art
-        date_idx = None
-        for i, c in enumerate(cols):
-            cl = str(c).lower()
-            if any(k in cl for k in ("日期", "date", "时间", "报告期")):
-                date_idx = i
-                break
-        if date_idx is None:
-            return art  # 无日期列（静态表），原样保留
-        kept = [r for r in rows
-                if not (isinstance(r, list) and len(r) > date_idx and _looks_like_date(r[date_idx])
-                        and str(r[date_idx])[:10] > asof_iso)]
-        payload["rows"] = kept
-        note = str(payload.get("note") or "")
-        payload["note"] = (note + " | " if note else "") + f"strict as-of：已过滤 {asof_iso} 之后的行"
-        return art
-    if kind in ("kline", "line"):
-        dates = payload.get("dates") or payload.get("x")
-        if not isinstance(dates, list) or not dates:
-            return art
-        idx = [i for i, d in enumerate(dates)
-               if not (isinstance(d, str) and len(d) >= 10 and d[:10] > asof_iso)]
-        for key in ("dates", "x"):
-            if isinstance(payload.get(key), list):
-                payload[key] = [payload[key][i] for i in idx]
-        for key in ("ohlc", "volumes", "series"):
-            seq = payload.get(key)
-            if isinstance(seq, list):
-                if seq and isinstance(seq[0], dict) and isinstance(seq[0].get("data"), list):
-                    for s in seq:
-                        if len(s.get("data") or []) == len(dates):
-                            s["data"] = [s["data"][i] for i in idx]
-                elif len(seq) == len(dates):
-                    payload[key] = [seq[i] for i in idx]
-        return art
-    return art
-
-
-def _asof_filter_result(result: dict, as_of_date) -> dict:
-    """递归裁剪 result 内所有 artifacts 到 as-of 日（深拷贝，不改原对象）。"""
-    iso = _asof_iso(as_of_date)
-    if not iso or not isinstance(result, dict):
-        return result
-    import copy as _copy
-    out = _copy.deepcopy(result)
-    arts = out.get("artifacts")
-    if isinstance(arts, list):
-        out["artifacts"] = [_asof_filter_artifact(a, iso) if isinstance(a, dict) else a for a in arts]
-    if isinstance(out.get("artifact"), dict):
-        out["artifact"] = _asof_filter_artifact(out["artifact"], iso)
-    return out
-'''
-
-with open(SKILL, encoding="utf-8") as f:
-    src = f.read()
-src = src.rstrip("\n") + "\n" + ASOF_HELPER
-with open(SKILL, "w", encoding="utf-8") as f:
-    f.write(src)
-print("[OK] skill.py: helper 已追加到文件末尾")
-
 patch(SKILL, [
-    # ---------- market_research：strict 只保留 price；跳过 US spot ----------
+    # 0. market_research：strict 只保留 price
     (
         '    focus = focus or ["price", "sector", "flow"]',
         '    focus = focus or ["price", "sector", "flow"]\n'
@@ -153,6 +28,7 @@ patch(SKILL, [
         '    if as_of_date:\n'
         '        focus = ["price"]',
     ),
+    # 1. market_research：US strict 跳过 spot
     (
         '        if us:\n'
         '            # 美股追加：实时行情（spot）+ 公司简介（info），填补 ak share 无 US 行业/资金流的口子\n'
@@ -164,6 +40,7 @@ patch(SKILL, [
         '            tasks.append(("get_us_stock_spot", {"symbol": sym}))\n'
         '            tasks.append(("get_us_stock_info", {"symbol": sym}))',
     ),
+    # 2. market_research：结果过滤
     (
         '    results = await _gather_sub(tasks)\n'
         '    summary = _summarize_subs(results)\n'
@@ -176,21 +53,22 @@ patch(SKILL, [
         '    summary["composed"] = [n for n, _ in tasks]\n'
         '    price_metrics: dict[str, Any] = {}',
     ),
-    # ---------- financial_research：签名 + strict ----------
+    # 3. financial_research 签名
     (
         'async def financial_research(symbol: str, period: str = "annual") -> dict:',
         'async def financial_research(symbol: str, period: str = "annual",\n'
         '                             as_of_date: "str | None" = None) -> dict:',
     ),
+    # 4. financial_research US tasks（带类型注解，已修正）
     (
-        '        tasks = [\n'
+        '        tasks: list[tuple[str, dict]] = [\n'
         '            ("get_us_stock_finance",   {"symbol": sym, "report_type": "资产负债表", "indicator": "年报"}),\n'
         '            ("get_us_stock_indicator", {"symbol": sym, "indicator": "年报"}),\n'
         '            ("get_us_stock_calendar",  {"symbol": sym}),\n'
         '            ("get_us_stock_info",      {"symbol": sym}),\n'
         '            ("get_us_stock_analyst",   {"symbol": sym}),\n'
         '        ]',
-        '        tasks = [\n'
+        '        tasks: list[tuple[str, dict]] = [\n'
         '            ("get_us_stock_finance",   {"symbol": sym, "report_type": "资产负债表", "indicator": "年报"}),\n'
         '            ("get_us_stock_indicator", {"symbol": sym, "indicator": "年报"}),\n'
         '            ("get_us_stock_info",      {"symbol": sym}),\n'
@@ -202,6 +80,7 @@ patch(SKILL, [
         '                ("get_us_stock_analyst",   {"symbol": sym}),\n'
         '            ]',
     ),
+    # 5. financial_research A股 tasks + 结果过滤
     (
         '        tasks = [\n'
         '            ("get_financial_abstract", {"symbol": sym}),\n'
@@ -230,11 +109,12 @@ patch(SKILL, [
         '        results = [_asof_filter_result(r, as_of_date) for r in results]\n'
         '    summary = _summarize_subs(results)',
     ),
-    # ---------- holder_research：签名 + US strict + 行过滤 ----------
+    # 6. holder_research 签名
     (
         'async def holder_research(symbol: str) -> dict:',
         'async def holder_research(symbol: str, as_of_date: "str | None" = None) -> dict:',
     ),
+    # 7. holder_research US strict
     (
         '    if is_us_symbol(raw):\n'
         '        # 美股：major_holders / institutional_holders / mutualfund_holders / insider_transactions\n'
@@ -246,6 +126,7 @@ patch(SKILL, [
         '        # 美股：major_holders / institutional_holders / mutualfund_holders / insider_transactions\n'
         '        sym = raw.upper()',
     ),
+    # 8. holder_research A股 + 结果过滤
     (
         '        tasks = [\n'
         '            ("get_holder_change", {"symbol": sym}),\n'
@@ -262,14 +143,14 @@ patch(SKILL, [
         '    if as_of_date:\n'
         '        results = [_asof_filter_result(r, as_of_date) for r in results]',
     ),
-    # ---------- macro_intel：strict 禁用 ----------
+    # 9. macro_intel strict 禁用
     (
         'async def macro_intel(topic: str | None = None) -> dict:',
         'async def macro_intel(topic: str | None = None, as_of_date: "str | None" = None) -> dict:\n'
         '    if as_of_date:\n'
         '        return err(f"strict as-of 模式（事件日 {as_of_date}）禁用 macro_intel：宏观数据为当前快照，含事件后信息")',
     ),
-    # ---------- stock_overview：strict 跳过 spot/calendar/abstract + 行过滤 ----------
+    # 10. stock_overview strict
     (
         '    if market == "US":\n'
         '        tasks = [\n'
@@ -313,7 +194,6 @@ patch(SKILL, [
     ),
 ])
 
-# ================= llm.py =================
 patch(LLM, [(
     '    if _asof and name in ("market_research", "post_market_outlook",\n'
     '                          "stock_overview", "news_intel"):',
@@ -322,4 +202,4 @@ patch(LLM, [(
     '                          "financial_research", "holder_research", "macro_intel"):',
 )])
 
-print("全部补丁应用完成")
+print("v2 全部补丁应用完成")
