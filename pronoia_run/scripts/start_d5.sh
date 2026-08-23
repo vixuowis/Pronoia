@@ -14,5 +14,5 @@ nohup python3 /workspace/backtesting/rlvr/scripts/team_research_batch.py \
   --events /workspace/pronoia_run/data_v3/events_enriched.jsonl \
   --out /workspace/pronoia_run/data_v3/audit/research_cache_team.jsonl \
   --ckpt-dir /workspace/pronoia_run/team_traj_v3 \
-  --concurrency 16 >> "$LOG" 2>&1 &
+  --concurrency 32 >> "$LOG" 2>&1 &
 echo $!
