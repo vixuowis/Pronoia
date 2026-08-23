@@ -61,6 +61,9 @@ pct_ok = round(100*ok/TOTAL,2)
 delta_sec = TS_SEC - prev_ts
 if delta_sec <= 0 and prev_ts != TS_SEC:
     delta_sec = 1  # 防 0
+delta_ok = ok - prev_ok
+delta_traj = traj_files - prev_traj
+delta_rc = rc_lines - prev_rc
 if prev_ts == TS_SEC:
     delta_min_str = '<1'; delta_min_val = 0.5
     real_tph='n/a'; eta_h_real='n/a'
