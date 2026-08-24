@@ -86,6 +86,16 @@ def build_messages_for_papv(event: dict, research: dict | None = None) -> list[d
             parts.append("")
             parts.append(ctx)
 
+        # Team full 深度研究摘要（v4：多窗口推理链 + 依据原文；只给推理过程，
+        # 不给结构化结论 horizons——断言须由模型独立提出并判断）
+        rat = str(research.get("rationale") or "").strip()
+        if rat:
+            if len(rat) > 800:
+                rat = rat[:800] + "…（截断）"
+            parts.append("")
+            parts.append("### 深度研究摘要（Team 前置推理链与证据，仅供参考；断言与判断须独立作出）")
+            parts.append(rat)
+
     vol = (research or {}).get("vol_features") or {}
     if vol.get("vol_t0_ratio") is not None:
         parts.append("")
