@@ -45,11 +45,15 @@ def compute_papv_reward(completion: str, event: dict, label: dict) -> dict:
     claims = parse_claims(completion)
     detail["n_claims"] = len(claims)
 
-    # R0 格式：数量 ∈ [3,6]（平滑：差一条扣一档）+ 四段齐全
+    # R0 格式：数量 ∈ [3,6]（平滑：差一条扣一档）+ 四段齐全 + 指标族集中惩罚
     n = len(claims)
     r0_n = 1.0 if 3 <= n <= 6 else max(0.0, 1.0 - 0.25 * abs(n - 3) if n < 3 else 0.75)
     secs = sum(_has_section(completion, k) for k in SECTION_HEADERS)
     R0 = 0.6 * r0_n + 0.4 * (secs / 4.0)
+    # 指标族集中惩罚：若全部断言集中在单一指标族（如全 car），视为低信息模板 → 格式打折
+    _fam = {metric_family(c["metric"]) for c in claims}
+    if n >= 3 and len(_fam) < 2:
+        R0 *= 0.5
     detail["sections"] = secs
 
     if n == 0:
@@ -79,13 +83,15 @@ def compute_papv_reward(completion: str, event: dict, label: dict) -> dict:
     chain = m.group(1).strip() if m else ""
     R4 = 1.0 if len(chain) >= 40 else (0.5 if len(chain) > 0 else 0.0)
 
-    # R5 多样性
+    # R5 多样性：≥3 个 horizon、≥3 个指标族（防止模板化坍缩；提高门槛）
     horizons = {c["metric"] for c in claims if "_t" in c["metric"]}
     families = {metric_family(c["metric"]) for c in claims}
-    R5 = 0.5 * min(1.0, st["n_horizons"] / 2.0) + 0.5 * min(1.0, len(families) / 2.0)
+    R5 = 0.5 * min(1.0, st["n_horizons"] / 3.0) + 0.5 * min(1.0, len(families) / 3.0)
+    detail["n_horizons"] = st["n_horizons"]
+    detail["n_families"] = len(families)
 
     # ---- 加权 ----
-    W = {"R0": 0.10, "R1": 0.15, "R2": 0.45, "R3": 0.20, "R4": 0.05, "R5": 0.05}
+    W = {"R0": 0.15, "R1": 0.12, "R2": 0.38, "R3": 0.20, "R4": 0.05, "R5": 0.10}
     parts = {"R0": R0, "R1": R1, "R2": R2, "R3": R3, "R4": R4, "R5": R5}
     total, wsum = 0.0, 0.0
     for k, v in parts.items():
