@@ -85,22 +85,26 @@ ax.set_xlabel("step"); ax.set_ylabel("KL")
 ax.set_ylim(bottom=0)
 ax.legend(fontsize=8); ax.grid(alpha=0.3)
 
-# 3. Loss
+# 3. Gradient Norm（原 GRPO Loss 为 TRL 占位 0，改用有语义的 grad_norm）
 ax = axes[1, 0]
-ax.plot(steps, [max(0, v) for v in (r["loss"] for r in rows)],
-        ".", color="#27ae60", ms=5, alpha=0.5, label="loss")
-ax.set_title("GRPO Loss")
-ax.set_xlabel("step"); ax.set_ylabel("loss")
+ax.plot(steps, g, ".", color="#8e44ad", ms=5, alpha=0.45, label="grad_norm(per step)")
+ax.plot(steps, ema(g), color="#8e44ad", lw=2, label="EMA(0.7)")
+ax.axhline(sum(g) / len(g), color="gray", ls="--", lw=1,
+           label=f"mean {npmean(g):.3f}")
+ax.set_title("Gradient Norm (policy update signal)")
+ax.set_xlabel("step"); ax.set_ylabel("grad_norm")
+ax.set_ylim(bottom=0)
 ax.legend(fontsize=8); ax.grid(alpha=0.3)
 
-# 4. Grad norm + lr
+# 4. Learning Rate + completion length
 ax = axes[1, 1]
-ax.plot(steps, g, ".", color="#8e44ad", ms=5, alpha=0.5, label="grad_norm")
-ax.set_title("Gradient Norm & Learning Rate")
-ax.set_xlabel("step"); ax.set_ylabel("grad_norm")
+ax.plot(steps, [r["lr"] for r in rows], color="#d35400", lw=1.5, label="lr")
+ax.set_title("Learning Rate")
+ax.set_xlabel("step"); ax.set_ylabel("learning_rate")
 ax2 = ax.twinx()
-ax2.plot(steps, [r["lr"] for r in rows], color="#d35400", lw=1.5, label="lr")
-ax2.set_ylabel("learning_rate")
+ax2.plot(steps, [r["mean_len"] or 0 for r in rows], ".", color="#27ae60", ms=4,
+         alpha=0.4, label="completions/mean_length")
+ax2.set_ylabel("tokens")
 ax.legend(fontsize=8, loc="upper left"); ax2.legend(fontsize=8, loc="upper right")
 ax.grid(alpha=0.3)
 
