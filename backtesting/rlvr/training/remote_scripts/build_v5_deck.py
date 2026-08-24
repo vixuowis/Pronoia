@@ -13,12 +13,12 @@ CURVE_B64 = base64.b64encode(CURVE.read_bytes()).decode()
 
 DATA = {
     "v4_samples": 1782, "v5_samples": 2507, "target": 5174,
-    "collected": 2863, "concurrency": 20,
+    "collected": 2977, "concurrency": 20,
     "v4_steps": 299, "v4_reward": 0.755, "v4_kl": 0.013,
     "oos_acc": 0.641, "oos_base": 0.560, "oos_ece": 0.095, "oos_ece_base": 0.133,
     "oos_brier": 0.228, "oos_brier_base": 0.266,
-    "v5_steps_total": 627, "v5_steps": 59, "v5_reward": 0.688,
-    "v5_ema": 0.729, "v5_kl": 0.00056, "v5_grad": 0.141,
+    "v5_steps_total": 627, "v5_steps": 83, "v5_reward": 0.681,
+    "v5_ema": 0.690, "v5_kl": 0.00065, "v5_grad": 0.139,
 }
 
 DECK = f"""<!DOCTYPE html>
@@ -251,8 +251,8 @@ html,body{{height:100%;overflow:hidden;background:#0a0b0c;font-family:var(--sans
     <div class="dash-body stagger">
       <div class="dash-chart"><img src="data:image/png;base64,{CURVE_B64}" alt="v5 reward/loss 四面板训练曲线"/></div>
       <div class="dash-highlights">
-        <div class="dash-item"><span class="dash-dot"></span><div><div class="dash-h">Reward 上升且稳定</div><div class="dash-d">第5步低谷后 EMA 爬升至 0.729，max 0.814，无 reward hacking</div></div></div>
-        <div class="dash-item"><span class="dash-dot"></span><div><div class="dash-h">KL 全程 ≤0.0008</div><div class="dash-d">远低于 v4 早期 0.014 → 不背离参考模型</div></div></div>
+        <div class="dash-item"><span class="dash-dot"></span><div><div class="dash-h">Reward 上升且稳定</div><div class="dash-d">EMA 后段 0.690，max 0.881，无 reward hacking</div></div></div>
+        <div class="dash-item"><span class="dash-dot"></span><div><div class="dash-h">KL 全程 ≤0.0012</div><div class="dash-d">max 0.0011，远低于 v4 早期 0.014 → 不背离参考模型</div></div></div>
         <div class="dash-item"><span class="dash-dot"></span><div><div class="dash-h">收敛平稳</div><div class="dash-d">grad_norm 0.14、clip 0、completions 401 tokens</div></div></div>
         <div class="dash-item"><span class="dash-dot"></span><div><div class="dash-h">多样性修复生效中</div><div class="dash-d">R5 门槛2→3、R0 单指标族惩罚</div></div></div>
       </div>

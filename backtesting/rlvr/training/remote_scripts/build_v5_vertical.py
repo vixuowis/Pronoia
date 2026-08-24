@@ -13,11 +13,11 @@ CURVE_B64 = base64.b64encode(CURVE.read_bytes()).decode()
 
 D = {
     "V4_SAMPLES": 1782, "V5_SAMPLES": 2507, "TARGET": 5174,
-    "COLLECTED": 2863, "CONCURRENCY": 20,
+    "COLLECTED": 2977, "CONCURRENCY": 20,
     "OOS_ACC": 0.641, "OOS_BASE": 0.560, "OOS_ECE": 0.095, "OOS_ECE_BASE": 0.133,
     "OOS_BRIER": 0.228, "OOS_BRIER_BASE": 0.266,
-    "V5_STEPS": 59, "V5_STEPS_TOTAL": 627, "V5_REWARD": 0.688,
-    "V5_EMA": 0.729, "V5_KL": 0.00056, "V5_GRAD": 0.18,
+    "V5_STEPS": 83, "V5_STEPS_TOTAL": 627, "V5_REWARD": 0.681,
+    "V5_EMA": 0.690, "V5_KL": 0.00065, "V5_GRAD": 0.139,
 }
 D["V5_PCT"] = round(D["V5_STEPS"] / D["V5_STEPS_TOTAL"] * 100, 1)
 
@@ -212,8 +212,8 @@ ol.steps li span{color:var(--text-muted)}
     </div>
     <div class="chart"><img src="data:image/png;base64,__CURVE__" alt="v5 训练四面板曲线：Reward / KL / Gradient Norm / Learning Rate"/></div>
     <div class="grid2" style="margin-top:14px">
-      <div class="card"><span class="cd">REWARD</span><div class="ct">上升且稳定</div><div class="ds">第 5 步低谷后 EMA 爬升至 0.729，max 0.814，无 reward hacking</div></div>
-      <div class="card"><span class="cd">KL</span><div class="ct">全程 ≤0.0008</div><div class="ds">远低于 v4 早期 0.014 → 不背离参考模型</div></div>
+      <div class="card"><span class="cd">REWARD</span><div class="ct">上升且稳定</div><div class="ds">EMA 后段 0.690，max 0.881，无 reward hacking</div></div>
+      <div class="card"><span class="cd">KL</span><div class="ct">全程 ≤0.0012</div><div class="ds">max 0.0011，远低于 v4 早期 0.014 → 不背离参考模型</div></div>
       <div class="card"><span class="cd">GRADIENT</span><div class="ct">更新信号健康</div><div class="ds">grad_norm 稳定非 0（占位 loss 不代表损失）</div></div>
       <div class="card"><span class="cd">DIVERSITY</span><div class="ct">多样性修复生效中</div><div class="ds">R5 门槛 2→3、R0 单指标族惩罚</div></div>
     </div>
