@@ -48,16 +48,19 @@ def read_jsonl(p: Path) -> list[dict]:
 
 
 async def run_one(engine_mod, models_mod, raw: dict, ckpt_dir: Path,
-                  run_id: str, sem: asyncio.Semaphore) -> dict:
+                  run_id: str, sem: asyncio.Semaphore, per_call_timeout: float) -> dict:
     eid = raw["event_id"]
     t0 = time.time()
     async with sem:
         for attempt in (1, 2):  # 重试 1 次
             try:
                 ev = models_mod.EventRecord.from_dict(raw)
-                p = await engine_mod.run_team_full_one_event(
-                    ev, run_id=run_id, model_version="team-full-v4",
-                    trajectory_ckpt_dir=ckpt_dir,
+                p = await asyncio.wait_for(
+                    engine_mod.run_team_full_one_event(
+                        ev, run_id=run_id, model_version="team-full-v4",
+                        trajectory_ckpt_dir=ckpt_dir,
+                    ),
+                    timeout=per_call_timeout,
                 )
                 return {
                     "event_id": eid,
@@ -71,6 +74,16 @@ async def run_one(engine_mod, models_mod, raw: dict, ckpt_dir: Path,
                     "attempt": attempt,
                     "error": None,
                 }
+            except asyncio.TimeoutError as e:
+                msg = f"TimeoutError: >{per_call_timeout:.0f}s on attempt {attempt}"
+                if attempt == 2:
+                    return {
+                        "event_id": eid, "ok": False, "direction": None,
+                        "confidence": None, "rationale": None, "abstain": None,
+                        "wall_sec": round(time.time() - t0, 1),
+                        "attempt": attempt, "error": msg[:300],
+                    }
+                await asyncio.sleep(3)
             except Exception as e:
                 if attempt == 2:
                     return {
@@ -88,6 +101,8 @@ async def main() -> None:
     ap.add_argument("--out", required=True)
     ap.add_argument("--ckpt-dir", required=True)
     ap.add_argument("--concurrency", type=int, default=20)
+    ap.add_argument("--timeout", type=float, default=3600,
+                    help="每attempt LLM调用超时秒（默认3600=1小时，仅砍掉异常慢请求）")
     ap.add_argument("--limit", type=int, default=0, help="0=全量；试跑用")
     ap.add_argument("--only-ids", default="", help="逗号分隔 event_id 白名单（调试用）")
     args = ap.parse_args()
@@ -114,7 +129,7 @@ async def main() -> None:
 
     todo = [e for e in events if e["event_id"] not in done_ids]
     print(f"[PLAN] total={len(events)} todo={len(todo)} "
-          f"concurrency={args.concurrency}", flush=True)
+          f"concurrency={args.concurrency} per_call_timeout={args.timeout:.0f}s", flush=True)
     if not todo:
         print("[DONE] 全部完成", flush=True)
         return
@@ -130,7 +145,7 @@ async def main() -> None:
     async def worker(raw: dict, idx: int):
         nonlocal n_ok, n_err
         r = await run_one(engine_mod, models_mod, raw, ckpt_dir,
-                          "rlvr_team_v3", sem)
+                          "rlvr_team_v3", sem, args.timeout)
         out_f.write(json.dumps(r, ensure_ascii=False) + "\n")
         out_f.flush()
         if r["ok"]:
