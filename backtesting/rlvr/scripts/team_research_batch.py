@@ -5,7 +5,7 @@
 对全量事件离线生成深度研究上下文，供 v4 数据组装与 A/B 对比训练。
 
 特性：
-  · 并发：asyncio.Semaphore（--concurrency，默认 8）
+  · 并发：asyncio.Semaphore（--concurrency，默认 20）
   · 断点续跑：输出 jsonl 按 event_id 去重，重启自动跳过已完成
   · 失败重试 1 次，仍失败落 error 行（ok=false），不阻塞整体
   · trajectory ckpt 全量落盘（审计/深挖专家输出用）
@@ -56,7 +56,7 @@ async def run_one(engine_mod, models_mod, raw: dict, ckpt_dir: Path,
             try:
                 ev = models_mod.EventRecord.from_dict(raw)
                 p = await engine_mod.run_team_full_one_event(
-                    ev, run_id=run_id, model_version="team-full-v3",
+                    ev, run_id=run_id, model_version="team-full-v4",
                     trajectory_ckpt_dir=ckpt_dir,
                 )
                 return {
@@ -65,6 +65,7 @@ async def run_one(engine_mod, models_mod, raw: dict, ckpt_dir: Path,
                     "direction": str(p.pred_direction),
                     "confidence": p.confidence,
                     "rationale": (p.rationale or "")[:4000],
+                    "horizons": p.horizons,
                     "abstain": bool(p.abstain),
                     "wall_sec": round(time.time() - t0, 1),
                     "attempt": attempt,
@@ -86,7 +87,7 @@ async def main() -> None:
     ap.add_argument("--events", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--ckpt-dir", required=True)
-    ap.add_argument("--concurrency", type=int, default=8)
+    ap.add_argument("--concurrency", type=int, default=20)
     ap.add_argument("--limit", type=int, default=0, help="0=全量；试跑用")
     ap.add_argument("--only-ids", default="", help="逗号分隔 event_id 白名单（调试用）")
     args = ap.parse_args()

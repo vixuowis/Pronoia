@@ -95,6 +95,8 @@ class TeamPrediction:
     confidence: Optional[float] = None
     rationale: Optional[str] = None
     abstain: bool = False
+    # 多窗口判别：ret_t3..ret_t60 / car_t3..car_t60 → {direction, confidence, ...}
+    horizons: Optional[dict[str, Any]] = None
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "TeamPrediction":
@@ -106,6 +108,7 @@ class TeamPrediction:
             confidence=float(d["confidence"]) if d.get("confidence") is not None else None,
             rationale=(str(d.get("rationale")).strip() or None) if d.get("rationale") is not None else None,
             abstain=bool(d.get("abstain") is True),
+            horizons=(d.get("horizons") or None),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -117,6 +120,7 @@ class TeamPrediction:
             "confidence": self.confidence,
             "rationale": self.rationale,
             "abstain": self.abstain,
+            "horizons": self.horizons,
         }
 
 
