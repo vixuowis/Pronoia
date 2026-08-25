@@ -11,6 +11,11 @@ Reward = Σ w_i * R_i，总范围约 [-0.20, +1.00]
 设计原则（对应 PAPV 提案 §七「过拟合看答案猜」对策）：
   断言由模型自主选择指标/阈值构成，reward 只在「判断真假」上给分——
   模型要学的是「对哪些命题有把握、对哪些没把握」，而非记住单一方向标签。
+
+v6 修复（阈值单位错位）：
+  · parse_claims 增加单位守卫：裸数字 |thr|>0.15 按本意百分数归一（÷100）；
+  · settle_all(drop_trivial=True)：|实际值| < |阈值|/2 的送分断言不计入 R1/R2/R3，
+    从激励上关闭「写大阈值换命中」的捷径。
 """
 from __future__ import annotations
 
@@ -59,8 +64,8 @@ def compute_papv_reward(completion: str, event: dict, label: dict) -> dict:
     if n == 0:
         return {"reward": -0.20, "detail": {**detail, "R": None}}
 
-    # ---- 结算 ----
-    st = settle_all(claims, label)
+    # ---- 结算（drop_trivial：平凡可判断言不计分，杜绝「写大阈值送分」激励） ----
+    st = settle_all(claims, label, drop_trivial=True)
     detail.update({k: v for k, v in st.items() if k != "p_corrects"})
 
     # R1 可验证性

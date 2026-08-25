@@ -66,6 +66,11 @@ _OP_MAP = {
     "小于": "<", "低于": "<",
 }
 
+# 阈值单位守卫：裸数字 |thr| > 0.15 视为「百分数误写」（2.5 意为 2.5%）→ 归一为小数。
+# 依据：v5 OOS 复盘发现 42.6% 断言阈值数量级错位（5.0/2.5/2.0/…），且合法小数阈值
+# 实际最大仅 0.10（=10%），两者在 0.15 处天然分界。带 % 符号的阈值不受影响。
+_THR_UNIT_CUT = 0.15
+
 
 def parse_claims(text: str) -> list[dict]:
     """从 completion 解析全部 CLAIM 行 → [{metric, op, thr, judge, conf}]。"""
@@ -81,13 +86,19 @@ def parse_claims(text: str) -> list[dict]:
             conf = float(raw[:-1]) / 100.0 if raw.endswith("%") else float(raw)
             conf = max(0.0, min(1.0, conf))
         thr_raw = m.group("thr")
-        thr = float(thr_raw.rstrip("%")) / 100.0 if thr_raw.endswith("%") else float(thr_raw)
+        if thr_raw.endswith("%"):
+            thr = float(thr_raw[:-1]) / 100.0
+        else:
+            thr = float(thr_raw)
+            if abs(thr) > _THR_UNIT_CUT:
+                thr /= 100.0   # 裸数字百分数误写 → 按本意归一为小数口径
         judge_raw = m.group("judge").lower()
         judge = judge_raw in ("true", "真", "对", "成立")
         claims.append({
             "metric": m.group("metric"),
             "op": _OP_MAP.get(m.group("op"), m.group("op")),
             "thr": thr,
+            "thr_raw": thr_raw,      # 原始阈值书写（诊断单位问题用）
             "judge": judge,          # True=断言成立 / False=断言不成立
             "conf": conf,
         })
@@ -124,18 +135,40 @@ def settle_claim(claim: dict, label: dict) -> Optional[bool]:
     return truth == claim["judge"]
 
 
-def settle_all(claims: list[dict], label: dict) -> dict:
+def is_trivial_claim(claim: dict, label: dict) -> bool:
+    """平凡可判：|实际值| 远小于 |阈值|（数量级差使答案预先确定，如 car ≥ -150%）。
+
+    v5 复盘：单位错位产生的「送分题」99.7% 满足 |实际值| < |阈值|/2。
+    仅适用于收益率量纲指标（car/ret/bm/avg 族）；pvalue 族数值天然微小
+    （p<0.05 且实际 0.019 是高信息断言），不做平凡判定。
+    """
+    if metric_family(claim["metric"]) == "significance":
+        return False
+    val = label.get(claim["metric"])
+    thr = abs(claim.get("thr") or 0.0)
+    if not isinstance(val, (int, float)) or thr == 0:
+        return False
+    return abs(val) * 2 < thr
+
+
+def settle_all(claims: list[dict], label: dict, drop_trivial: bool = False) -> dict:
     """结算一组断言 → 汇总统计（reward 与评估共用）。
+
+    drop_trivial=True 时平凡可判断言不计入 settleable（reward 用：杜绝送分激励）；
+    评估侧默认 False 以如实反映模型产出。
 
     p_corrects：每条可结算断言的「指向真值的预测概率」——
       p_claim = conf if judge==TRUE else 1-conf（模型对断言成立的主观概率）
       p_corrects = p_claim if truth else 1-p_claim（Brier 用，越接近 1 越准）
     """
-    settleable, correct = 0, 0
+    settleable, correct, n_trivial = 0, 0, 0
     p_corrects: list[float] = []
     for c in claims:
         truth = settle_claim_truth(c, label)
         if truth is None:
+            continue
+        if drop_trivial and is_trivial_claim(c, label):
+            n_trivial += 1
             continue
         settleable += 1
         correct += int(truth == c["judge"])
@@ -150,6 +183,7 @@ def settle_all(claims: list[dict], label: dict) -> dict:
         "correct": correct,
         "accuracy": (correct / settleable) if settleable else None,
         "p_corrects": p_corrects,
+        "n_trivial": n_trivial,
         "n_horizons": len({h for h in horizons if h.isdigit()}),
         "n_families": len(families),
     }

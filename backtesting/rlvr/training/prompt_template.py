@@ -45,6 +45,17 @@ def _fmt_pct(v, signed: bool = True) -> str:
     return f"{v:+.2f}%" if signed else f"{v:.2f}%"
 
 
+def _fmt_dec(pct_v, digits: int = 4) -> str:
+    """百分数字段 → 小数口径渲染（与 PAPV 指标面板一致：0.02 = +2%）。
+
+    v6 修复：研究上下文与指标面板两套单位并存，导致模型把「2.5%」写成裸数字 2.5，
+    结算时被读成 250% 产生送分题。收益率/超额类数值统一改小数，从根上消除错位。
+    """
+    if pct_v is None or not isinstance(pct_v, (int, float)):
+        return "N/A"
+    return f"{pct_v / 100.0:+.{digits}f}"
+
+
 def render_research_context(rc: dict) -> str:
     """把 precompute_research_cache.py 的单条缓存渲染成紧凑的前置研究上下文文本。
 
@@ -56,7 +67,8 @@ def render_research_context(rc: dict) -> str:
       predictor      → scenarios（三情景推演）
     全部 as-of T0（expanding window 防泄漏）。
     """
-    lines = ["## 前置研究上下文（Tier 1 Experts 离线预计算，strict as-of T0）"]
+    lines = ["## 前置研究上下文（Tier 1 Experts 离线预计算，strict as-of T0；"
+             "收益率/超额/动量类数值一律小数计，0.02=+2%，与指标面板口径一致）"]
 
     # ---- market_analyst：趋势/波动/位置 ----
     m = rc.get("market_ctx") or {}
@@ -65,17 +77,17 @@ def render_research_context(rc: dict) -> str:
         for label_, key in (("5日动量", "mom_5d_pct"), ("20日动量", "mom_20d_pct")):
             v = m.get(key)
             if v is not None:
-                parts.append(f"{label_} {_fmt_pct(v)}")
+                parts.append(f"{label_} {_fmt_dec(v)}")
         if m.get("vol_20d_ann_pct") is not None:
             parts.append(f"20日年化波动 {m['vol_20d_ann_pct']:.1f}%")
         for w in (20, 60):
             v = m.get(f"pos_vs_ma{w}_pct")
             if v is not None:
-                parts.append(f"vs MA{w} {_fmt_pct(v)}")
+                parts.append(f"vs MA{w} {_fmt_dec(v)}")
         if m.get("pos_52w_pct") is not None:
             parts.append(f"52周位置 {m['pos_52w_pct']:.0f}%")
         if m.get("drawdown_20d_pct") is not None:
-            parts.append(f"距20日高点 {_fmt_pct(m['drawdown_20d_pct'])}")
+            parts.append(f"距20日高点 {_fmt_dec(m['drawdown_20d_pct'])}")
         if parts:
             lines.append("### 行情分析师（趋势/波动/位置）")
             lines.append("- " + "；".join(parts))
@@ -86,9 +98,9 @@ def render_research_context(rc: dict) -> str:
     if bs.get("ok"):
         parts = []
         if bs.get("mom_20d_pct") is not None:
-            parts.append(f"基准20日动量 {_fmt_pct(bs['mom_20d_pct'])}")
+            parts.append(f"基准20日动量 {_fmt_dec(bs['mom_20d_pct'])}")
         if b.get("relative_strength_20d_pct") is not None:
-            parts.append(f"标的20日相对强度（超额） {_fmt_pct(b['relative_strength_20d_pct'])}")
+            parts.append(f"标的20日相对强度（超额） {_fmt_dec(b['relative_strength_20d_pct'])}")
         if parts:
             lines.append("### 基准对比")
             lines.append("- " + "；".join(parts))
@@ -102,7 +114,7 @@ def render_research_context(rc: dict) -> str:
             if st.get(k) is not None:
                 parts.append(f"{lab} {st[k]*100:.0f}%")
         if st.get("avg_car_primary_pct") is not None:
-            parts.append(f"定向平均CAR {_fmt_pct(st['avg_car_primary_pct'])}")
+            parts.append(f"定向平均CAR {_fmt_dec(st['avg_car_primary_pct'])}")
         if st.get("p_car_pos") is not None:
             parts.append(f"正CAR占比 {st['p_car_pos']*100:.0f}%")
         lines.append("### 同类事件基率（expanding window，严格早于本次事件）")
@@ -113,7 +125,7 @@ def render_research_context(rc: dict) -> str:
     if sc.get("ok"):
         lines.append("### 多情景推演（基率 ± 当前趋势微调）")
         lines.append(f"- 乐观(up) P={sc['bull']['prob']:.2f}"
-                     + (f"，历史平均CAR {_fmt_pct(sc['bull'].get('avg_car'))}" if sc['bull'].get('avg_car') is not None else "")
+                     + (f"，历史平均CAR {_fmt_dec(sc['bull'].get('avg_car'))}" if sc['bull'].get('avg_car') is not None else "")
                      + f"；中性 P={sc['base']['prob']:.2f}；悲观(down) P={sc['bear']['prob']:.2f}")
 
     # ---- 证据摘要（证据图节点）----
