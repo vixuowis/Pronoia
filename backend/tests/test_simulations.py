@@ -92,6 +92,7 @@ class SimulationRoutesTests(unittest.TestCase):
         artifacts = db.list_artifacts(self.case["id"])
         simulations = [item for item in artifacts if item["kind"] == "simulation"]
         self.assertEqual(len(simulations), 1)
+        self.assertEqual(simulations[0]["title"], "单次多智能体情景推演")
         self.assertEqual(simulations[0]["payload"]["scenarios"][0]["id"], "branch-1")
 
     def test_cancel_updates_persisted_job(self):

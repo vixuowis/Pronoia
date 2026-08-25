@@ -579,7 +579,7 @@ function TeamTab() {
       <div className="rounded-card border border-brand/20 bg-brand-soft/40 px-3 py-2.5 text-[11.5px] leading-relaxed text-brand">
         <div className="font-semibold">「深度研究团队」</div>
         <div className="mt-1 text-mute">
-          Planner 拆解任务 → 专家（event_scout / market_analyst / fundamentals_analyst / deep_researcher）串行执行
+          Planner 拆解任务 → 5 位专家（event_scout / market_analyst / fundamentals_analyst / deep_researcher / predictor）串行执行
           → 复核员（verifier）把关事实 → 报告员（report_writer）成文。
         </div>
       </div>

@@ -39,6 +39,18 @@ async def noop_artifact_store(kind: str, title: str, payload: Any) -> dict:
     return {"id": None, "kind": kind, "title": title, "payload": payload}
 
 
+def _is_retryable_stream_error(error: BaseException) -> bool:
+    """Recognize transport failures that are safe to retry before side effects."""
+
+    return type(error).__name__ in {
+        "RemoteProtocolError",
+        "ReadError",
+        "ReadTimeout",
+        "APIConnectionError",
+        "APITimeoutError",
+    }
+
+
 async def execute_skill(name: str, args: dict) -> dict:
     """Run a skill handler with timeout; never raises.
 
@@ -138,7 +150,10 @@ async def run_agent(
     ensure_skills_loaded()
     # 三层模型：自动过滤 internal=True 的 atomic tool（LLM 不可见）
     # skill 走 LLM 可见
-    tools = tools_for_agent(agent_def.get("skills", []) or agent_id)
+    configured_skills = agent_def.get("skills")
+    tools = tools_for_agent(
+        configured_skills if configured_skills is not None else agent_id
+    )
     client = get_client()
     consecutive_failures: dict[str, int] = {}
 
@@ -152,35 +167,54 @@ async def run_agent(
         if tools:
             kwargs["tools"] = tools
         _llm_t0 = time.time()
-        stream = await client.chat.completions.create(**kwargs)
-
-        tc_acc: dict[int, dict] = {}
-        saw_content = False
-        round_content = ""
-        finish_reason = None
-        async for chunk in stream:
-            if not chunk.choices:
-                continue
-            choice = chunk.choices[0]
-            delta = choice.delta
-            rc = getattr(delta, "reasoning_content", None)
-            if rc and emit_thinking:
-                yield {"type": "thinking", "agent": agent_id, "delta": rc}
-            if delta.content:
-                saw_content = True
-                round_content += delta.content
-            if delta.tool_calls:
-                for tc in delta.tool_calls:
-                    slot = tc_acc.setdefault(tc.index, {"id": "", "name": "", "arguments": ""})
-                    if tc.id:
-                        slot["id"] = tc.id
-                    if tc.function:
-                        if tc.function.name:
-                            slot["name"] += tc.function.name
-                        if tc.function.arguments:
-                            slot["arguments"] += tc.function.arguments
-            if choice.finish_reason:
-                finish_reason = choice.finish_reason
+        for transport_attempt in range(2):
+            tc_acc: dict[int, dict] = {}
+            round_content = ""
+            reasoning_content = ""
+            saw_content = False
+            finish_reason = None
+            try:
+                stream = await client.chat.completions.create(**kwargs)
+                async for chunk in stream:
+                    if not chunk.choices:
+                        continue
+                    choice = chunk.choices[0]
+                    delta = choice.delta
+                    rc = getattr(delta, "reasoning_content", None)
+                    if rc:
+                        reasoning_content += rc
+                    if delta.content:
+                        saw_content = True
+                        round_content += delta.content
+                    if delta.tool_calls:
+                        for tc in delta.tool_calls:
+                            slot = tc_acc.setdefault(
+                                tc.index,
+                                {"id": "", "name": "", "arguments": ""},
+                            )
+                            if tc.id:
+                                slot["id"] = tc.id
+                            if tc.function:
+                                if tc.function.name:
+                                    slot["name"] += tc.function.name
+                                if tc.function.arguments:
+                                    slot["arguments"] += tc.function.arguments
+                    if choice.finish_reason:
+                        finish_reason = choice.finish_reason
+                break
+            except BaseException as error:  # noqa: BLE001
+                if (
+                    transport_attempt >= 1
+                    or not _is_retryable_stream_error(error)
+                ):
+                    raise
+                await asyncio.sleep(0.5)
+        if reasoning_content and emit_thinking:
+            yield {
+                "type": "thinking",
+                "agent": agent_id,
+                "delta": reasoning_content,
+            }
 
         tool_calls = [tc_acc[i] for i in sorted(tc_acc)]
         _llm_dur = time.time() - _llm_t0
@@ -237,7 +271,8 @@ async def run_agent(
                                                    art.get("title", name),
                                                    art.get("payload", {}))
                         artifact_ids.append(row.get("id"))
-                        yield {"type": "artifact", "agent": agent_id, "artifact": row}
+                        if not row.get("_reused"):
+                            yield {"type": "artifact", "agent": agent_id, "artifact": row}
                     except Exception as e:  # noqa: BLE001
                         yield {"type": "thinking", "agent": agent_id,
                                "delta": f"\n[artifact 落库失败: {e}]\n"}

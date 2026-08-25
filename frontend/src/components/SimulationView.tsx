@@ -13,7 +13,7 @@ export default function SimulationView({ payload }: { payload: any }) {
   return (
     <div className="space-y-3">
       <div className="rounded-card border border-edge bg-card p-3.5 shadow-card">
-        <div className="flex items-center gap-2 text-[13px] font-semibold text-ink"><Users size={15} className="text-jade" />执行摘要</div>
+        <div className="flex items-center gap-2 text-[13px] font-semibold text-ink"><Users size={15} className="text-jade" />事件预测员 · 执行摘要</div>
         <div className="mt-3 grid grid-cols-2 gap-2">
           <Stat label="配置参与方" value={execution.configured_actor_count ?? 0} />
           <Stat label="实际活跃参与方" value={execution.active_actor_counts?.[0] ?? 0} />

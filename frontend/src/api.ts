@@ -449,12 +449,6 @@ export async function streamChat(
 ): Promise<void> {
   // 进入前先看 signal；已 abort 则不发请求
   if (signal?.aborted) throw new StreamAbortedError();
-  // 页面已隐藏（切 tab / 关闭 preview）时也别发请求 —— 浏览器随后会强 abort
-  // 留下 net::ERR_ABORTED 噪音；不如直接 throw 让 store 静默收尾。
-  if (typeof document !== "undefined" && document.visibilityState === "hidden") {
-    throw new StreamAbortedError();
-  }
-
   const res = await fetch(`${BASE}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "text/event-stream" },

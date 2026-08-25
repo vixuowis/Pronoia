@@ -310,6 +310,36 @@ def add_message(
     }
 
 
+def update_message(
+    message_id: str,
+    *,
+    content: str,
+    tool_trace: Optional[Any] = None,
+    agent: Optional[str] = None,
+) -> Optional[dict]:
+    """Checkpoint an in-flight assistant message without changing its identity."""
+
+    trace_json = json.dumps(tool_trace, ensure_ascii=False) if tool_trace else None
+    ts = now_iso()
+    with _lock:
+        conn = _get_conn()
+        row = conn.execute(
+            "SELECT case_id FROM messages WHERE id=?", (message_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        conn.execute(
+            "UPDATE messages SET agent=?,content=?,tool_trace=? WHERE id=?",
+            (agent, content, trace_json, message_id),
+        )
+        conn.execute(
+            "UPDATE cases SET updated_at=? WHERE id=?", (ts, row["case_id"])
+        )
+        conn.commit()
+    messages = [m for m in list_messages(row["case_id"]) if m["id"] == message_id]
+    return messages[0] if messages else None
+
+
 def list_messages(case_id: str, limit: Optional[int] = None) -> list[dict]:
     with _lock:
         if limit:

@@ -227,6 +227,7 @@ export function partsFromHistory(m: HistoryMessage): Part[] {
         note: it.note as string | undefined,
         plan: it.plan as PlanItem[] | undefined,
         verdict: it.verdict as string | undefined,
+        simulationJobId: it.simulation_job_id as string | undefined,
       });
     }
   }
@@ -369,9 +370,8 @@ let currentCtx: { caseId: string; messageId: string; question: string } | null =
 /** live-log 的 EventSource 连接（liveLogOpen=true 时建立，关闭时 close） */
 let liveLogEs: EventSource | null = null;
 
-// 页面隐藏 / 关闭 / 切换 tab 时主动 abort in-flight 请求，
-// 避免浏览器随后再用 net::ERR_ABORTED 强 abort、留下 console 噪音。
-// 装上 once: true + capture，避免被业务清理时漏掉。
+// Only a real page unload should stop the attached stream. Merely switching
+// tabs/windows must not cancel a multi-minute team research run.
 if (typeof window !== "undefined") {
   const silentAbort = () => {
     if (abortCtl) {
@@ -380,9 +380,6 @@ if (typeof window !== "undefined") {
   };
   window.addEventListener("pagehide", silentAbort, { capture: true });
   window.addEventListener("beforeunload", silentAbort, { capture: true });
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") silentAbort();
-  }, { capture: true });
 }
 
 export const useStore = create<FeverState>((set, get) => {
@@ -477,6 +474,7 @@ export const useStore = create<FeverState>((set, get) => {
             note: ev.note,
             plan: ev.plan,
             verdict: ev.verdict,
+            simulationJobId: ev.simulation_job_id,
           },
         ]);
         break;

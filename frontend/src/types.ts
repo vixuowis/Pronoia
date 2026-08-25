@@ -159,6 +159,7 @@ export type Part =
       note?: string;
       plan?: PlanItem[];
       verdict?: string;
+      simulationJobId?: string;
     }
   | { type: "logic_items"; items: LogicItem[] };
 
@@ -211,6 +212,7 @@ export interface SSEEvent {
   title?: string;
   message_id?: string;
   message?: string;
+  simulation_job_id?: string;
   /** logic_items 事件携带的待验证推演条目 */
   items?: LogicItem[];
 }

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from typing import Any, Literal
 
 import requests
@@ -13,6 +14,8 @@ from .. import config, db
 router = APIRouter(prefix="/api", tags=["simulations"])
 TERMINAL = {"completed", "partial", "failed", "cancelled"}
 _sync_lock = threading.RLock()
+_watch_lock = threading.RLock()
+_watched_jobs: set[str] = set()
 
 
 class StartSimulationRequest(BaseModel):
@@ -76,7 +79,7 @@ def _sync(job: dict[str, Any]) -> dict[str, Any]:
         artifact_id = job.get("artifact_id")
         if remote.get("status") in {"completed", "partial"} and remote.get("result") and not artifact_id:
             request_payload = job["request_payload"]
-            mode_cn = "快速" if request_payload.get("mode") == "quick" else "校准"
+            mode_cn = "单次" if request_payload.get("mode") == "quick" else "校准"
             artifact = db.add_artifact(
                 job["case_id"], None, "simulation", f"{mode_cn}多智能体情景推演", remote["result"]
             )
@@ -92,8 +95,43 @@ def _sync(job: dict[str, Any]) -> dict[str, Any]:
         ) or job
 
 
-@router.post("/cases/{case_id}/simulations", status_code=202)
-def start_simulation(case_id: str, request: StartSimulationRequest):
+def _watch_until_terminal(job_id: str) -> None:
+    try:
+        while True:
+            job = db.get_simulation_job(job_id)
+            if not job or job.get("status") in TERMINAL:
+                return
+            try:
+                synced = _sync(job)
+            except HTTPException:
+                time.sleep(3)
+                continue
+            if synced.get("status") in TERMINAL:
+                return
+            time.sleep(2)
+    finally:
+        with _watch_lock:
+            _watched_jobs.discard(job_id)
+
+
+def _schedule_sync(job_id: str) -> None:
+    """Keep automatic runs durable even when no graph panel is open."""
+
+    with _watch_lock:
+        if job_id in _watched_jobs:
+            return
+        _watched_jobs.add(job_id)
+    threading.Thread(
+        target=_watch_until_terminal,
+        args=(job_id,),
+        name=f"simulation-sync-{job_id[:8]}",
+        daemon=True,
+    ).start()
+
+
+def start_simulation_service(
+    case_id: str, request: StartSimulationRequest
+) -> dict[str, Any]:
     payload, _ = _build_gateway_payload(case_id, request)
     remote = _gateway("POST", "/v1/simulations", json=payload)
     job = db.create_simulation_job(
@@ -102,7 +140,15 @@ def start_simulation(case_id: str, request: StartSimulationRequest):
         remote,
         {key: value for key, value in payload.items() if key != "evidence_graph"},
     )
-    return _public(_sync(job))
+    synced = _sync(job)
+    if synced.get("status") not in TERMINAL:
+        _schedule_sync(synced["id"])
+    return _public(synced)
+
+
+@router.post("/cases/{case_id}/simulations", status_code=202)
+def start_simulation(case_id: str, request: StartSimulationRequest):
+    return start_simulation_service(case_id, request)
 
 
 @router.post("/cases/{case_id}/simulations/preview")

@@ -9,13 +9,26 @@ const STAGE_CN: Record<string, string> = {
   compiling_spec: "整理证据与参与方",
   validating: "校验输入",
   building_graph: "构建模拟世界",
+  retrying_ontology: "本体生成暂时失败，正在重试",
   simulating: "多方行动推演",
   compiling_scenarios: "汇总情景分支",
   completed: "推演完成",
+  partial: "部分完成",
   failed: "推演失败",
   cancel_requested: "正在安全停止",
   cancelled: "已取消",
 };
+
+function friendlySimulationError(message?: string | null) {
+  if (!message) return "";
+  if (message.includes("Ontology generation failed")) {
+    return "MiroFish 在整理参与方关系时暂时失败。证据图和团队报告已保留，可以重新启动单次推演。";
+  }
+  if (message.includes("safety budget is exhausted")) {
+    return "MiroFish 本次服务的模型安全预算已经用完。证据图已保留；重启 MiroFish 后可重新启动单次推演。";
+  }
+  return message;
+}
 
 export default function SimulationLaunch({ artifact }: { artifact: Artifact }) {
   const caseId = useStore((s) => s.currentCaseId);
@@ -36,10 +49,8 @@ export default function SimulationLaunch({ artifact }: { artifact: Artifact }) {
     let active = true;
     void api.simulations(caseId).then((jobs) => {
       if (!active) return;
-      const resumable = jobs.find(
-        (item) => item.graph_artifact_id === artifact.id && ["queued", "running", "cancelling"].includes(item.status),
-      );
-      if (resumable) setJob(resumable);
+      const latest = jobs.find((item) => item.graph_artifact_id === artifact.id);
+      setJob(latest ?? null);
     }).catch(() => { /* gateway may be offline while browsing old artifacts */ });
     return () => { active = false; };
   }, [artifact.id, caseId]);
@@ -114,8 +125,8 @@ export default function SimulationLaunch({ artifact }: { artifact: Artifact }) {
       <div className="flex items-start gap-3">
         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-jade text-white"><GitBranch size={15} /></span>
         <div className="min-w-0 flex-1">
-          <p className="text-[13px] font-semibold text-ink">多智能体事件推演</p>
-          <p className="mt-1 text-[11.5px] leading-relaxed text-mute">将证据图中的事实编译为参与方、约束与行动空间，异步生成未来情景。当前快速模式输出情景，不输出校准概率。</p>
+          <p className="text-[13px] font-semibold text-ink">事件预测员 · 多智能体事件推演</p>
+          <p className="mt-1 text-[11.5px] leading-relaxed text-mute">以深度研究者导出的证据图为输入，由事件预测员协调后台多方行动推演。当前单次模式通常需要 5～10 分钟，输出可审查情景，不输出校准概率。</p>
           {!busy && (
             <div className="mt-3 rounded-lg border border-jade/20 bg-white/60 p-2.5">
               <div className="flex items-center justify-between gap-3">
@@ -135,6 +146,7 @@ export default function SimulationLaunch({ artifact }: { artifact: Artifact }) {
               </div>
               {preview && (
                 <div className="mt-2 text-[10.5px] leading-relaxed text-mute">
+                  <p className="mb-1 font-medium text-ink">参与方预览（尚未产生推演结果）</p>
                   <p>
                     {actorCap === "auto" ? `本次自动推荐最多 ${preview.actor_selection.recommended_count} 个，实际选中 ${preview.actors.length} 个` : `本次最多 ${preview.actor_selection.applied_limit} 个，实际选中 ${preview.actors.length} 个`}
                   </p>
@@ -152,6 +164,7 @@ export default function SimulationLaunch({ artifact }: { artifact: Artifact }) {
           )}
           {busy ? (
             <div className="mt-3">
+              <p className="mb-2 rounded-md bg-white/60 px-2 py-1.5 text-[10.5px] leading-relaxed text-mute">后台任务独立运行：聊天回答可能先结束，你可以继续浏览或离开当前产出物，完成后结果会写入侧边栏。</p>
               <div className="mb-1.5 flex items-center justify-between text-[11px] text-mute">
                 <span className="flex items-center gap-1.5"><Loader2 size={12} className="animate-spin" />{STAGE_CN[job.stage] ?? job.stage}</span>
                 <span>{Math.round(job.progress * 100)}%</span>
@@ -160,11 +173,18 @@ export default function SimulationLaunch({ artifact }: { artifact: Artifact }) {
               <button disabled={job.status === "cancelling"} onClick={() => void cancel()} className="mt-2 text-[11px] font-medium text-mute underline-offset-2 hover:text-ink hover:underline disabled:cursor-not-allowed disabled:text-faint">{job.status === "cancelling" ? "正在停止…" : "取消推演"}</button>
             </div>
           ) : (
-            <button onClick={() => void start()} className="mt-3 rounded-lg bg-jade px-3 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-[#0c665f]">
-              开始快速推演
-            </button>
+            <>
+              {job?.status === "failed" && (
+                <p className="mt-3 rounded-md border border-[#D98B83]/40 bg-[#FFF4F2] px-2.5 py-2 text-[11px] leading-relaxed text-[#8C3530]">
+                  上一次推演未进入多方行动阶段；证据图不受影响。本次可从头重新启动，失败任务不会被复用。
+                </p>
+              )}
+              <button onClick={() => void start()} className="mt-3 rounded-lg bg-jade px-3 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-[#0c665f]">
+                {job?.status === "failed" || job?.status === "cancelled" ? "重新启动单次推演" : job?.status === "completed" || job?.status === "partial" ? "再次启动单次推演" : "交给事件预测员推演"}
+              </button>
+            </>
           )}
-          {(error || job?.error) && <p className="mt-2 flex items-start gap-1.5 text-[11.5px] text-[#A33A32]"><AlertCircle size={12} className="mt-0.5 shrink-0" />{error || job?.error}</p>}
+          {(error || job?.error) && <p className="mt-2 flex items-start gap-1.5 text-[11.5px] text-[#A33A32]"><AlertCircle size={12} className="mt-0.5 shrink-0" />{error || friendlySimulationError(job?.error)}</p>}
         </div>
       </div>
     </div>
