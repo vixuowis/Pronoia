@@ -78,11 +78,12 @@ def main() -> None:
                 d[str(r.get("event_id"))] = r["rationale"]
         return d
 
-    rat_new = collect(audit / "oos_team_full.jsonl")          # 本轮新采集（最高优先）
+    rat_v4 = collect(audit / "research_cache_team_v4.jsonl")  # 新：v4 Team 全量（最高优先）
+    rat_new = collect(audit / "oos_team_full.jsonl")          # 本轮新采集
     rat_combined = collect(audit / "combined_team_rationale.jsonl")
     rat_team = collect(audit / "research_cache_team.jsonl")
 
-    print(f"[RAT] new={len(rat_new)} combined={len(rat_combined)} team={len(rat_team)}")
+    print(f"[RAT] v4={len(rat_v4)} new={len(rat_new)} combined={len(rat_combined)} team={len(rat_team)}")
 
     # 组装全量池
     rows = []  # (event_id, event, label, rc)
@@ -91,7 +92,7 @@ def main() -> None:
         st = stats.get(eid)
         if lb is None or st is None:
             continue
-        rat = (rat_new.get(eid) or rat_combined.get(eid) or rat_team.get(eid))
+        rat = (rat_v4.get(eid) or rat_new.get(eid) or rat_combined.get(eid) or rat_team.get(eid))
         if not rat:
             continue
         rc = dict(st)
