@@ -223,6 +223,10 @@ def run_expert(expert: str, rows: list[dict], args) -> Path:
         num_completions_to_print=3,
         report_to="none",
         seed=args.seed,
+        **(
+            dict(use_vllm=True, vllm_gpu_memory_utilization=args.vllm_mem_util)
+            if args.use_vllm else {}
+        ),
     )
 
     lora_cfg = LoraConfig(
@@ -265,6 +269,8 @@ def main():
     ap.add_argument("--max-prompt-length", type=int, default=2304)
     ap.add_argument("--max-completion-length", type=int, default=1280)
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--use-vllm", action="store_true", help="vLLM colocate rollout（提速 2-4x）")
+    ap.add_argument("--vllm-mem-util", type=float, default=0.25, help="vLLM colocate 显存占比")
     args = ap.parse_args()
 
     data_dir = Path(args.data_dir)
