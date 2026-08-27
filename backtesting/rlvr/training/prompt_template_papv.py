@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -22,6 +23,33 @@ if str(_SCRIPTS) not in sys.path:
 from papv_claims import METRIC_PANEL                                  # noqa: E402
 from prompt_template import render_research_context, _fmt_pct          # noqa: E402
 from scene_match import primary_horizon_for, expert_targets_for        # noqa: E402
+
+
+def _soft_moe_prior_text(event: dict, research: dict | None) -> str | None:
+    """软 MoE 阶段 0：Router 先验权重作为显式 prompt 条件注入单模型。
+
+    开关：环境变量 PAPV_SOFT_MOE=1。返回 top-K 专家权重文本；失败返回 None。
+    """
+    if os.getenv("PAPV_SOFT_MOE", "0") != "1":
+        return None
+    try:
+        from expert_definitions import router_weights
+        vol = (research or {}).get("vol_features") or {}
+        w = router_weights(
+            str(event.get("market") or "?").upper(),
+            str(event.get("event_type_l2") or event.get("event_type") or ""),
+            vol_regime=vol.get("vol_regime"),
+            vol_t0_ratio=vol.get("vol_t0_ratio"),
+        )
+        top = sorted(w.items(), key=lambda kv: -kv[1])[:3]
+        top = [(k, v) for k, v in top if v >= 0.05]
+        if not top:
+            return None
+        items = "，".join(f"{k}({v:.2f})" for k, v in top)
+        return (f"软 MoE Router 先验（各专家激活权重，供判断时分工参考，"
+                f"非结论）：{items}")
+    except Exception:
+        return None
 
 SYSTEM_PROMPT_PAPV = """你是 Pronoia-PAPV 事件研究断言师（PAPV = 预测-断言-事后验证）。
 面对事件与前置研究上下文，你的任务不是给出涨跌观点，而是：
@@ -121,6 +149,11 @@ def build_messages_for_papv(event: dict, research: dict | None = None) -> list[d
             f"但应覆盖它）；MoE 专家路由先验：{', '.join(experts)}。")
     except Exception:
         pass
+
+    # 软 MoE 阶段 0：Router 先验权重注入（PAPV_SOFT_MOE=1 时启用）
+    smoe = _soft_moe_prior_text(event, research)
+    if smoe:
+        parts.append(f"- {smoe}")
 
     parts.append("")
     parts.append(

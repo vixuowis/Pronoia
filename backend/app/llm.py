@@ -151,6 +151,8 @@ async def run_agent(
         }
         if tools:
             kwargs["tools"] = tools
+        if config.AGENT_MAX_TOKENS > 0:
+            kwargs["max_tokens"] = config.AGENT_MAX_TOKENS
         _llm_t0 = time.time()
         stream = await client.chat.completions.create(**kwargs)
 
@@ -276,6 +278,8 @@ async def run_agent(
                 }],
                 "stream": True,
             }
+            if config.AGENT_MAX_TOKENS > 0:
+                summary_kwargs["max_tokens"] = config.AGENT_MAX_TOKENS
             summary_stream = await client.chat.completions.create(**summary_kwargs)
             async for chunk in summary_stream:
                 if not chunk.choices:
@@ -297,6 +301,8 @@ async def run_agent(
             "messages": messages + [{"role": "user", "content": "工具轮次已用完，请基于已获得的信息直接给出最终回答。"}],
             "stream": True,
         }
+        if config.AGENT_MAX_TOKENS > 0:
+            summary_kwargs["max_tokens"] = config.AGENT_MAX_TOKENS
         stream = await client.chat.completions.create(**summary_kwargs)
         async for chunk in stream:
             if not chunk.choices:

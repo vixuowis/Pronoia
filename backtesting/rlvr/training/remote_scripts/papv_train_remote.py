@@ -112,15 +112,20 @@ def _completion_to_text(comp) -> str:
 def make_papv_reward_fn():
     def reward_fn(completions, prompts=None, completion_ids=None, **kwargs):
         label_jsons = kwargs.get("_label_json") or []
+        event_jsons = kwargs.get("_event_json") or []
         rewards = []
         for i, comp in enumerate(completions):
             try:
                 lb = json.loads(label_jsons[i]) if i < len(label_jsons) else {}
             except Exception:
                 lb = {}
+            try:
+                ev = json.loads(event_jsons[i]) if i < len(event_jsons) else {}
+            except Exception:
+                ev = {}
             text = _completion_to_text(comp)
             try:
-                r = compute_papv_reward(text, {}, lb)
+                r = compute_papv_reward(text, ev, lb)
                 rewards.append(float(r["reward"]))
             except Exception:
                 rewards.append(-0.2)

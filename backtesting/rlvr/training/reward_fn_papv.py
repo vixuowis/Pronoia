@@ -16,6 +16,14 @@ v6 修复（阈值单位错位）：
   · parse_claims 增加单位守卫：裸数字 |thr|>0.15 按本意百分数归一（÷100）；
   · settle_all(drop_trivial=True)：|实际值| < |阈值|/2 的送分断言不计入 R1/R2/R3，
     从激励上关闭「写大阈值换命中」的捷径。
+
+v6.1 残留偏差修正（40 案例 case study 四启示之 B3/B4/B5，只做 [-0.15, 0] 的额外扣分）：
+  B3 极端事件显著性惩罚：T0 反应极端（|car_t1| 或 |ret_t1| > 5%）时，
+     错误主张「不显著」的 pvalue 断言每条额外 -0.05（涨停/跌停后几乎必然显著）。
+  B4 car/ret 分化惩罚：基准同向大跌（min bm_ret_tX ≤ -2%）时，
+     错误的 ret 下行断言每条额外 -0.05（基准同跌 → 超跌反弹，car 空不应连坐 ret 空）。
+  B5 T0 噪音事件衰减：中标/经营数据/框架协议类事件 T0 为负时，
+     错误的 car/ret 下行断言每条额外 -0.04（此类 T0 负反馈多为噪音而非趋势）。
 """
 from __future__ import annotations
 
@@ -28,7 +36,9 @@ _THIS = Path(__file__).resolve().parent
 if str(_THIS) not in sys.path:
     sys.path.insert(0, str(_THIS))
 
-from papv_claims import parse_claims, settle_all, metric_family  # noqa: E402
+from papv_claims import (  # noqa: E402
+    parse_claims, settle_all, settle_claim, is_trivial_claim, metric_family,
+)
 
 SECTION_HEADERS = {
     "R0": r"【\s*0[.\s]*断言规划\s*】",
@@ -40,6 +50,80 @@ SECTION_HEADERS = {
 
 def _has_section(text: str, key: str) -> bool:
     return re.search(SECTION_HEADERS[key], text) is not None
+
+
+# ============ v6.1 残留偏差修正辅助 ============
+
+# B5：T0 负反馈多为噪音的事件类型（事件标题/正文关键词）
+_T0_NOISE_EVENT_RE = re.compile(r"中标|经营数据|框架协议|合作协议|中标公告")
+
+
+def _asserts_negative(c: dict) -> bool:
+    """断言隐含「指标将处于低位/下跌」：
+    下行谓词（<, <=）判成立，或上行谓词（>, >=）判不成立，且阈值不高（≤2%）。"""
+    down_pred = c["op"] in ("<", "<=")
+    claims_below = c["judge"] if down_pred else (not c["judge"])
+    return bool(claims_below) and c["thr"] <= 0.02
+
+
+def _asserts_insiginificant(c: dict) -> bool:
+    """pvalue 断言隐含「不显著」立场：谓词描述显著但判不成立，或反之。"""
+    op, thr = c["op"], c["thr"]
+    pred_sig = (op in ("<", "<=") and thr <= 0.05) or (op in (">", ">=") and thr >= 0.05)
+    return (not c["judge"]) if pred_sig else bool(c["judge"])
+
+
+def _residual_bias_adj(claims: list[dict], event: dict, label: dict) -> tuple[float, dict]:
+    """B3/B4/B5 残留偏差修正项。返回 (额外扣分 ∈ [-0.15, 0], 诊断明细)。"""
+    adj = 0.0
+    diag: dict = {}
+
+    car_t1 = label.get("car_t1")
+    ret_t1 = label.get("ret_t1")
+    t1_vals = [abs(v) for v in (car_t1, ret_t1) if isinstance(v, (int, float))]
+    extreme_t0 = bool(t1_vals) and max(t1_vals) > 0.05
+
+    # 错误且非平凡的断言集合（避免对送分断言重复扣分）
+    def _wrong_nontrivial(c: dict) -> bool:
+        return settle_claim(c, label) is False and not is_trivial_claim(c, label)
+
+    # B3 极端事件显著性：T0 反应极端时错误主张「不显著」
+    if extreme_t0:
+        n = sum(
+            1 for c in claims
+            if "pvalue" in c["metric"] and _asserts_insiginificant(c) and _wrong_nontrivial(c)
+        )
+        if n:
+            diag["b3_wrong_insiginificant"] = n
+            adj -= 0.05 * n
+
+    # B4 car/ret 分化：基准大跌时错误的 ret 下行断言（超跌反弹被忽略）
+    bm_vals = [v for k, v in label.items()
+               if k.startswith("bm_ret_t") and isinstance(v, (int, float))]
+    if bm_vals and min(bm_vals) <= -0.02:
+        n = sum(
+            1 for c in claims
+            if metric_family(c["metric"]) == "ret" and _asserts_negative(c) and _wrong_nontrivial(c)
+        )
+        if n:
+            diag["b4_ret_down_pen"] = n
+            adj -= 0.05 * n
+
+    # B5 T0 噪音事件：中标/经营数据类事件 T0 为负时，错误的 car/ret 下行断言
+    ev_text = " ".join(
+        (str(event.get(k) or "")[:300] if k == "body" else str(event.get(k) or ""))
+        for k in ("event_type_l2", "event_type", "title", "body")
+    )
+    if _T0_NOISE_EVENT_RE.search(ev_text) and isinstance(car_t1, (int, float)) and car_t1 < 0:
+        n = sum(
+            1 for c in claims
+            if metric_family(c["metric"]) in ("car", "ret") and _asserts_negative(c) and _wrong_nontrivial(c)
+        )
+        if n:
+            diag["b5_t0_noise_pen"] = n
+            adj -= 0.04 * n
+
+    return max(adj, -0.15), diag
 
 
 def compute_papv_reward(completion: str, event: dict, label: dict) -> dict:
@@ -108,6 +192,13 @@ def compute_papv_reward(completion: str, event: dict, label: dict) -> dict:
     # 不可结算占多数 → 轻罚（防止靠「编造不可结算断言」逃避校验）
     if st["settleable"] == 0:
         reward = min(reward, 0.0)
+
+    # ---- v6.1 残留偏差修正（B3/B4/B5）----
+    bias_adj, bias_diag = _residual_bias_adj(claims, event, label)
+    if bias_adj:
+        reward = max(-0.20, reward + bias_adj)
+        detail.update(bias_diag)
+        detail["bias_adj"] = round(bias_adj, 3)
 
     detail["R"] = {k: (round(v, 3) if v is not None else None) for k, v in parts.items()}
     return {"reward": float(reward), "detail": detail}
