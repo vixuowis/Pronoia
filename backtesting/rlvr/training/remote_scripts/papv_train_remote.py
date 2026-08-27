@@ -16,8 +16,14 @@
   · 数据：events_enriched.jsonl / labels.jsonl / research_cache.jsonl（已上传远程）
 
 用法（远程机器）：
+  # 原始路径（HF generate rollout，慢）
   /root/miniconda3/bin/python papv_train_remote.py \
       --data-dir /root/pronoia/data_v2 --expert mixed \
+      --max-samples 0 --epochs 1 --out-dir /root/pronoia/papv_full
+
+  # unsloth 加速路径（进程内 vLLM + 权重共享 + Standby，推荐，提速 2-3x）
+  /root/miniconda3/envs/unsloth/bin/python papv_train_remote.py \
+      --data-dir /root/pronoia/data_v2 --expert mixed --use-unsloth \
       --max-samples 0 --epochs 1 --out-dir /root/pronoia/papv_full
 """
 from __future__ import annotations
@@ -167,6 +173,118 @@ def _patch_rollout_generation(gradient_checkpointing_kwargs=None):
 
 
 # ---------------- 训练 ----------------
+def _grpo_cfg_kwargs(cfg_cls, kwargs: dict) -> dict:
+    """按已安装 trl 版本过滤 GRPOConfig 参数（兼容 0.17 ~ 1.x）。"""
+    fields = getattr(cfg_cls, "__dataclass_fields__", {})
+    out = {}
+    for k, v in kwargs.items():
+        if k not in fields:
+            print(f"[CFG] 当前 trl 不支持参数 {k}，跳过")
+            continue
+        # 新版 trl scale_rewards 是 str（"group"/"batch"/"none"）
+        if k == "scale_rewards" and isinstance(v, bool):
+            ann = str(fields[k].type)
+            if "str" in ann or "Literal" in ann:
+                v = "group" if v else "none"
+        out[k] = v
+    return out
+
+
+def run_expert_unsloth(expert: str, rows: list[dict], args) -> Path:
+    """unsloth 加速路径：进程内 vLLM（fast_inference）+ 权重共享 + Standby。
+
+    生成走 vLLM 连续批处理（无需 trl use_vllm / NCCL 权重广播），
+    LoRA 热更新进 vLLM，trl 的 rollout 乱码 patch 也不需要。
+    """
+    import os
+    os.environ.setdefault("UNSLOTH_VLLM_STANDBY", "1")
+    from unsloth import FastLanguageModel
+    from datasets import Dataset
+    from trl import GRPOConfig, GRPOTrainer
+
+    out_dir = Path(args.out_dir) / f"papv_{expert}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    max_seq_length = args.max_prompt_length + args.max_completion_length
+    print(f"[UNSLOTH] 加载 {BASE_MODEL}（max_seq_length={max_seq_length}, "
+          f"gpu_util={args.unsloth_gpu_util}, standby=on）")
+    model, tok = FastLanguageModel.from_pretrained(
+        model_name=BASE_MODEL,
+        max_seq_length=max_seq_length,
+        load_in_4bit=False,                 # 48GB 显存跑 LoRA 16bit 足够
+        fast_inference=True,                # 进程内 vLLM
+        max_lora_rank=args.lora_rank,
+        gpu_memory_utilization=args.unsloth_gpu_util,
+    )
+    model = FastLanguageModel.get_peft_model(
+        model,
+        r=args.lora_rank,
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
+                        "gate_proj", "up_proj", "down_proj"],
+        lora_alpha=args.lora_rank * 2,
+        lora_dropout=0,                     # dropout=0 才能启用 unsloth 快速 LoRA patch
+        use_gradient_checkpointing="unsloth",
+        random_state=args.seed,
+    )
+
+    ds_rows = []
+    for r in rows:
+        if isinstance(r["prompt"], list):
+            r = {**r, "prompt": render_prompt_str(tok, r["prompt"])}
+        ds_rows.append(r)
+    ds = Dataset.from_list(ds_rows)
+    print(f"[DATA] prompt 预渲染完成，样例（尾 250 字符）：\n...{ds_rows[0]['prompt'][-250:]}")
+
+    hp = DEFAULT_HPARAMS
+    gen_bs = args.per_device_batch_size * args.grad_accum
+    assert gen_bs % args.num_generations == 0, (
+        f"generation_batch_size({gen_bs}) 必须能被 num_generations({args.num_generations}) 整除")
+
+    cfg_kwargs = dict(
+        output_dir=str(out_dir),
+        num_train_epochs=args.epochs,
+        per_device_train_batch_size=args.per_device_batch_size,
+        gradient_accumulation_steps=args.grad_accum,
+        learning_rate=args.lr,
+        weight_decay=hp.weight_decay,
+        max_grad_norm=hp.max_grad_norm,
+        lr_scheduler_type="cosine",
+        warmup_ratio=0.05,
+        logging_steps=1,
+        save_strategy="steps" if args.save_steps > 0 else "epoch",
+        save_steps=args.save_steps if args.save_steps > 0 else 500,
+        save_total_limit=2,
+        bf16=True,
+        num_generations=args.num_generations,
+        max_prompt_length=args.max_prompt_length,
+        max_completion_length=args.max_completion_length,
+        temperature=1.0,
+        top_p=1.0,
+        beta=0.04,
+        loss_type="grpo",
+        scale_rewards=True,
+        mask_truncated_completions=True,
+        log_completions=getattr(args, "log_completions", False),
+        num_completions_to_print=3,
+        report_to="none",
+        seed=args.seed,
+    )
+    cfg = GRPOConfig(**_grpo_cfg_kwargs(GRPOConfig, cfg_kwargs))
+
+    trainer = GRPOTrainer(
+        model=model,
+        args=cfg,
+        train_dataset=ds,
+        reward_funcs=make_papv_reward_fn(),
+        processing_class=tok,
+    )
+    trainer.train()
+    trainer.save_model(str(out_dir))
+    tok.save_pretrained(str(out_dir))
+    print(f"[DONE] expert={expert} PAPV LoRA（unsloth）→ {out_dir}")
+    return out_dir
+
+
 def run_expert(expert: str, rows: list[dict], args) -> Path:
     from datasets import Dataset
     from peft import LoraConfig
@@ -271,6 +389,10 @@ def main():
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--use-vllm", action="store_true", help="vLLM colocate rollout（提速 2-4x）")
     ap.add_argument("--vllm-mem-util", type=float, default=0.25, help="vLLM colocate 显存占比")
+    ap.add_argument("--use-unsloth", action="store_true",
+                    help="unsloth 加速路径：进程内 vLLM + 权重共享 + Standby（推荐）")
+    ap.add_argument("--unsloth-gpu-util", type=float, default=0.9,
+                    help="unsloth vLLM 显存占比（Standby 模式可直接设 0.9）")
     args = ap.parse_args()
 
     data_dir = Path(args.data_dir)
@@ -278,8 +400,12 @@ def main():
     for ex in experts:
         if ex not in EXPERT_IDS and ex != "mixed":
             raise SystemExit(f"unknown expert: {ex}")
+        # unsloth 路径下 tokenizer 由 FastLanguageModel 返回，这里不预加载
         rows = load_dataset_rows(data_dir, ex, args.max_samples)
-        run_expert(ex, rows, args)
+        if args.use_unsloth:
+            run_expert_unsloth(ex, rows, args)
+        else:
+            run_expert(ex, rows, args)
 
 
 if __name__ == "__main__":
