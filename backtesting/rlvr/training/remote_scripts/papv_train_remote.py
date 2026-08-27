@@ -211,8 +211,8 @@ def run_expert(expert: str, rows: list[dict], args) -> Path:
         bf16=True,
         gradient_checkpointing=True,
         num_generations=args.num_generations,
-        max_prompt_length=2304,
-        max_completion_length=1280,
+        max_prompt_length=args.max_prompt_length,
+        max_completion_length=args.max_completion_length,
         temperature=1.0,
         top_p=1.0,
         beta=0.04,
@@ -261,7 +261,9 @@ def main():
     ap.add_argument("--lr", type=float, default=1e-5)
     ap.add_argument("--lora-rank", type=int, default=16)
     ap.add_argument("--log-completions", action="store_true")
-    ap.add_argument("--save-steps", type=int, default=0, help="每 N 步存 checkpoint（0=按 epoch）")
+    ap.add_argument("--save-steps", type=int, default=200, help="每 N 步存 checkpoint（0=按 epoch）")
+    ap.add_argument("--max-prompt-length", type=int, default=2304)
+    ap.add_argument("--max-completion-length", type=int, default=1280)
     ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args()
 
