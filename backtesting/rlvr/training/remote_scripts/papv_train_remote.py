@@ -30,6 +30,7 @@ from pathlib import Path
 
 _THIS = Path(__file__).resolve().parent
 sys.path.insert(0, str(_THIS))
+sys.path.insert(0, str(_THIS.parent))          # training/（papv_claims 等模块所在）
 
 from papv_claims import METRIC_PANEL                        # noqa: E402
 from reward_fn_papv import compute_papv_reward              # noqa: E402

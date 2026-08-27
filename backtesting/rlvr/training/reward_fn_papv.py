@@ -37,7 +37,8 @@ if str(_THIS) not in sys.path:
     sys.path.insert(0, str(_THIS))
 
 from papv_claims import (  # noqa: E402
-    parse_claims, settle_all, settle_claim, is_trivial_claim, metric_family,
+    METRIC_PANEL, parse_claims, settle_all, settle_claim, is_trivial_claim,
+    metric_family,
 )
 
 SECTION_HEADERS = {
@@ -126,6 +127,81 @@ def _residual_bias_adj(claims: list[dict], event: dict, label: dict) -> tuple[fl
     return max(adj, -0.15), diag
 
 
+# ============ v6.1 覆盖度修正（EXP-0 诊断 → B7 / T3） ============
+
+# B7：弱指标先验表（环境变量 PAPV_METRIC_PRIOR 指向 gen_metric_prior.py 输出的 JSON）。
+# 表内 acc < _B7_WEAK_ACC 的指标视为「弱指标」：其断言的正确性得分按 ×_B7_DISCOUNT 打折，
+# 抑制向硬币水平指标堆断言。表缺失/加载失败时静默跳过（向后兼容）。
+_B7_WEAK_ACC = 0.55
+_B7_DISCOUNT = 0.7
+_METRIC_PRIOR: dict[str, dict] = {}
+
+
+def _load_metric_prior() -> dict[str, dict]:
+    import json
+    import os
+    global _METRIC_PRIOR
+    if _METRIC_PRIOR:
+        return _METRIC_PRIOR
+    path = os.getenv("PAPV_METRIC_PRIOR", "")
+    if not path:
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        _METRIC_PRIOR = data.get("metrics") or {}
+    except Exception:
+        _METRIC_PRIOR = {}
+    return _METRIC_PRIOR
+
+
+def _b7_weak_discount(claims: list[dict], label: dict) -> tuple[float, dict]:
+    """B7 弱指标打折。返回 (R2 乘数 ∈ (0,1], 诊断)。"""
+    prior = _load_metric_prior()
+    if not prior:
+        return 1.0, {}
+    weak = {m for m, d in prior.items()
+            if isinstance(d, dict) and d.get("acc", 1.0) < _B7_WEAK_ACC}
+    if not weak:
+        return 1.0, {}
+    # 可结算断言中弱指标占比 → 按占比线性打折（全弱 ×0.7，无弱 ×1.0）
+    settleable = [c for c in claims if settle_claim(c, label) is not None]
+    if not settleable:
+        return 1.0, {}
+    n_weak = sum(1 for c in settleable if c["metric"] in weak)
+    frac = n_weak / len(settleable)
+    mult = 1.0 - (1.0 - _B7_DISCOUNT) * frac
+    return mult, {"b7_weak_frac": round(frac, 3), "b7_r2_mult": round(mult, 3)}
+
+
+# T3：新增覆盖加分——断言引入「此前未出现的族/horizon」时给额外奖励，
+# 对冲 B7 的「只挑软柿子」副作用，同时抑制同族堆叠。
+_T3_NEW_COVER_BONUS = 0.06
+
+
+def _t3_coverage_bonus(claims: list[dict]) -> tuple[float, dict]:
+    """T3 新增覆盖加分。返回 (加分 ∈ [0, 0.12], 诊断)。"""
+    seen_fam: set[str] = set()
+    seen_hor: set[str] = set()
+    new_fam = new_hor = 0
+    for c in claims:
+        fam = metric_family(c["metric"])
+        if fam not in seen_fam:
+            seen_fam.add(fam)
+            if fam != "other":
+                new_fam += 1
+        if "_t" in c["metric"]:
+            h = "t" + c["metric"].split("_t")[-1].split("_")[0]
+            if h not in seen_hor:
+                seen_hor.add(h)
+                new_hor += 1
+    bonus = _T3_NEW_COVER_BONUS * (
+        min(new_fam - 1, 2) if new_fam > 1 else 0
+    ) + _T3_NEW_COVER_BONUS * min(max(new_hor - 2, 0), 2)
+    diag = {"t3_new_families": new_fam, "t3_new_horizons": new_hor}
+    return bonus, diag
+
+
 def compute_papv_reward(completion: str, event: dict, label: dict) -> dict:
     """主入口：返回 {reward, detail}。event 仅用于日志，结算只依赖 label。"""
     detail: dict = {}
@@ -182,12 +258,28 @@ def compute_papv_reward(completion: str, event: dict, label: dict) -> dict:
     # ---- 加权 ----
     W = {"R0": 0.15, "R1": 0.12, "R2": 0.38, "R3": 0.20, "R4": 0.05, "R5": 0.10}
     parts = {"R0": R0, "R1": R1, "R2": R2, "R3": R3, "R4": R4, "R5": R5}
+
+    # B7 弱指标打折：R2 按可结算断言中弱指标占比线性打折
+    if R2 is not None:
+        b7_mult, b7_diag = _b7_weak_discount(claims, label)
+        if b7_mult < 1.0:
+            R2 *= b7_mult
+            parts["R2"] = R2
+            detail.update(b7_diag)
+
     total, wsum = 0.0, 0.0
     for k, v in parts.items():
         if v is not None:
             total += W[k] * v
             wsum += W[k]
     reward = total / wsum if wsum > 0 else -0.20
+
+    # T3 新增覆盖加分（对冲 B7「只挑软柿子」；上限 +0.12）
+    t3_bonus, t3_diag = _t3_coverage_bonus(claims)
+    if t3_bonus > 0:
+        reward = min(1.0, reward + t3_bonus)
+        detail["t3_bonus"] = round(t3_bonus, 3)
+    detail.update(t3_diag)
 
     # 不可结算占多数 → 轻罚（防止靠「编造不可结算断言」逃避校验）
     if st["settleable"] == 0:

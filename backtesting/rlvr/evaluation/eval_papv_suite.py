@@ -221,6 +221,38 @@ def group_acc(claim_recs: list[dict], keys: tuple) -> dict:
             for k, v in sorted(g.items())}
 
 
+def coverage_stats(claim_recs: list[dict], n_claims_total: int) -> dict:
+    """第四维：指标覆盖度（E2 验收指标）。"""
+    n = n_claims_total or 1
+    metric_cnt = defaultdict(int)
+    for r in claim_recs:
+        metric_cnt[r["metric"]] += 1
+    top3 = sorted(metric_cnt.values(), reverse=True)[:3]
+    never = sorted(m for m in METRIC_PANEL if metric_cnt.get(m, 0) == 0)
+    used = sum(1 for m in METRIC_PANEL if metric_cnt.get(m, 0) > 0)
+    # 族 / horizon 占比
+    fam_cnt = defaultdict(int)
+    hor_cnt = defaultdict(int)
+    for r in claim_recs:
+        fam_cnt[r["family"]] += 1
+        hor_cnt[r["horizon"]] += 1
+    n_rec = len(claim_recs) or 1
+    long_h = sum(v for k, v in hor_cnt.items() if k in ("t30", "t60", "avg"))
+    return {
+        "panel_size": len(METRIC_PANEL),
+        "panel_used": used,
+        "panel_usage_rate": round(used / len(METRIC_PANEL), 4),
+        "top3_metric_share": round(sum(top3) / n, 4),
+        "zero_coverage_metrics": never,
+        "by_metric": {m: {"n": c, "share": round(c / n, 4)}
+                      for m, c in sorted(metric_cnt.items(), key=lambda kv: -kv[1])},
+        "family_share": {k: round(v / n_rec, 4) for k, v in sorted(fam_cnt.items())},
+        "horizon_share": {k: round(v / n_rec, 4) for k, v in sorted(hor_cnt.items())},
+        "benchmark_share": round(fam_cnt.get("benchmark", 0) / n_rec, 4),
+        "long_horizon_share": round(long_h / n_rec, 4),
+    }
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data-dir", required=True)
@@ -260,6 +292,8 @@ def main() -> None:
         r["by_family_market"] = group_acc(claim_recs, ("family", "market"))
         r["by_horizon_market"] = group_acc(claim_recs, ("horizon", "market"))
         r["by_family_horizon_market"] = group_acc(claim_recs, ("family", "horizon", "market"))
+        # 第四维：指标覆盖度（E2 验收）
+        r["coverage"] = coverage_stats(claim_recs, r["n_claims_total"])
         report["sides"][side] = r
 
     # Δ（adapter − base）
@@ -290,6 +324,16 @@ def main() -> None:
               f"fmt={r['format_ok']:.3f} 可结算断言={r['n_settleable']}")
     if "delta" in report:
         print(f"[Δ adapter-base] {report['delta']}")
+    # 覆盖度摘要（E2 验收：top3 ≤45%、benchmark ≥3%、长窗口 ≥12%、零覆盖 ≤2）
+    for side, r in report["sides"].items():
+        cov = r.get("coverage")
+        if not cov:
+            continue
+        print(f"[{side} coverage] 面板使用 {cov['panel_used']}/{cov['panel_size']}"
+              f" ({cov['panel_usage_rate']*100:.0f}%) | Top3占比 {cov['top3_metric_share']*100:.1f}%"
+              f" | benchmark {cov['benchmark_share']*100:.1f}%"
+              f" | 长窗口(t30/t60/avg) {cov['long_horizon_share']*100:.1f}%"
+              f" | 零覆盖 {len(cov['zero_coverage_metrics'])} 个")
 
 
 if __name__ == "__main__":
