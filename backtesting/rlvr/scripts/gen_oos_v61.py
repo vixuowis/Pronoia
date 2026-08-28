@@ -28,6 +28,8 @@ TEST_DIR = "/root/Pronoia/pronoia_run/data_v61_test"
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--side", choices=("base", "adapter"), required=True)
+    ap.add_argument("--adapter", default=ADAPTER,
+                    help="LoRA 目录（默认 v6.1；v6.2 消融传 papv_v62_vanilla/papv_mixed）")
     ap.add_argument("--n", type=int, default=0, help="0 = 全量")
     ap.add_argument("--batch", type=int, default=64)
     ap.add_argument("--temperature", type=float, default=1.0)
@@ -53,8 +55,8 @@ def main():
     lora_req = None
     if args.side == "adapter":
         engine_kwargs.update(enable_lora=True, max_lora_rank=16, max_loras=1)
-        lora_req = LoRARequest("papv", 1, ADAPTER)
-        print(f"[GEN] LoRA loaded from {ADAPTER}", flush=True)
+        lora_req = LoRARequest("papv", 1, args.adapter)
+        print(f"[GEN] LoRA loaded from {args.adapter}", flush=True)
 
     print(f"[GEN] init vLLM (side={args.side})", flush=True)
     llm = LLM(**engine_kwargs)
