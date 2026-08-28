@@ -278,7 +278,12 @@ def run_expert_unsloth(expert: str, rows: list[dict], args) -> Path:
         reward_funcs=make_papv_reward_fn(),
         processing_class=tok,
     )
-    trainer.train()
+    resume_ckpt = None
+    if getattr(args, "resume", ""):
+        cand = Path(args.resume)
+        resume_ckpt = str(cand if cand.is_dir() else out_dir / cand)
+        print(f"[RESUME] 从 {resume_ckpt} 恢复")
+    trainer.train(resume_from_checkpoint=resume_ckpt)
     trainer.save_model(str(out_dir))
     tok.save_pretrained(str(out_dir))
     print(f"[DONE] expert={expert} PAPV LoRA（unsloth）→ {out_dir}")
@@ -393,6 +398,8 @@ def main():
                     help="unsloth 加速路径：进程内 vLLM + 权重共享 + Standby（推荐）")
     ap.add_argument("--unsloth-gpu-util", type=float, default=0.9,
                     help="unsloth vLLM 显存占比（Standby 模式可直接设 0.9）")
+    ap.add_argument("--resume", type=str, default="",
+                    help="恢复训练：checkpoint 目录或目录名（相对 out-dir）")
     args = ap.parse_args()
 
     data_dir = Path(args.data_dir)
