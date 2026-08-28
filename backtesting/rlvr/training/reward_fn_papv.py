@@ -27,6 +27,7 @@ v6.1 残留偏差修正（40 案例 case study 四启示之 B3/B4/B5，只做 [-
 """
 from __future__ import annotations
 
+import os
 import re
 from typing import Optional
 
@@ -47,6 +48,10 @@ SECTION_HEADERS = {
     "R2a": r"【\s*2[.\s]*逻辑链\s*】",
     "R3a": r"【\s*3[.\s]*反方与风险\s*】",
 }
+
+# 消融开关：PAPV_VANILLA_REWARD=1 时关闭全部 v6.1 修正项（B3/B4/B5/B7/T3），
+# 只保留 v6 六元 Reward（R0~R5），用于受控实验隔离修正项贡献。
+_VANILLA = os.getenv("PAPV_VANILLA_REWARD", "") not in ("", "0", "false")
 
 
 def _has_section(text: str, key: str) -> bool:
@@ -260,7 +265,7 @@ def compute_papv_reward(completion: str, event: dict, label: dict) -> dict:
     parts = {"R0": R0, "R1": R1, "R2": R2, "R3": R3, "R4": R4, "R5": R5}
 
     # B7 弱指标打折：R2 按可结算断言中弱指标占比线性打折
-    if R2 is not None:
+    if R2 is not None and not _VANILLA:
         b7_mult, b7_diag = _b7_weak_discount(claims, label)
         if b7_mult < 1.0:
             R2 *= b7_mult
@@ -275,7 +280,7 @@ def compute_papv_reward(completion: str, event: dict, label: dict) -> dict:
     reward = total / wsum if wsum > 0 else -0.20
 
     # T3 新增覆盖加分（对冲 B7「只挑软柿子」；上限 +0.12）
-    t3_bonus, t3_diag = _t3_coverage_bonus(claims)
+    t3_bonus, t3_diag = (0.0, {"t3_disabled": 1}) if _VANILLA else _t3_coverage_bonus(claims)
     if t3_bonus > 0:
         reward = min(1.0, reward + t3_bonus)
         detail["t3_bonus"] = round(t3_bonus, 3)
@@ -286,7 +291,7 @@ def compute_papv_reward(completion: str, event: dict, label: dict) -> dict:
         reward = min(reward, 0.0)
 
     # ---- v6.1 残留偏差修正（B3/B4/B5）----
-    bias_adj, bias_diag = _residual_bias_adj(claims, event, label)
+    bias_adj, bias_diag = (0.0, {"bias_disabled": 1}) if _VANILLA else _residual_bias_adj(claims, event, label)
     if bias_adj:
         reward = max(-0.20, reward + bias_adj)
         detail.update(bias_diag)
