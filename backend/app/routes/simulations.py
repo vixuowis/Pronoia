@@ -182,6 +182,24 @@ def cancel_simulation(job_id: str):
     return _public(updated or job)
 
 
+@router.post("/simulations/{job_id}/resume", status_code=202)
+def resume_simulation(job_id: str):
+    job = db.get_simulation_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="simulation job not found")
+    remote = _gateway("POST", f"/v1/simulations/{job['gateway_job_id']}/resume")
+    updated = db.update_simulation_job(
+        job_id,
+        status=remote.get("status", "queued"),
+        stage=remote.get("stage", "resuming"),
+        progress=float(remote.get("progress", job["progress"])),
+        error=remote.get("error"),
+        finished_at=remote.get("finished_at"),
+    ) or job
+    _schedule_sync(job_id)
+    return _public(updated)
+
+
 @router.get("/cases/{case_id}/simulations")
 def list_simulations(case_id: str):
     if not db.get_case(case_id):

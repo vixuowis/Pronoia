@@ -129,6 +129,10 @@ export const api = {
     method: "POST",
     body: "{}",
   }),
+  resumeSimulation: (jobId: string) => req<SimulationJob>(`/simulations/${jobId}/resume`, {
+    method: "POST",
+    body: "{}",
+  }),
   logicAutoCheck: (item: {
     hypothesis: string;
     category?: string;

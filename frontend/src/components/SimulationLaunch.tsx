@@ -10,6 +10,7 @@ const STAGE_CN: Record<string, string> = {
   validating: "校验输入",
   building_graph: "构建模拟世界",
   retrying_ontology: "本体生成暂时失败，正在重试",
+  resuming: "从已保存进度继续",
   simulating: "多方行动推演",
   compiling_scenarios: "汇总情景分支",
   completed: "推演完成",
@@ -26,6 +27,9 @@ function friendlySimulationError(message?: string | null) {
   }
   if (message.includes("safety budget is exhausted")) {
     return "MiroFish 本次服务的模型安全预算已经用完。证据图已保留；重启 MiroFish 后可重新启动单次推演。";
+  }
+  if (message.includes("ZEP read quota") || message.toLowerCase().includes("rate limit")) {
+    return "ZEP 的读取额度暂时用完，但已经提交的图谱批次仍被保留。额度窗口恢复后，可从原进度继续，不需要重新生成。";
   }
   return message;
 }
@@ -109,6 +113,19 @@ export default function SimulationLaunch({ artifact }: { artifact: Artifact }) {
     }
   };
 
+  const startOrResume = async () => {
+    if (job?.status !== "failed") {
+      await start();
+      return;
+    }
+    setError("");
+    try {
+      setJob(await api.resumeSimulation(job.id));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    }
+  };
+
   const cancel = async () => {
     if (!job) return;
     setError("");
@@ -176,11 +193,11 @@ export default function SimulationLaunch({ artifact }: { artifact: Artifact }) {
             <>
               {job?.status === "failed" && (
                 <p className="mt-3 rounded-md border border-[#D98B83]/40 bg-[#FFF4F2] px-2.5 py-2 text-[11px] leading-relaxed text-[#8C3530]">
-                  上一次推演未进入多方行动阶段；证据图不受影响。本次可从头重新启动，失败任务不会被复用。
+                  上一次推演未进入多方行动阶段；证据图不受影响。如果已经保存了图谱批次，本次会从原进度继续。
                 </p>
               )}
-              <button onClick={() => void start()} className="mt-3 rounded-lg bg-jade px-3 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-[#0c665f]">
-                {job?.status === "failed" || job?.status === "cancelled" ? "重新启动单次推演" : job?.status === "completed" || job?.status === "partial" ? "再次启动单次推演" : "交给事件预测员推演"}
+              <button onClick={() => void startOrResume()} className="mt-3 rounded-lg bg-jade px-3 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-[#0c665f]">
+                {job?.status === "failed" ? "从保存进度继续" : job?.status === "cancelled" ? "重新启动单次推演" : job?.status === "completed" || job?.status === "partial" ? "再次启动单次推演" : "交给事件预测员推演"}
               </button>
             </>
           )}

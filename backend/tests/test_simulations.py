@@ -170,6 +170,52 @@ class SimulationRoutesTests(unittest.TestCase):
         ]
         self.assertEqual(simulations, [])
 
+    def test_failed_job_can_resume_without_creating_a_second_job(self):
+        remote_status = {"value": "failed"}
+
+        def gateway(method, path, **kwargs):
+            if path.endswith("/resume"):
+                remote_status["value"] = "queued"
+                return {
+                    "job_id": "simjob_resume",
+                    "status": "queued",
+                    "stage": "resuming",
+                    "progress": 0.2,
+                    "error": None,
+                    "finished_at": None,
+                }
+            if method == "POST":
+                return {
+                    "job_id": "simjob_resume",
+                    "status": "queued",
+                    "stage": "queued",
+                    "progress": 0,
+                }
+            return {
+                "job_id": "simjob_resume",
+                "status": remote_status["value"],
+                "stage": "failed",
+                "progress": 0.2,
+                "error": "temporary read quota",
+                "finished_at": "2026-08-29T17:42:00+08:00",
+                "result": None,
+            }
+
+        with patch("app.routes.simulations._gateway", side_effect=gateway):
+            started = self.client.post(
+                f"/api/cases/{self.case['id']}/simulations",
+                json={"source_graph_artifact_id": self.graph["id"]},
+            )
+            resumed = self.client.post(
+                f"/api/simulations/{started.json()['id']}/resume", json={}
+            )
+
+        self.assertEqual(resumed.status_code, 202)
+        self.assertEqual(resumed.json()["id"], started.json()["id"])
+        self.assertEqual(resumed.json()["status"], "queued")
+        self.assertEqual(resumed.json()["stage"], "resuming")
+        self.assertIsNone(resumed.json()["error"])
+
 
 if __name__ == "__main__":
     unittest.main()
