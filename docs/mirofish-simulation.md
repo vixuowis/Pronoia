@@ -15,8 +15,11 @@ Pronoia（仓库名 FEVER）的证据图擅长沉淀“截止当前已经知道�
 flowchart LR
     A["Pronoia Evidence Graph"] --> B["Pronoia simulation API"]
     B -->|"HTTP + job_id"| C["独立推演网关"]
-    C --> D["MiroFish / OASIS"]
-    D --> C
+    C --> D["Spec 编译器（默认，无 ZEP）"]
+    C -.->|"研究兼容模式"| Z["MiroFish / ZEP 图谱"]
+    D --> O["MiroFish / OASIS"]
+    Z --> O
+    O --> C
     C -->|"scenario artifact"| B
     B --> E["Pronoia 情景卡片"]
 ```
@@ -65,7 +68,7 @@ FEVER_SIMULATION_GATEWAY_TIMEOUT=15
 
 1. 在“事件预测员 · 多智能体事件推演”中选择“自动推荐”；
 2. 免费预览选中的参与方和入选原因；
-3. 启动单次推演（通常需要 5～10 分钟，聊天结束后仍会在后台继续）；
+3. 启动单次推演（默认无 ZEP 路径实测约 2 分钟，聊天结束后仍会在后台继续）；
 4. 等待后台任务完成，或安全取消；
 5. 在右侧产出物中查看情景卡片。
 
@@ -103,6 +106,7 @@ FEVER_SIMULATION_GATEWAY_TIMEOUT=15
 
 - `GET /v1/simulations/{job_id}`
 - `POST /v1/simulations/{job_id}/cancel`
+- `POST /v1/simulations/{job_id}/resume`
 
 网关状态至少包含 `status`、`stage`、`progress`、`error`、`finished_at` 和终态 `result`。
 FEVER 接受 `completed` 或 `partial` 的结果；`failed`、`cancelled` 只更新任务状态，不创建结果产出物。
@@ -117,7 +121,25 @@ FEVER 接受 `completed` 或 `partial` 的结果；`failed`、`cancelled` 只更
 - 当前未开放 calibrated/B3，因为 FEVER predictor 尚未输出逐 target 的结构化 B1；
 - 参与方越多不代表结果越好，自动预算用于在利益相关方覆盖、耗时和活跃度之间折中。
 - `quick` 是兼容保留的内部模式值，界面对外称为“单次推演”；采用 2 个抽象互动轮次并限制证据文本预算，
-  通常需要 5～10 分钟。正式实验的多种子、多轮设置与此产品入口分开执行。
+  默认直接从 FEVER 证据图编译角色与 OASIS 配置，不要求 ZEP；正式实验的多种子、多轮设置与此产品入口分开执行。
+
+## ZEP 依赖与当前数字
+
+快速产品路径不再把 ZEP 作为硬依赖。一次 58 片段的真实批次在 10 分钟窗口内仍未完成，
+但稍后远端状态为成功（116 节点、267 条关系），说明当次失败是固定超时造成的误报，
+也说明云端图谱入库是交互时延瓶颈。兼容路径仍保留，并将等待窗口扩展到 30 分钟；
+默认路径直接从 Pronoia 证据图生成 5 个金融参与方，真实新能源汽车案例得到：
+
+- 5 / 5 活跃参与方；
+- 5 / 5 有效结构化决策；
+- 14 个自主行动、4 个可审查情景分支；
+- OASIS 推演约 45 秒，连同情景汇总约 2 分钟完成。
+
+已有冻结历史实验可作为第一版效果数字，而不是把单个演示案例包装成回测。12 个独立历史事件、
+24 个二元目标、每例 3 个种子的 v7-C 实验中，B1 平均 Brier 为 0.15729，B3 为 0.15247，
+相对改善约 3.06%；方向准确率两者同为 52.78%（B3 按预注册规则不改市场方向）。
+12 个事件中 5 个改善、6 个不变、1 个变差。该结果达到开源项目的描述性决策级别，
+但样本仍小，不能宣称稳定超越基线或形成可交易收益。
 
 ## 已验证范围
 

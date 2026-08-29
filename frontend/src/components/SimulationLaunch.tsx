@@ -8,6 +8,7 @@ const STAGE_CN: Record<string, string> = {
   queued: "等待执行",
   compiling_spec: "整理证据与参与方",
   validating: "校验输入",
+  preparing_direct: "从证据图编译模拟世界",
   building_graph: "构建模拟世界",
   retrying_ontology: "本体生成暂时失败，正在重试",
   resuming: "从已保存进度继续",
