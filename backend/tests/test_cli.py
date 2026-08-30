@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from app.cli import build_parser, csv_items, normalize_api_base, parse_sse_lines
+from app.event_backtest.cli import build_bt_parser
 
 
 class TestCliHelpers(unittest.TestCase):
@@ -34,6 +35,16 @@ class TestCliHelpers(unittest.TestCase):
         self.assertEqual(args.command, "chat")
         self.assertEqual(args.mode, "team")
         self.assertEqual(args.team_members, "event_scout,predictor")
+
+    def test_backtest_parser_accepts_deep_researcher_ab_variants(self):
+        parser = build_bt_parser()
+        for variant in ("deep_researcher_v0", "deep_researcher_claim_v2"):
+            args = parser.parse_args([
+                "run", "--events", "events.jsonl", "--out", "preds.jsonl",
+                "--run-id", "smoke", "--runner", "team_full",
+                "--system-prompt-variant", variant,
+            ])
+            self.assertEqual(args.system_prompt_variant, variant)
 
 
 if __name__ == "__main__":
