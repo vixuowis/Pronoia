@@ -10,6 +10,7 @@ import json
 from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 
 from openai import AsyncOpenAI
+import httpx
 
 from . import config
 from .skills.registry import REGISTRY, ensure_skills_loaded, serialize_tool_result, tool_schema_subset, tools_for_agent
@@ -17,14 +18,44 @@ from .skills.registry import REGISTRY, ensure_skills_loaded, serialize_tool_resu
 _client: Optional[AsyncOpenAI] = None
 
 
+async def _create_with_hard_timeout(awaitable):
+    """Cap the SDK await even when a local proxy keeps the socket alive."""
+    return await asyncio.wait_for(awaitable, timeout=config.LLM_TIMEOUT)
+
+
+async def _stream_with_hard_timeout(stream):
+    """Cap a complete streaming round instead of only individual socket reads."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + config.LLM_TIMEOUT
+    iterator = stream.__aiter__()
+    while True:
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            raise asyncio.TimeoutError(
+                f"LLM streaming round exceeded {config.LLM_TIMEOUT:.0f}s"
+            )
+        try:
+            chunk = await asyncio.wait_for(iterator.__anext__(), timeout=remaining)
+        except StopAsyncIteration:
+            return
+        yield chunk
+
+
 def get_client() -> AsyncOpenAI:
     """返回 AsyncOpenAI client。优先 MAAS，其次 ARK。统一 model_name 用 config.LLM_MODEL。"""
     global _client
     if _client is None:
+        http_client = None
+        if config.LLM_FORCE_IPV4:
+            http_client = httpx.AsyncClient(
+                transport=httpx.AsyncHTTPTransport(local_address="0.0.0.0", retries=2),
+                timeout=config.LLM_TIMEOUT,
+            )
         _client = AsyncOpenAI(
             base_url=config.LLM_BASE_URL,
             api_key=config.LLM_API_KEY,
             timeout=config.LLM_TIMEOUT,
+            http_client=http_client,
         )
     return _client
 
@@ -129,13 +160,13 @@ async def run_agent(
         }
         if tools:
             kwargs["tools"] = tools
-        stream = await client.chat.completions.create(**kwargs)
+        stream = await _create_with_hard_timeout(client.chat.completions.create(**kwargs))
 
         tc_acc: dict[int, dict] = {}
         saw_content = False
         round_content = ""
         finish_reason = None
-        async for chunk in stream:
+        async for chunk in _stream_with_hard_timeout(stream):
             if not chunk.choices:
                 continue
             choice = chunk.choices[0]
@@ -206,6 +237,13 @@ async def run_agent(
                                "delta": f"\n[artifact 落库失败: {e}]\n"}
 
             preview = ("复用团队数据；" if reused else "") + _preview(result)
+            serialized_result = serialize_tool_result(result, config.TOOL_RESULT_MAX_CHARS)
+            # preview 只包含“返回 N 行”，不足以让后续 Deep Researcher 构图。
+            # 保存一个有界、已通过 strict-as-of skill 清洗的结果片段，供团队证据预灌；
+            # 避免保存 evidence_graph 自身结果造成图谱递归膨胀。
+            result_excerpt = ""
+            if result.get("ok") and name not in {"evidence_graph", "evidence_ledger"}:
+                result_excerpt = serialized_result[:2000]
             yield {"type": "tool_result", "agent": agent_id, "id": tc_id,
                    "skill": name, "ok": bool(result.get("ok")), "preview": preview,
                    "artifact_id": artifact_ids[0] if artifact_ids else None,
@@ -213,6 +251,7 @@ async def run_agent(
             state["tool_trace"].append({
                 "type": "tool", "agent": agent_id, "id": tc_id, "skill": name,
                 "args": args, "ok": bool(result.get("ok")), "preview": preview,
+                "result_excerpt": result_excerpt,
                 "artifact_ids": artifact_ids,
                 "reused": reused,
             })
@@ -220,7 +259,6 @@ async def run_agent(
                 consecutive_failures[name] = 0
             else:
                 consecutive_failures[name] = consecutive_failures.get(name, 0) + 1
-            serialized_result = serialize_tool_result(result, config.TOOL_RESULT_MAX_CHARS)
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc_id,
@@ -239,8 +277,10 @@ async def run_agent(
                 }],
                 "stream": True,
             }
-            summary_stream = await client.chat.completions.create(**summary_kwargs)
-            async for chunk in summary_stream:
+            summary_stream = await _create_with_hard_timeout(
+                client.chat.completions.create(**summary_kwargs)
+            )
+            async for chunk in _stream_with_hard_timeout(summary_stream):
                 if not chunk.choices:
                     continue
                 delta = chunk.choices[0].delta
@@ -260,8 +300,8 @@ async def run_agent(
             "messages": messages + [{"role": "user", "content": "工具轮次已用完，请基于已获得的信息直接给出最终回答。"}],
             "stream": True,
         }
-        stream = await client.chat.completions.create(**summary_kwargs)
-        async for chunk in stream:
+        stream = await _create_with_hard_timeout(client.chat.completions.create(**summary_kwargs))
+        async for chunk in _stream_with_hard_timeout(stream):
             if not chunk.choices:
                 continue
             delta = chunk.choices[0].delta
@@ -279,12 +319,12 @@ async def run_agent(
 async def complete_text(system: str, user: str, *, max_tokens: int = 2000) -> str:
     """Non-streaming single completion (returns content only)."""
     client = get_client()
-    resp = await client.chat.completions.create(
+    resp = await _create_with_hard_timeout(client.chat.completions.create(
         model=config.LLM_MODEL,
         messages=[{"role": "system", "content": system},
                   {"role": "user", "content": user}],
         max_tokens=max_tokens,
-    )
+    ))
     msg = resp.choices[0].message
     return (msg.content or "").strip()
 
@@ -297,13 +337,13 @@ async def complete_json(system: str, user: str, *, max_tokens: int = 3000) -> Op
     last_err: Optional[BaseException] = None
     for attempt in range(1, 5):
         try:
-            resp = await client.chat.completions.create(
+            resp = await _create_with_hard_timeout(client.chat.completions.create(
                 model=config.LLM_MODEL,
                 messages=[{"role": "system", "content": system},
                           {"role": "user", "content": user}],
                 max_tokens=max_tokens,
                 response_format={"type": "json_object"},
-            )
+            ))
             text = (resp.choices[0].message.content or "").strip()
             if not text:
                 return None

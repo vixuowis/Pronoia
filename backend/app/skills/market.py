@@ -372,6 +372,10 @@ def norm_symbol(symbol: str) -> str:
     m = re.search(r"(\d{6})", s)
     if m:
         code = m.group(1)
+        # 沪市 ETF / LOF 常见代码段为 50/51/52/56/58。此前所有 5 开头代码
+        # 都落到 sz，导致 SH516160 等被请求为 sz516160，Sina/Tencent 均失败。
+        if code.startswith(("50", "51", "52", "56", "58")):
+            return "sh" + code
         if code[0] in ("6", "9"):
             return "sh" + code
         if code[0] in ("4", "8"):

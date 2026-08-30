@@ -72,7 +72,20 @@ def build_bt_parser() -> argparse.ArgumentParser:
     run.add_argument("--run-id", required=True, help="回测 run id")
     run.add_argument("--runner", choices=["baseline", "team_prompt", "team_full"], default="baseline", help="预测器类型：baseline=恒=up；team_prompt=单 prompt 支持路线A --system-prompt-variant；team_full=真 Team Agent 6 步 trajectory（plan→fan-out→synthesize→verify→extract）每 event 写 _trajectory_ckpt/{event_id}.json")
     run.add_argument("--model-version", default=None)
-    run.add_argument("--system-prompt-variant", choices=["v0", "v2_cn_specialized", "cn_v2", "cnv2", "merged_cnv2_usv1", "v3_cn_calib", "cnv3", "v4_cn_calib", "cnv4", "v5_cn_calib", "cnv5", "v6_cn_calib", "cnv6"], default="v0", help="team_prompt 使用哪条 system prompt；v2_cn_specialized=CN 用八条本土先验 v2 且 US 自动走 v0；v3_cn_calib=V2+confidence 校准；v4_cn_calib=V3+修正财报利好出尽3档+本土财报3硬规则；v5_cn_calib=V4+新增e5档；v6_cn_calib=V5+修正e5无数值业绩类偏空")
+    run.add_argument(
+        "--system-prompt-variant",
+        choices=[
+            "v0", "v2_cn_specialized", "cn_v2", "cnv2", "merged_cnv2_usv1",
+            "v3_cn_calib", "cnv3", "v4_cn_calib", "cnv4", "v5_cn_calib",
+            "cnv5", "v6_cn_calib", "cnv6",
+            "deep_researcher_v0", "deep_researcher_claim_v2",
+        ],
+        default="v0",
+        help=(
+            "team_prompt 使用市场判别 prompt；team_full 可用 deep_researcher_v0 / "
+            "deep_researcher_claim_v2 做 Deep Researcher persona A/B。"
+        ),
+    )
     run.add_argument("--concurrency", type=int, default=4, help="并发数（team_full 也支持并发，state 为 per-event 局部变量）")
     run.add_argument("--resume", action="store_true", help="若 out 已存在则跳过已预测 event_id 并继续补全（team_full 会同时跳过 trajectory 已落盘的 event_id）")
     run.add_argument("--trajectory-ckpt-dir", default="", help="仅 --runner=team_full 使用：完整 trajectory 写盘目录（默认 data/_trajectory_ckpt）；每个 event_id 一个 JSON，可被 `bt trajectory` 回放")

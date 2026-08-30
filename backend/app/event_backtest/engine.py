@@ -405,9 +405,9 @@ async def run_team_full_one_event(
     eid = getattr(event, "event_id", None) or event["event_id"]
     packet = _event_prompt(event)
 
-    # system prompt variant 目前不影响真 Team Agent（真 Team Agent 自己有 PLANNER_INSTRUCTION + 各专家 skill instruction），
-    # 但我们把 variant 塞进 trajectory 元信息，便于后续审计 / case-study 分类。
     variant_effective = str(system_prompt_variant or "v0")
+    from ..agents.roster import resolve_deep_researcher_prompt_variant
+    deep_researcher_prompt_variant = resolve_deep_researcher_prompt_variant(variant_effective)
 
     market = getattr(event, "market", "")
     symbol = getattr(event, "symbol", "")
@@ -441,7 +441,9 @@ async def run_team_full_one_event(
     #    （剔除 predictor，避免多跑 1 轮 LLM + 无意义多情景）
     # 2) question 中追加「预解上下文」：明确告诉专家 symbol/benchmark/事件类型、
     #    以及 as_of_packet 已经包含原文，让 expert 少做 stock_overview 解析型工具调用
-    team_kwargs: dict = {}
+    team_kwargs: dict = {
+        "agent_prompt_variants": {"deep_researcher": deep_researcher_prompt_variant},
+    }
     if FAST:
         team_kwargs["team_members"] = [
             "market_analyst", "fundamentals_analyst", "deep_researcher",
@@ -590,6 +592,7 @@ async def run_team_full_one_event(
         "run_id": str(run_id),
         "model_version": str(model_version),
         "system_prompt_variant": variant_effective,
+        "deep_researcher_prompt_variant": deep_researcher_prompt_variant,
         "llm_trajectory_stats": {
             "n_sse_events": n_sse_events_total,
             "n_sse_events_stored": len(traj_events),
@@ -777,6 +780,21 @@ _PROMPT_VARIANT_CATALOG: list[dict[str, str]] = [
     },
 ]
 
+_TEAM_FULL_PROMPT_VARIANT_CATALOG: list[dict[str, str]] = [
+    {
+        "id": "deep_researcher_v0",
+        "label": "Deep Researcher v0 · 原始流程",
+        "description": "固定 8 轮节奏的原始 Evidence Graph prompt，作为 A/B 基线。",
+        "market_hint": "CN + US；只改变 Deep Researcher persona",
+    },
+    {
+        "id": "deep_researcher_claim_v2",
+        "label": "Deep Researcher claim-v2 · Claim 质量版",
+        "description": "Evidence→Claim→Link→audit→export 闭环，强化原子 Claim、关系语义和缺口审计。",
+        "market_hint": "CN + US；只改变 Deep Researcher persona",
+    },
+]
+
 
 def _variant_specific_note(variant_id: str) -> str:
     """每个 variant 与其他变体在路由/偏置权重上的真实差异说明。
@@ -862,8 +880,19 @@ def list_prompt_variants(runner: str) -> list[dict[str, str]]:
         return (note.rstrip() + "\n" + "=" * 64 + "\n" + base_text.strip()).strip()
 
     if runner == "team_full":
+        from ..agents.roster import DEEP_RESEARCHER_PROMPT_VARIANTS
         tmpl = TEAM_FULL_QUESTION_TEMPLATE.strip()
-        return [{**item, "prompt_text": _with_note(tmpl, item["id"])} for item in _PROMPT_VARIANT_CATALOG]
+        return [
+            {
+                **item,
+                "prompt_text": (
+                    DEEP_RESEARCHER_PROMPT_VARIANTS[item["id"]].strip()
+                    + "\n" + "=" * 64 + "\n"
+                    + tmpl
+                ),
+            }
+            for item in _TEAM_FULL_PROMPT_VARIANT_CATALOG
+        ]
     # team_prompt 与其他：统一走单一 system prompt 判别
     sys_prompt = _build_system_prompt("v0")
     return [{**item, "prompt_text": _with_note(sys_prompt, item["id"])} for item in _PROMPT_VARIANT_CATALOG]

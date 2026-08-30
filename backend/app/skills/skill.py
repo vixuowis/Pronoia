@@ -101,7 +101,7 @@ def _collect_artifacts(results: list[dict]) -> list[dict]:
 
 _VALID_GRAPH_ACTIONS = {
     "add_evidence", "add_claim", "link", "set_status", "merge",
-    "add_missing", "set_sufficient", "export", "clear",
+    "add_missing", "set_sufficient", "audit", "export", "clear",
 }
 
 # action -> _eg_* sub-tool 名 的显式映射（sub-tool 名不一定与 action 一一对应，
@@ -114,6 +114,7 @@ _GRAPH_ACTION_TO_SUB: dict[str, str] = {
     "merge": "_eg_merge_claims",
     "add_missing": "_eg_add_missing",
     "set_sufficient": "_eg_set_sufficient",
+    "audit": "_eg_audit",
     "export": "_eg_export",
     "clear": "_eg_clear",
 }
@@ -123,9 +124,9 @@ _GRAPH_ACTION_TO_SUB: dict[str, str] = {
     "evidence_graph",
     "证据图操作（建图/编辑/导出）。action 决定子操作："
     "add_evidence / add_claim / link / set_status / merge / add_missing / "
-    "set_sufficient / export / clear。"
-    "子操作需要的参数按 action 传递（除 action 外的所有参数透传给对应 sub-tool）。"
-    "导出时返回 markdown 摘要 + JSON 统计，可同时作为 graph 类型的 artifact 沉淀。",
+    "set_sufficient / audit / export / clear。"
+    "link 使用 source_id/target_id；audit 返回图谱质量发现且不修改图。"
+    "子操作需要的参数按 action 传递；export 也会附带 audit。",
     {
         "type": "object",
         "properties": {
@@ -140,7 +141,7 @@ _GRAPH_ACTION_TO_SUB: dict[str, str] = {
     composes=[
         "_eg_add_evidence", "_eg_add_claim", "_eg_link",
         "_eg_set_claim_status", "_eg_merge_claims",
-        "_eg_add_missing", "_eg_set_sufficient", "_eg_export", "_eg_clear",
+        "_eg_add_missing", "_eg_set_sufficient", "_eg_audit", "_eg_export", "_eg_clear",
     ],
 )
 async def evidence_graph(action: str, **kwargs) -> dict:
@@ -636,6 +637,10 @@ async def macro_intel(topic: str | None = None) -> dict:
                       "description": "严格 as-of 回测模式：True=只返回事件日及以前数据（禁止未来函数，不返回 post-event CAR）"},
         },
         "required": ["event_date"],
+        "anyOf": [
+            {"required": ["symbol"]},
+            {"required": ["keyword"]},
+        ],
         "additionalProperties": False,
     },
     category="skill",
@@ -655,10 +660,19 @@ async def event_study_skill(event_date: str, symbol: str | None = None,
         # A 股指数：保留 sh000300 / sz399001 形式，不能截成 6 位股票代码
         sym = sym_raw.lower()
     elif sym_raw:
-        # A 股：截 6 位数字
+        # A 股：保留显式交易所前缀；若只有 6 位代码，则在这里补正确前缀。
+        # 不能先剥 SH/SZ 再交给下游，否则 51/56/58 开头的沪市 ETF 会被误判为深市。
         code6 = "".join(ch for ch in sym_raw if ch.isdigit())[-6:]
         if len(code6) == 6:
-            sym = code6
+            lowered = sym_raw.lower()
+            if lowered.startswith(("sh", "sz", "bj")):
+                sym = lowered[:2] + code6
+            elif code6.startswith(("50", "51", "52", "56", "58")):
+                sym = "sh" + code6
+            elif code6.startswith("15"):
+                sym = "sz" + code6
+            else:
+                sym = code6
         else:
             sym = ""
     else:
@@ -677,7 +691,15 @@ async def event_study_skill(event_date: str, symbol: str | None = None,
             else:
                 code6 = "".join(ch for ch in cand if ch.isdigit())[-6:]
                 if len(code6) == 6:
-                    sym = code6
+                    lowered = cand.lower()
+                    if lowered.startswith(("sh", "sz", "bj")):
+                        sym = lowered[:2] + code6
+                    elif code6.startswith(("50", "51", "52", "56", "58")):
+                        sym = "sh" + code6
+                    elif code6.startswith("15"):
+                        sym = "sz" + code6
+                    else:
+                        sym = code6
     if not sym:
         return err("必须提供 symbol 或 keyword")
 
