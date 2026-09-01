@@ -1,0 +1,17 @@
+{
+  "schema_version": "fever-mirofish-scale-bundle-checksums-v1",
+  "algorithm": "sha256",
+  "files": {
+    "PROTOCOL.md": "22408bd2176019df10fdad33b787bf5e1538767d5e29529fc4643bdc2105f95a",
+    "README.md": "d7bc6ac14cec077695df86692ec0ebf374f27d728ebbc4bb29782554d7acfed1",
+    "dataset-audit.json": "f2063a81f3628af7b64c8e72d8ae2c21233363441d1226c2a62f37b12b6337ad",
+    "manifest.json": "f2af745e3796a3eb2745793993e51051a1c0dc3afc59e3729bfe91fc7f1d001f",
+    "predictions.jsonl": "70094d49fa3e4bd08cf9f69ed09334d9b60074d8258f03a3972f7f02aa4833d9",
+    "report.json": "82f33571c5fda9fc802c7dd07a31780fceb6020c4b0e1dbe748a8e3c660697ef",
+    "report.md": "d9e9e3e55f05e937fef52b6c22e5f03405f7a312206eaee60195598074dcc9a2",
+    "results.svg": "fc31bb1c1c6c65e1365c2126344549b5587a6b4d7729f7c08977cfaeca71ecd3",
+    "runs.csv": "8a68a80b2b49969e41a31924dd2f43e004b57080cbdb640ab721b49008a4d1f4",
+    "runs.jsonl": "7e6d208868aa8c9ab816bb6b7eadb6d19eb90254a5dba35d1d91556bd4a30276",
+    "verify_results.py": "6a10a21edc1841813517fae2b9279cedab6d9f2906427e1177f60806ad9c8edd"
+  }
+}

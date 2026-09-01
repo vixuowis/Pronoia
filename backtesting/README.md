@@ -8,6 +8,7 @@
 |---|---|
 | `events_cn_us_1000_v1.jsonl` | 事件池 v1（CN+US 1000 条），每行一个 JSON 事件记录 |
 | `labels_cn_us_1000_v1.jsonl` | Oracle 标签 v1（CN+US 1000 条），含 T+3/7/15/30/60 + avg_all 多 horizon 方向标签 |
+| [`mirofish_actor_scale_v1/`](mirofish_actor_scale_v1/) | 多智能体 4/6/8 角色规模实验、紧凑结果与离线复算脚本 |
 | `README.md` | 本说明文档 |
 
 **当前版本：v1**（首版正式数据集 + avgCAR 多 horizon 标签体系）

@@ -144,7 +144,9 @@ docker build -t fever . && docker run -p 8000:8000 fever
 
 多智能体事件推演目前通过可选的独立网关接入，不影响 Pronoia 的默认启动和其他功能。
 接口边界、配置和 Draft 阶段的交付范围见
-[MiroFish 多智能体事件推演](docs/mirofish-simulation.md)。
+[MiroFish 多智能体事件推演](docs/mirofish-simulation.md)。32 次 4/6/8 角色规模实验的
+冻结数据、结果图和离线复算入口见
+[多智能体规模实验 v1](backtesting/mirofish_actor_scale_v1/)。
 
 ## 🧭 两种模式
 
