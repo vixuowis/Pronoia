@@ -48,7 +48,17 @@ DB_PATH: str = os.getenv("FEVER_DB_PATH", str(_BACKEND_DIR / "fever.db"))
 DATA_DIR: str = os.getenv("FEVER_DATA_DIR", str(_PROJECT_ROOT / "data"))
 
 # Skill execution guardrails (design.md §2/§4)
-SKILL_TIMEOUT: float = float(os.getenv("FEVER_SKILL_TIMEOUT", "60"))  # seconds per skill call
+#
+# Trajectory analysis showed that every top-level 60s timeout added roughly
+# 63~68s to a sample.  A single deadline also caused a race between composite
+# skills and their children: the parent expired just as a child was returning
+# its timeout result, so already-completed sibling results were lost.  Keep the
+# public/root budget at 60s, but make nested budgets shorter so composites have
+# time to aggregate partial results.
+SKILL_TIMEOUT: float = float(os.getenv("FEVER_SKILL_TIMEOUT", "60"))
+SKILL_SUB_TIMEOUT: float = float(os.getenv("FEVER_SKILL_SUB_TIMEOUT", "30"))
+SKILL_SLOW_SUB_TIMEOUT: float = float(os.getenv("FEVER_SKILL_SLOW_SUB_TIMEOUT", "45"))
+SKILL_COMPOSITE_SUB_TIMEOUT: float = float(os.getenv("FEVER_SKILL_COMPOSITE_SUB_TIMEOUT", "50"))
 TOOL_RESULT_MAX_CHARS: int = int(os.getenv("FEVER_TOOL_RESULT_MAX_CHARS", "4000"))
 
 # Agent loop guardrails (design.md §6)

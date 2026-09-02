@@ -20,6 +20,7 @@ import yfinance as yf
 
 from .registry import err, meta, ok, skill
 from . import cache
+from .price_data import PriceFetchError, fetch_price_frame, resolve_security_ref
 
 # ------------------------------------------------------------ helpers ------
 
@@ -218,6 +219,9 @@ _US_NAME_MAP: dict[str, tuple[str, str, str]] = {
     "abbvie": ("ABBV", "AbbVie Inc.", "纽交所"),
     "百时美": ("BMY", "Bristol-Myers Squibb Company", "纽交所"),
     "bms": ("BMY", "Bristol-Myers Squibb Company", "纽交所"),
+    "bristol-myers squibb": ("BMY", "Bristol-Myers Squibb Company", "纽交所"),
+    "medtronic": ("MDT", "Medtronic plc", "纽交所"),
+    "mdt": ("MDT", "Medtronic plc", "纽交所"),
     "雅培": ("ABT", "Abbott Laboratories", "纽交所"),
     "abbott": ("ABT", "Abbott Laboratories", "纽交所"),
     "联合健康": ("UNH", "UnitedHealth Group Incorporated", "纽交所"),
@@ -318,6 +322,8 @@ _US_NAME_MAP: dict[str, tuple[str, str, str]] = {
     "中概互联etf": ("KWEB", "KraneShares CSI China Internet ETF", "纽交所"),
     "mchi": ("MCHI", "iShares MSCI China ETF", "纳斯达克"),
     "msci中国": ("MCHI", "iShares MSCI China ETF", "纳斯达克"),
+    "xlre": ("XLRE", "The Real Estate Select Sector SPDR Fund", "纽交所"),
+    "kbe": ("KBE", "SPDR S&P Bank ETF", "纽交所"),
 }
 
 
@@ -548,6 +554,71 @@ def search_stock(keyword: str) -> dict:
 
 
 @skill(
+    "resolve_security",
+    "统一解析证券代码。显式 symbol 优先且完全本地解析；只有缺少 symbol 时才按 keyword 搜索。"
+    "支持 A 股/ETF/指数的 sh/sz/bj 前缀、6 位代码和美股 ticker。",
+    {
+        "type": "object",
+        "properties": {
+            "symbol": {"type": "string", "description": "明确证券代码（优先）"},
+            "keyword": {"type": "string", "description": "公司名或代码关键词（symbol 缺省时使用）"},
+            "market": {"type": "string", "description": "可选市场提示：CN/US/A股/美股"},
+        },
+        "required": [],
+        "anyOf": [{"required": ["symbol"]}, {"required": ["keyword"]}],
+        "additionalProperties": False,
+    },
+    internal=True,
+)
+@cache.cached("search")
+def resolve_security(symbol: str | None = None, keyword: str | None = None,
+                     market: str | None = None) -> dict:
+    """Resolve canonical identifiers before considering a network lookup."""
+    raw_symbol = str(symbol or "").strip()
+    raw_keyword = str(keyword or "").strip()
+    candidate = raw_symbol or raw_keyword
+    if not candidate:
+        return err("必须提供 symbol 或 keyword")
+
+    # Explicit symbols, numeric codes and uppercase US tickers never need a
+    # remote name lookup.  This is the common backtest path because packets
+    # already carry a canonical symbol.
+    local_candidate = raw_symbol
+    if not local_candidate:
+        if re.fullmatch(r"(?i)(?:sh|sz|bj)?\d{6}(?:\.(?:ss|sz|bj))?", raw_keyword):
+            local_candidate = raw_keyword
+        elif raw_keyword == raw_keyword.upper() and US_SYMBOL_RE.fullmatch(raw_keyword):
+            local_candidate = raw_keyword
+    if local_candidate:
+        try:
+            ref = resolve_security_ref(local_candidate, market)
+        except ValueError as exc:
+            return err(str(exc))
+        data = ref.as_dict()
+        data["name"] = raw_keyword or ref.symbol
+        data["resolution_source"] = "explicit_symbol"
+        return ok(data, meta("local.resolve_security", 1))
+
+    # Name-only interactive requests retain the existing Sina/local-map path.
+    searched = search_stock(raw_keyword)
+    matches = searched.get("data") if isinstance(searched, dict) else None
+    if not searched.get("ok") or not isinstance(matches, list) or not matches:
+        return err(f"未找到股票: {raw_keyword}")
+    primary = matches[0]
+    found_symbol = str(primary.get("symbol") or primary.get("code") or "").strip()
+    found_market = str(primary.get("market") or market or "").strip()
+    try:
+        ref = resolve_security_ref(found_symbol, found_market)
+    except ValueError as exc:
+        return err(str(exc))
+    data = ref.as_dict()
+    data["name"] = str(primary.get("name") or primary.get("名称") or raw_keyword)
+    data["resolution_source"] = "name_search"
+    data["matches"] = matches[:3]
+    return ok(data, meta("search_stock", len(matches)))
+
+
+@skill(
     "get_stock_daily",
     "获取个股日K线（OHLC+成交量），返回最近至多250个交易日。自动识别市场：A 股 600519 / sh600519；美股字母代码 AAPL/TSLA/NVDA 等。",
     {
@@ -564,44 +635,34 @@ def search_stock(keyword: str) -> dict:
 @cache.cached("kline")
 def get_stock_daily(symbol: str, start_date: Optional[str] = None,
                     end_date: Optional[str] = None, adjust: str = "qfq") -> dict:
-    # 美股字母代码 → 转交美股 skill
-    if is_us_symbol(symbol):
-        return get_us_stock_daily(symbol, start_date, end_date, adjust)
     try:
-        sym = norm_symbol(symbol)
         end8 = norm_date(end_date, date.today())
         start8 = norm_date(start_date, date.today() - timedelta(days=365))
-        adjust = adjust if adjust in ("qfq", "hfq") else ""
-        source = "akshare.stock_zh_a_daily"
-        try:
-            df = ak.stock_zh_a_daily(symbol=sym, start_date=start8, end_date=end8, adjust=adjust)
-            if df is None or len(df) == 0:
-                raise ValueError("sina 日K返回空数据")
-        except Exception as e1:  # noqa: BLE001
-            # fallback: 腾讯日K（无成交量列）
-            try:
-                df = ak.stock_zh_a_hist_tx(symbol=sym, start_date=start8, end_date=end8, adjust=adjust)
-                source = "akshare.stock_zh_a_hist_tx"
-                if df is None or len(df) == 0:
-                    return err(f"{sym} 在 {start8}~{end8} 无日K数据（sina/腾讯均为空）")
-            except Exception as e2:  # noqa: BLE001
-                return err(f"日K获取失败: sina({type(e1).__name__}: {e1}); tx({type(e2).__name__}: {e2})")
-        df, truncated = _clean_ohlcv(df, limit=250)
+        fetched = fetch_price_frame(symbol, start8, end8, adjust=adjust)
+        sym = fetched.security.symbol
+        df, truncated = _clean_ohlcv(fetched.frame, limit=250)
         records = df.to_dict(orient="records")
         artifact = {
             "kind": "kline",
             "title": f"{sym.upper()} 日K线（{_d8_to_iso(start8)}~{_d8_to_iso(end8)}）",
             "payload": {
                 "symbol": sym,
+                "market": fetched.security.market,
+                "security_kind": fetched.security.kind,
                 "dates": df["date"].tolist(),
                 "ohlc": [[r["open"], r["close"], r["low"], r["high"]] for r in records],
                 "volumes": [r["volume"] for r in records],
             },
         }
-        m = meta(source, len(df))
+        m = meta(fetched.provider, len(df))
+        m["market"] = fetched.security.market
+        m["security_kind"] = fetched.security.kind
+        m["provider_attempts"] = list(fetched.attempts)
         if truncated:
             m["note"] = "仅保留最近 250 行"
         return ok(records, m, artifact=artifact)
+    except PriceFetchError as e:
+        return err(str(e))
     except Exception as e:  # noqa: BLE001
         return err(f"日K获取失败: {type(e).__name__}: {e}")
 
@@ -621,59 +682,8 @@ def get_stock_daily(symbol: str, start_date: Optional[str] = None,
 @cache.cached("us_stock")
 def get_us_stock_daily(symbol: str, start_date: Optional[str] = None,
                        end_date: Optional[str] = None, adjust: str = "qfq") -> dict:
-    """美股日K（akshare.stock_us_daily 东方财富源）。start_date/end_date 接口不支持，按返回全量截取。"""
-    try:
-        sym = norm_us_symbol(symbol)
-        adjust = adjust if adjust in ("qfq", "hfq") else "qfq"
-        df = ak.stock_us_daily(symbol=sym, adjust=adjust)
-        if df is None or len(df) == 0:
-            return err(f"美股 {sym} 无日K数据")
-        # 标准化列：date / open / close / high / low / volume
-        col_map = {}
-        for c in df.columns:
-            cl = str(c).lower()
-            if cl in ("date", "日期"):
-                col_map[c] = "date"
-            elif cl in ("open", "开盘"):
-                col_map[c] = "open"
-            elif cl in ("close", "收盘"):
-                col_map[c] = "close"
-            elif cl in ("high", "最高"):
-                col_map[c] = "high"
-            elif cl in ("low", "最低"):
-                col_map[c] = "low"
-            elif cl in ("volume", "成交量"):
-                col_map[c] = "volume"
-        df = df.rename(columns=col_map)
-        if "volume" not in df.columns:
-            df["volume"] = 0
-        df["date"] = df["date"].astype(str).str[:10]
-        for c in ("open", "close", "high", "low", "volume"):
-            df[c] = pd.to_numeric(df[c], errors="coerce")
-        df = df.dropna(subset=["close"]).sort_values("date").reset_index(drop=True)
-        truncated = False
-        if len(df) > 250:
-            df = df.tail(250).reset_index(drop=True)
-            truncated = True
-        records = df.to_dict(orient="records")
-        start_iso = df["date"].iloc[0] if len(df) else ""
-        end_iso = df["date"].iloc[-1] if len(df) else ""
-        artifact = {
-            "kind": "kline",
-            "title": f"{sym} 美股日K线（{start_iso} ~ {end_iso}）",
-            "payload": {
-                "symbol": sym,
-                "dates": df["date"].tolist(),
-                "ohlc": [[r["open"], r["close"], r["low"], r["high"]] for r in records],
-                "volumes": [r["volume"] for r in records],
-            },
-        }
-        m = meta("akshare.stock_us_daily", len(df))
-        if truncated:
-            m["note"] = "仅保留最近 250 行"
-        return ok(records, m, artifact=artifact)
-    except Exception as e:  # noqa: BLE001
-        return err(f"美股日K获取失败: {type(e).__name__}: {e}")
+    """美股日K；共享路由优先 yfinance 单标的，AkShare 作为兜底。"""
+    return get_stock_daily(symbol, start_date, end_date, adjust)
 
 
 @skill(
@@ -692,35 +702,15 @@ def get_us_stock_daily(symbol: str, start_date: Optional[str] = None,
 @cache.cached("kline")
 def get_index_daily(symbol: str, start_date: Optional[str] = None,
                     end_date: Optional[str] = None) -> dict:
-    try:
-        sym = norm_index_symbol(symbol)
-        start_iso = _d8_to_iso(norm_date(start_date, date.today() - timedelta(days=365)))
-        end_iso = _d8_to_iso(norm_date(end_date, date.today()))
-        df = ak.stock_zh_index_daily(symbol=sym)
-        if df is None or len(df) == 0:
-            return err(f"指数 {sym} 无数据")
-        df = df.rename(columns={"date": "date"})
-        df["date"] = df["date"].astype(str).str[:10]
-        df = df[(df["date"] >= start_iso) & (df["date"] <= end_iso)]
-        if len(df) == 0:
-            return err(f"指数 {sym} 在 {start_iso}~{end_iso} 无数据")
-        if len(df) > 250:
-            df = df.tail(250)
-        df["close"] = pd.to_numeric(df["close"], errors="coerce")
-        df = df.dropna(subset=["close"])
-        records = df[["date", "open", "high", "low", "close", "volume"]].to_dict(orient="records")
-        artifact = {
-            "kind": "line",
-            "title": f"{sym.upper()} 指数走势（{start_iso}~{end_iso}）",
-            "payload": {
-                "x": df["date"].tolist(),
-                "series": [{"name": f"{sym.upper()} 收盘", "data": df["close"].tolist()}],
-                "yname": "点位",
-            },
-        }
-        return ok(records, meta("akshare.stock_zh_index_daily", len(df)), artifact=artifact)
-    except Exception as e:  # noqa: BLE001
-        return err(f"指数日K获取失败: {type(e).__name__}: {e}")
+    result = get_stock_daily(symbol, start_date, end_date, adjust="")
+    if not result.get("ok"):
+        return result
+    artifact = result.get("artifact")
+    if isinstance(artifact, dict):
+        artifact = dict(artifact)
+        artifact["kind"] = "line"
+        result["artifact"] = artifact
+    return result
 
 
 @skill(
