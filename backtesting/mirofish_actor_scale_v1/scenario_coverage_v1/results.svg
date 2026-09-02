@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="560" viewBox="0 0 1000 560">
+<rect width="1000" height="560" fill="#f8fafc"/>
+<text x="55" y="58" font-family="Arial,sans-serif" font-size="29" font-weight="700" fill="#0f172a">8 角色情景覆盖：Compiler v6 留出验证</text>
+<text x="55" y="91" font-family="Arial,sans-serif" font-size="15" fill="#64748b">相同密封行动 · 未参与调优的 4 个事件 · CN/US 各 2 个</text>
+<rect x="55" y="125" width="890" height="330" rx="16" fill="#ffffff" stroke="#e2e8f0"/>
+<line x1="130" y1="390" x2="870" y2="390" stroke="#cbd5e1"/>
+<rect x="230" y="293.8" width="170" height="96.3" rx="10" fill="#94a3b8"/>
+<rect x="600" y="176.9" width="170" height="213.1" rx="10" fill="#22c55e"/>
+<text x="315" y="273.8" text-anchor="middle" font-family="Arial,sans-serif" font-size="30" font-weight="700" fill="#334155">43.8%</text>
+<text x="685" y="156.9" text-anchor="middle" font-family="Arial,sans-serif" font-size="30" font-weight="700" fill="#15803d">96.9%</text>
+<text x="315" y="425" text-anchor="middle" font-family="Arial,sans-serif" font-size="18" fill="#475569">v5 相关性优先</text>
+<text x="685" y="425" text-anchor="middle" font-family="Arial,sans-serif" font-size="18" fill="#475569">v6 覆盖优先</text>
+<text x="500" y="500" text-anchor="middle" font-family="Arial,sans-serif" font-size="22" font-weight="700" fill="#0f172a">+53.1 个百分点 · 2.21× 覆盖</text>
+<text x="500" y="532" text-anchor="middle" font-family="Arial,sans-serif" font-size="14" fill="#64748b">工程覆盖指标，不代表市场预测准确率</text>
+</svg>

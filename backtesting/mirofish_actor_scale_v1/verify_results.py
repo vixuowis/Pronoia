@@ -131,6 +131,41 @@ def main() -> int:
     close(brier(predictions, labels, "assisted"),
           t3["assisted"]["multiclass_brier"], "assisted T+3 Brier")
 
+    coverage_root = HERE / "scenario_coverage_v1"
+    coverage_manifest = read_json(coverage_root / "manifest.json")
+    coverage_hash = coverage_manifest["manifest_sha256"]
+    unhashed_coverage_manifest = dict(coverage_manifest)
+    unhashed_coverage_manifest.pop("manifest_sha256")
+    if canonical_hash(unhashed_coverage_manifest) != coverage_hash:
+        raise AssertionError("scenario coverage manifest hash mismatch")
+    coverage_report = read_json(coverage_root / "report.json")
+    configured_coverages = []
+    eligible_coverages = []
+    for case in coverage_manifest["cases"]:
+        branch_set = read_json(coverage_root / case["candidate_output"])
+        actions = read_json(coverage_root / case["inputs"]["financial_actions"])
+        scenario_actor_ids = {
+            str(actor_id)
+            for branch in branch_set["branches"]
+            for actor_id in branch["actor_ids"]
+        }
+        eligible_actor_ids = {
+            str(item["actor_id"]) for item in actions["decisions"]
+        }
+        configured_coverages.append(
+            len(scenario_actor_ids) / int(case["actor_budget"])
+        )
+        eligible_coverages.append(
+            len(scenario_actor_ids) / len(eligible_actor_ids)
+        )
+    coverage_summary = coverage_report["summary"]
+    close(statistics.fmean(configured_coverages),
+          coverage_summary["candidate_actor_coverage_rate"],
+          "compiler-v6 configured actor coverage")
+    close(statistics.fmean(eligible_coverages),
+          coverage_summary["candidate_eligible_actor_coverage_rate"],
+          "compiler-v6 eligible actor coverage")
+
     print("verification: PASS")
     print(f"manifest: {manifest_hash}")
     print("simulations: 32/32; primary actor budgets: 4=8, 6=8, 8=8")
@@ -138,6 +173,11 @@ def main() -> int:
         "T+3 Brier: "
         f"{t3['baseline']['multiclass_brier']:.6f} -> "
         f"{t3['assisted']['multiclass_brier']:.6f} (qualification failed)"
+    )
+    print(
+        "compiler-v6 scenario actor coverage: "
+        f"{coverage_summary['baseline_actor_coverage_rate'] * 100:.1f}% -> "
+        f"{coverage_summary['candidate_actor_coverage_rate'] * 100:.1f}%"
     )
     return 0
 
