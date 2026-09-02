@@ -475,9 +475,12 @@ async def _route_signals(
                     if r.get("ok"):
                         d = r["data"]
                         if d.get("signal_valid"):
+                            relative_return = float(
+                                d.get("relative_return_pct", d.get("ar_pct", 0.0))
+                            )
                             signals["t0_active_return"] = {
-                                "direction": d["active_direction"],
-                                "strength": min(3, abs(float(stock_ret)) / 1.5),
+                                "direction": d.get("signal_direction") or d.get("active_direction", "neutral"),
+                                "strength": min(3, abs(relative_return) / 1.5),
                             }
             except Exception:
                 pass
@@ -495,9 +498,12 @@ async def _route_signals(
                     )
                     if r.get("ok") and r["data"].get("signal_valid"):
                         d = r["data"]
+                        relative_return = float(
+                            d.get("relative_return_pct", d.get("ar_pct", 0.0))
+                        )
                         signals["t0_active_return"] = {
-                            "direction": d["active_direction"],
-                            "strength": min(3, abs(stock_ret) / 1.5),
+                            "direction": d.get("signal_direction") or d.get("active_direction", "neutral"),
+                            "strength": min(3, abs(relative_return) / 1.5),
                         }
             except Exception:
                 pass
