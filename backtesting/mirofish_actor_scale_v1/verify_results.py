@@ -115,6 +115,25 @@ def main() -> int:
     close(percentile([row["wall_seconds"] for row in primary], 0.9),
           overall["p90_wall_seconds"], "p90 wall seconds")
 
+    historical = report["historical_predictive_experiment"]
+    target_deltas = [
+        float(target["b3_minus_b1"])
+        for case in historical["case_effects"]
+        for target in case["target_effects"]
+        if float(target["b3_minus_b1"]) != 0.0
+    ]
+    if len(target_deltas) != historical["changed_target_count"]:
+        raise AssertionError("changed historical target count mismatch")
+    if sum(delta < 0 for delta in target_deltas) != historical[
+        "improved_changed_target_count"
+    ]:
+        raise AssertionError("improved historical target count mismatch")
+    close(
+        round(sum(delta < 0 for delta in target_deltas) / len(target_deltas), 8),
+        historical["improved_changed_target_fraction"],
+        "improved changed historical target fraction",
+    )
+
     primary_budgets = {
         budget: sum(row["actor_budget"] == budget for row in primary)
         for budget in (4, 6, 8)
@@ -166,6 +185,71 @@ def main() -> int:
           coverage_summary["candidate_eligible_actor_coverage_rate"],
           "compiler-v6 eligible actor coverage")
 
+    expansion_root = HERE / "scenario_coverage_v2"
+    expansion_manifest = read_json(expansion_root / "manifest.json")
+    expansion_hash = expansion_manifest["manifest_sha256"]
+    unhashed_expansion_manifest = dict(expansion_manifest)
+    unhashed_expansion_manifest.pop("manifest_sha256")
+    if canonical_hash(unhashed_expansion_manifest) != expansion_hash:
+        raise AssertionError("scenario coverage expansion manifest hash mismatch")
+    expansion_report = read_json(expansion_root / "report.json")
+    expansion_eligible_coverages = []
+    omitted_eligible_actor_count = 0
+    for case in expansion_manifest["cases"]:
+        branch_set = read_json(expansion_root / case["candidate_output"])
+        actions = read_json(
+            expansion_root / case["inputs"]["financial_actions"]
+        )
+        scenario_actor_ids = {
+            str(actor_id)
+            for branch in branch_set["branches"]
+            for actor_id in branch["actor_ids"]
+        }
+        eligible_actor_ids = {
+            str(item["actor_id"]) for item in actions["decisions"]
+        }
+        for branch in branch_set["branches"]:
+            actor_ids = [str(item) for item in branch.get("actor_ids") or []]
+            if len(actor_ids) != 2 or not set(actor_ids) <= eligible_actor_ids:
+                raise AssertionError(
+                    f"invalid actor binding in {case['experiment_case_id']}"
+                )
+            if not (
+                branch.get("trigger_conditions") or branch.get("triggers")
+            ):
+                raise AssertionError(
+                    f"missing branch triggers in {case['experiment_case_id']}"
+                )
+            if not branch.get("consequences"):
+                raise AssertionError(
+                    f"missing branch consequences in {case['experiment_case_id']}"
+                )
+            if not branch.get("invalidation_conditions"):
+                raise AssertionError(
+                    f"missing invalidation conditions in {case['experiment_case_id']}"
+                )
+            if not str(branch.get("novelty_claim") or "").strip():
+                raise AssertionError(
+                    f"missing novelty claim in {case['experiment_case_id']}"
+                )
+            if len(branch.get("simulation_refs") or []) != 2:
+                raise AssertionError(
+                    f"invalid simulation refs in {case['experiment_case_id']}"
+                )
+        covered = scenario_actor_ids & eligible_actor_ids
+        expansion_eligible_coverages.append(
+            len(covered) / len(eligible_actor_ids)
+        )
+        omitted_eligible_actor_count += len(eligible_actor_ids - covered)
+    expansion_summary = expansion_report["summary"]
+    if len(expansion_manifest["cases"]) != 20:
+        raise AssertionError("scenario coverage expansion is not 20 cases")
+    close(statistics.fmean(expansion_eligible_coverages),
+          expansion_summary["candidate_eligible_actor_coverage_rate"],
+          "compiler-v6 expanded eligible actor coverage")
+    if omitted_eligible_actor_count != 0:
+        raise AssertionError("compiler-v6 expansion omitted an eligible actor")
+
     print("verification: PASS")
     print(f"manifest: {manifest_hash}")
     print("simulations: 32/32; primary actor budgets: 4=8, 6=8, 8=8")
@@ -178,6 +262,12 @@ def main() -> int:
         "compiler-v6 scenario actor coverage: "
         f"{coverage_summary['baseline_actor_coverage_rate'] * 100:.1f}% -> "
         f"{coverage_summary['candidate_actor_coverage_rate'] * 100:.1f}%"
+    )
+    print(
+        "compiler-v6 expanded eligible actor coverage: "
+        f"{expansion_summary['baseline_eligible_actor_coverage_rate'] * 100:.1f}% -> "
+        f"{expansion_summary['candidate_eligible_actor_coverage_rate'] * 100:.1f}% "
+        "(20/20 cases; omissions 31 -> 0)"
     )
     return 0
 

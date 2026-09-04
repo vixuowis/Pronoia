@@ -558,6 +558,11 @@
     "median_case_b3_minus_b1": 0.0,
     "improved_case_fraction": 0.41666667,
     "unchanged_case_fraction": 0.5,
+    "nonworse_case_fraction": 0.91666667,
+    "changed_target_count": 9,
+    "improved_changed_target_count": 8,
+    "worsened_changed_target_count": 1,
+    "improved_changed_target_fraction": 0.88888889,
     "cluster_bootstrap_interval_95": {
       "lower": -0.00914063,
       "upper": -0.00083333,

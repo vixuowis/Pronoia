@@ -30,7 +30,7 @@
 <text x="668" y="468" text-anchor="middle" font-family="Arial,sans-serif" font-size="14" fill="#475569">8 角色</text>
 <text x="800" y="190" font-family="Arial,sans-serif" font-size="14" font-weight="700" fill="#334155">历史事件概率（12 事件 / 24 目标）</text>
 <text x="800" y="221" font-family="Arial,sans-serif" font-size="25" font-weight="700" fill="#059669">Brier 0.1573 → 0.1525</text>
-<text x="800" y="248" font-family="Arial,sans-serif" font-size="14" fill="#047857">相对改善 3.06% · 弱正向描述性证据</text>
+<text x="800" y="248" font-family="Arial,sans-serif" font-size="14" fill="#047857">相对改善 3.06% · 11/12 事件未变差 · 8/9 概率调整改善</text>
 <line x1="800" y1="279" x2="1130" y2="279" stroke="#e2e8f0"/>
 <text x="800" y="316" font-family="Arial,sans-serif" font-size="14" font-weight="700" fill="#334155">T+3 方向资格赛（开发集 n=6）</text>
 <text x="800" y="347" font-family="Arial,sans-serif" font-size="25" font-weight="700" fill="#dc2626">Brier 0.635 → 0.949</text>
