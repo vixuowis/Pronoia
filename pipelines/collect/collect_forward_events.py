@@ -7,12 +7,15 @@ Pronoia 前向事件收集 (Step 1)
 """
 from __future__ import annotations
 import os, re, sys, json, time, hashlib, datetime as dt, warnings, argparse
+from pathlib import Path
 warnings.filterwarnings("ignore")
 import akshare as ak
 
 # ---- 不走沙箱代理，用远程机直连 ----
 for k in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "all_proxy"):
     os.environ.pop(k, None)
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 TODAY = dt.date.today()  # 2026-09-04
 WINDOW_DAYS = {"T-1": 1, "T-3": 3, "T-7": 7, "T-14": 14, "T-30": 30, "T-60": 60}
@@ -293,7 +296,7 @@ def collect_us_sec(per_cell_target: int) -> list[dict]:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default="/root/Pronoia/pronoia_run/forward_test/events_forward.jsonl")
+    ap.add_argument("--out", default=str(_PROJECT_ROOT / "pronoia_run" / "forward_test" / "events_forward.jsonl"))
     ap.add_argument("--per-cell", type=int, default=4, help="每 (窗口×类型) 最多保留多少条")
     ap.add_argument("--skip-us", action="store_true")
     args = ap.parse_args()

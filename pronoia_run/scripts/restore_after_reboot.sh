@@ -21,6 +21,7 @@ RUN_DIR=/workspace/pronoia_run
 ENV_BACKUP=$RUN_DIR/dotenv_backup.env
 ENV_TARGET=/workspace/.env
 SCRIPTS=$RUN_DIR/scripts
+PIPELINES=$RUN_DIR/../pipelines
 EVENTS=$RUN_DIR/data_v3/events.jsonl
 LABELS=$RUN_DIR/data_v3/labels.jsonl
 ENRICHED=$RUN_DIR/data_v3/events_enriched.jsonl
@@ -111,13 +112,13 @@ if [ "$traj_n" -ge 100 ]; then log "  ✓ trajectory 数目 : $traj_n (≥100)";
 # Step 4 — 清理 err 行 (rc_team 里 ok=false 的会导致断点续跑时反复判定)
 # ---------------------------------------------------------------------------
 log "Step 4/6 — 清理 rc_team 的 err 行"
-if [ ! -f "$SCRIPTS/d3b_cleanup_rc.py" ]; then
-    warn "  d3b_cleanup_rc.py 备份缺失，跳过；如需清理请手动执行"
+if [ ! -f "$PIPELINES/labeling/d3b_cleanup_rc.py" ]; then
+    warn "  d3b_cleanup_rc.py 缺失，跳过；如需清理请手动执行"
 else
     if [ "$DRY" -eq 1 ]; then
-        echo "  [dry-run] 会执行: $PY $SCRIPTS/d3b_cleanup_rc.py"
+        echo "  [dry-run] 会执行: $PY $PIPELINES/labeling/d3b_cleanup_rc.py"
     else
-        $PY "$SCRIPTS/d3b_cleanup_rc.py" || warn "  d3b_cleanup_rc 非零退出，可能没有 err 行可清"
+        $PY "$PIPELINES/labeling/d3b_cleanup_rc.py" || warn "  d3b_cleanup_rc 非零退出，可能没有 err 行可清"
     fi
 fi
 

@@ -17,7 +17,8 @@ except Exception as e:
     print(f"akshare import failed: {e}", file=sys.stderr)
     sys.exit(1)
 
-OUT_DIR = Path("/root/Pronoia/pronoia_run/today_test")
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+OUT_DIR = _PROJECT_ROOT / "pronoia_run" / "today_test"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 OUT_FILE = OUT_DIR / "events_today.jsonl"
 

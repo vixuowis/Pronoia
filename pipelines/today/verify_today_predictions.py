@@ -9,7 +9,7 @@
   4. 输出汇总报告：准确率（按窗口、按 horizon、按类型拆分）
 
 明日 09-05 收盘后执行：
-    cd /root/Pronoia && /root/miniconda3/bin/python verify_today_predictions.py
+    python pipelines/today/verify_today_predictions.py
 
 （T+1 之外的 horizon 先显示「待验证」占位，后续多次运行会自动补齐。）
 """
@@ -18,9 +18,10 @@ import sys, json, datetime as dt, time
 from pathlib import Path
 from collections import defaultdict, Counter
 
-sys.path.insert(0, "/root/Pronoia/backend")
-sys.path.insert(0, "/root/Pronoia/backtesting/rlvr/training")
-sys.path.insert(0, "/root/Pronoia/backtesting/rlvr/training/remote_scripts")
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_PROJECT_ROOT / "backend"))
+sys.path.insert(0, str(_PROJECT_ROOT / "backtesting" / "rlvr" / "training"))
+sys.path.insert(0, str(_PROJECT_ROOT / "backtesting" / "rlvr" / "training" / "remote_scripts"))
 
 from app.event_backtest.labeller import (  # type: ignore
     _yf_ticker_for, _yf_benchmark_for,
@@ -31,7 +32,7 @@ from app.event_backtest.labeller import (  # type: ignore
 )
 from papv_claims import settle_all  # noqa: E402
 
-TODAY_DIR = Path("/root/Pronoia/pronoia_run/today_test")
+TODAY_DIR = _PROJECT_ROOT / "pronoia_run" / "today_test"
 EVENTS_FILE = TODAY_DIR / "events_today.jsonl"
 CLAIMS_FILE = TODAY_DIR / "claims_today.jsonl"
 LABELS_FILE = TODAY_DIR / "labels_today.jsonl"

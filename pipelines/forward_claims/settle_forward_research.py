@@ -10,12 +10,13 @@ import sys, json
 from pathlib import Path
 from collections import defaultdict
 
-sys.path.insert(0, "/root/Pronoia/backtesting/rlvr/training")
-sys.path.insert(0, "/root/Pronoia/backtesting/rlvr/training/remote_scripts")
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_PROJECT_ROOT / "backtesting" / "rlvr" / "training"))
+sys.path.insert(0, str(_PROJECT_ROOT / "backtesting" / "rlvr" / "training" / "remote_scripts"))
 
 from papv_claims import settle_all  # noqa: E402
 
-FORWARD_DIR = Path("/root/Pronoia/pronoia_run/forward_test")
+FORWARD_DIR = _PROJECT_ROOT / "pronoia_run" / "forward_test"
 LABELS_FILE = FORWARD_DIR / "labels_forward.jsonl"
 CLAIMS_RESEARCH = FORWARD_DIR / "claims_forward_research.jsonl"
 CLAIMS_BASELINE = FORWARD_DIR / "claims_forward.jsonl"

@@ -1,6 +1,9 @@
 import json
 from collections import Counter
-rows = [json.loads(l) for l in open("/root/Pronoia/pronoia_run/today_test/events_today.jsonl")]
+from pathlib import Path
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+rows = [json.loads(l) for l in open(_PROJECT_ROOT / "pronoia_run" / "today_test" / "events_today.jsonl")]
 print(f"total events: {len(rows)}")
 print(f"market: {dict(Counter(e['market'] for e in rows))}")
 print(f"etype:  {dict(Counter(e['event_type_l2'] for e in rows))}")

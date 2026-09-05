@@ -4,7 +4,8 @@ import json
 from collections import Counter, defaultdict
 from pathlib import Path
 
-DATA = Path("/workspace/today_data")
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DATA = _PROJECT_ROOT / "data_snapshots" / "today"
 
 def load(p):
     return [json.loads(l) for l in open(DATA / p) if l.strip()]
@@ -209,7 +210,7 @@ lines.append("")
 lines.append("明日（2026-09-05）收盘后执行验证：")
 lines.append("")
 lines.append("```bash")
-lines.append("cd /root/Pronoia && /root/miniconda3/bin/python verify_today_predictions.py")
+lines.append("cd /root/Pronoia && /root/miniconda3/bin/python pipelines/today/verify_today_predictions.py")
 lines.append("```")
 lines.append("")
 lines.append("脚本将：")
@@ -219,7 +220,7 @@ lines.append("3. 结算所有断言，输出准确率（按窗口/horizon/类型
 lines.append("4. 产出 settlement_today.jsonl + summary_verification.json")
 
 content = "\n".join(lines)
-out = "/workspace/today_data/feishu_doc.md"
+out = _PROJECT_ROOT / "data_snapshots" / "today" / "feishu_doc.md"
 with open(out, "w", encoding="utf-8") as f:
     f.write(content)
 print(f"doc content generated: {len(content)} chars, {len(lines)} lines")

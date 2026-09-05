@@ -19,7 +19,7 @@ from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ---- 路径 ----
-PRONIA = Path("/root/Pronoia")
+PRONIA = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PRONIA / "backend"))
 sys.path.insert(0, str(PRONIA / "backtesting" / "rlvr" / "training"))
 sys.path.insert(0, str(PRONIA / "backtesting" / "rlvr" / "training" / "remote_scripts"))
