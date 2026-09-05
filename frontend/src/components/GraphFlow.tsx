@@ -110,7 +110,7 @@ function buildOption(payload: any) {
 
   return {
     animationDurationUpdate: 600,
-    animationEasingUpdate: "cubicOut",
+    animationEasingUpdate: "cubicOut" as const,
     color: [NODE_COLOR.evidence, NODE_COLOR.exploring, NODE_COLOR.missing],
     textStyle: { fontFamily: "inherit" },
     tooltip: {

@@ -6,10 +6,19 @@ import backend.app.agents.team as team_mod
 import backend.app.llm as llm_mod
 from backend.app.agents.research_context import ResearchContext
 from backend.app.llm import run_agent
+from backend.app.agents.roster import AGENTS
+from backend.app.skills.evidence_graph import EvidenceGraph
 from backend.app.skills.registry import ensure_skills_loaded, tools_for_agent
 
 
 class TestAgentAndTeam(unittest.IsolatedAsyncioTestCase):
+    def test_predictor_owns_async_scenario_handoff_without_probability_claim(self):
+        predictor = AGENTS["predictor"]
+        self.assertIn("异步多智能体事件推演", predictor["description"])
+        self.assertIn("交给事件预测员推演", predictor["persona"])
+        self.assertIn("不输出校准概率", predictor["persona"])
+        self.assertNotIn("3) 概率（%）", predictor["persona"])
+
     def test_agent_tools_visibility_filters_internal(self):
         ensure_skills_loaded()
         tools = tools_for_agent("router")
@@ -64,6 +73,9 @@ class TestAgentAndTeam(unittest.IsolatedAsyncioTestCase):
         self.assertIn("deep_researcher", plan_agents)
         self.assertNotIn("fundamentals_analyst", plan_agents)
         self.assertEqual(plan_agents[-1], "deep_researcher")
+        self.assertEqual(
+            [item["agent"] for item in state["team_plan"]], plan_agents
+        )
         self.assertTrue(state["content"].endswith("final"))
 
     async def test_team_context_reuses_result_and_suppresses_duplicate_artifact(self):
@@ -242,3 +254,107 @@ class TestAgentAndTeam(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(sliced["_team_slice"])
         self.assertEqual(len(sliced["data"]["rows"]), 8)
         self.assertEqual(sliced["meta"]["rows"], 8)
+
+    async def test_team_repairs_planner_plan_that_omits_deep_researcher(self):
+        expert_calls = []
+
+        async def fake_complete_json(system, user, *, max_tokens=2000):
+            return {
+                "tasks": [
+                    {"agent": "event_scout", "task": "events"},
+                    {"agent": "market_analyst", "task": "market"},
+                    {"agent": "fundamentals_analyst", "task": "fundamentals"},
+                    {"agent": "predictor", "task": "forecast"},
+                ]
+            }
+
+        async def fake_run_expert_serial(agent_id, task, question, artifact_store, **kwargs):
+            expert_calls.append((agent_id, kwargs.get("prior_findings")))
+            yield {"type": "agent_findings", "agent": agent_id, "findings": agent_id, "tool_trace": []}
+
+        async def fake_run_agent(agent_id, messages, *, agent_def, state, artifact_store, max_rounds=3, emit_thinking=True):
+            state["content"] = "final"
+            if False:
+                yield {}
+
+        async def fake_artifact_store(kind, title, payload):
+            return {"id": "a1", "kind": kind, "title": title, "payload": payload}
+
+        with (
+            patch.object(team_mod, "complete_json", fake_complete_json),
+            patch.object(team_mod, "_run_expert_serial", fake_run_expert_serial),
+            patch.object(team_mod, "run_agent", fake_run_agent),
+        ):
+            state = {"content": "", "tool_trace": []}
+            events = [
+                event
+                async for event in team_mod.run_team(
+                    "预测 600519 未来30天",
+                    history=[],
+                    state=state,
+                    artifact_store=fake_artifact_store,
+                    team_members=None,
+                )
+            ]
+
+        plan = next(event["plan"] for event in events if event.get("phase") == "plan")
+        agents = [item["agent"] for item in plan]
+        self.assertEqual(len(agents), 5)
+        self.assertEqual(agents[-2:], ["deep_researcher", "predictor"])
+        self.assertEqual(set(agents), set(team_mod.EXPERT_IDS))
+        predictor_prior = next(prior for agent, prior in expert_calls if agent == "predictor")
+        self.assertIn("deep_researcher", predictor_prior)
+
+    async def test_graph_and_predictor_handoff_do_not_repeat_source_fetches(self):
+        captured = {}
+
+        async def fake_run_agent(agent_id, messages, *, agent_def, state, artifact_store, **kwargs):
+            captured[agent_id] = list(agent_def["skills"])
+            state["content"] = "完成"
+            if False:
+                yield {}
+
+        async def fake_artifact_store(kind, title, payload):
+            return {"id": f"{kind}_1", "kind": kind, "title": title, "payload": payload}
+
+        predictor_events = []
+        with patch.object(team_mod, "run_agent", fake_run_agent):
+            for agent_id in ("deep_researcher", "predictor"):
+                events = [
+                    event
+                    async for event in team_mod._run_expert_serial(
+                        agent_id,
+                        "任务",
+                        "研究 600519",
+                        fake_artifact_store,
+                        prior_findings={"market_analyst": "已有行情证据"},
+                        prior_tool_trace=[],
+                    )
+                ]
+                if agent_id == "predictor":
+                    predictor_events = events
+
+        self.assertEqual(captured["deep_researcher"], ["evidence_graph"])
+        self.assertNotIn("predictor", captured)
+        predictor_text = "".join(
+            event.get("delta", "") for event in predictor_events
+            if event.get("type") == "token"
+        )
+        self.assertIn("不在聊天阶段重复取数", predictor_text)
+        self.assertIn("不代表校准概率", predictor_text)
+
+    def test_graph_fallback_is_explicitly_insufficient_and_context_only(self):
+        graph = EvidenceGraph(question="未来30天怎么走")
+        evidence_id = graph.add_evidence(
+            "akshare", "market_research(600519)", "最新行情", "收盘价来自行情工具"
+        )
+
+        team_mod._ensure_minimum_graph_structure(graph, graph.question)
+
+        payload = graph.to_payload()
+        claim = next(node for node in payload["nodes"] if node["kind"] == "claim")
+        self.assertEqual(claim["status"], "insufficient")
+        self.assertEqual(claim["confidence"], 0.0)
+        self.assertEqual(payload["edges"][0]["relation"], "context")
+        self.assertEqual(payload["edges"][0]["dst"], evidence_id)
+        self.assertEqual(payload["stats"]["n_missing"], 1)
