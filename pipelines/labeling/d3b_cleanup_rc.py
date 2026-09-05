@@ -1,7 +1,10 @@
 """d3b: 清理 research_cache_team.jsonl — 剔 ok=false，去重（同一 event_id 留最后一条）。"""
 import json, shutil
 from collections import OrderedDict
-src='/workspace/pronoia_run/data_v3/audit/research_cache_team.jsonl'
+from pathlib import Path
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+src = str(_PROJECT_ROOT / "pronoia_run" / "data_v3" / "audit" / "research_cache_team.jsonl")
 rows=[]
 with open(src) as f:
     for l in f:

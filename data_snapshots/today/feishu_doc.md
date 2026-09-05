@@ -1406,7 +1406,7 @@ Team 置信度：均值 0.64，最低 0.50，最高 0.85
 明日（2026-09-05）收盘后执行验证：
 
 ```bash
-cd /root/Pronoia && /root/miniconda3/bin/python verify_today_predictions.py
+cd /root/Pronoia && /root/miniconda3/bin/python pipelines/today/verify_today_predictions.py
 ```
 
 脚本将：

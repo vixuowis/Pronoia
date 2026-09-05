@@ -4,8 +4,9 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 
-sys.path.insert(0, "/workspace/backend")
-sys.path.insert(0, "/workspace")
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_PROJECT_ROOT / "backend"))
+sys.path.insert(0, str(_PROJECT_ROOT))
 
 import numpy as np
 import pandas as pd
@@ -16,9 +17,9 @@ from app.event_backtest.labeller import (
     _car, _market_model_car,
 )
 
-events_file = Path("/workspace/pronoia_run/data_v3/events.jsonl")
-labels_file = Path("/workspace/pronoia_run/data_v3/labels.jsonl")
-log_file = Path("/workspace/pronoia_run/logs/d2_label.log")
+events_file = _PROJECT_ROOT / "pronoia_run" / "data_v3" / "events.jsonl"
+labels_file = _PROJECT_ROOT / "pronoia_run" / "data_v3" / "labels.jsonl"
+log_file = _PROJECT_ROOT / "pronoia_run" / "logs" / "d2_label.log"
 epsilon = 0.02
 
 LOG_FP = open(log_file, "w", buffering=1)

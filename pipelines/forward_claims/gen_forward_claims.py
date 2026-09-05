@@ -12,16 +12,17 @@ from __future__ import annotations
 import sys, json, time, argparse
 from pathlib import Path
 
-sys.path.insert(0, "/root/Pronoia/backtesting/rlvr/training")
-sys.path.insert(0, "/root/Pronoia/backtesting/rlvr/training/remote_scripts")
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_PROJECT_ROOT / "backtesting" / "rlvr" / "training"))
+sys.path.insert(0, str(_PROJECT_ROOT / "backtesting" / "rlvr" / "training" / "remote_scripts"))
 
 from papv_claims import parse_claims, settle_all, METRIC_PANEL  # noqa: E402
 from prompt_template_papv import build_messages_for_papv       # noqa: E402
 
 BASE_MODEL = "/root/Qwen3-8B"
-ADAPTER = "/root/Pronoia/pronoia_run/papv_v61/papv_mixed"
-EVENTS_FILE = "/root/Pronoia/pronoia_run/forward_test/events_forward.jsonl"
-OUT_FILE = "/root/Pronoia/pronoia_run/forward_test/claims_forward.jsonl"
+ADAPTER = str(_PROJECT_ROOT / "pronoia_run" / "papv_v61" / "papv_mixed")
+EVENTS_FILE = str(_PROJECT_ROOT / "pronoia_run" / "forward_test" / "events_forward.jsonl")
+OUT_FILE = str(_PROJECT_ROOT / "pronoia_run" / "forward_test" / "claims_forward.jsonl")
 
 
 def render_prompt(tok, messages):

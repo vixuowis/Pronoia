@@ -84,6 +84,34 @@ Pronoia 是一个开源的对话式 AI 金融研究工作台。
                             Ark LLM (OpenAI 兼容) · akshare 数据源
 ```
 
+## 📁 目录结构
+
+```
+pronoia/
+├── backend/                # FastAPI 后端主应用（app/ + tests/）
+│   └── app/
+│       ├── agents/         # Agent 团队（team / evidence_navigator / roster）
+│       ├── skills/         # 85+ 数据技能（akshare 行情/新闻/财务/事件研究…）
+│       ├── event_backtest/ # 事件驱动回测引擎（collector / labeller / metrics / arena）
+│       └── routes/         # REST 路由
+├── frontend/               # React 18 + Vite + Tailwind 前端
+├── pipelines/              # 运营数据管线脚本（按子域分层）
+│   ├── labeling/           # d2 标注 / d3 正文补齐 / d3b 缓存清理 / dx 环境诊断
+│   ├── forward_claims/     # 前向断言生成 / 结算 / 验证 + Team 批量推理
+│   ├── today/              # 今日事件收集 / 断言验证 / 汇总
+│   └── collect/            # 前向事件池采集
+├── scripts/                # 仓库级工具脚本（build_doc / start_d5 / ssh_helper …）
+├── backtesting/            # 回测数据集 + RLVR 训练/评估 + Judge AB
+├── pronoia_run/            # 线上推理工作区（数据快照 / 轨迹 / 运维脚本）
+├── data_snapshots/         # 已入库的数据快照（如 today/）
+├── docs/                   # 设计文档（含 xml/ 案例上下文）
+├── archive/                # 归档的临时/一次性产物
+├── pronoia · p · start.sh  # 入口（CLI / 开发启动）
+└── README.md · LICENSE · Dockerfile · .env.example
+```
+
+> 根目录只放入口与配置；所有可执行脚本按职责归入 `pipelines/` 或 `scripts/`。
+
 ## 🚀 快速开始
 
 ```bash
@@ -297,6 +325,7 @@ skill/prompt 策略更新」的长期自进化闭环。
 
 ## 📋 更新日志
 
+- **3.12.1** · 2026-09-05 · 修补：代码整理：运营管线脚本归入 pipelines/（labeling/forward_claims/today/collect）、today_data→data_snapshots、docxml→docs/xml、tmp_work→archive，统一路径为基于 __file__ 自动定位
 - **3.12.0** · 2026-08-21 · 功能：新增对话历史上下文继承（追问沿用前序Case）、对话失败/暂停醒目标识与一键重试卡片、Team模式4处静默阻塞点实时进度提示、回测中心重构（可插拔多指标分级展示、自动发现数据集、Arena横向比对、成本效果帕累托图）
 - **3.11.0** · 2026-08-20 · 功能：新增可插拔指标系统（18+ 指标 core/extended/breakdown 三级、列表页指标列动态切换）；新增 Arena 横向比对平台（同数据集多 Run 360° 评测：排名/雷达/显著性检验/事件级 H2H）；新增成本·效果二维散点图 + 帕累托边界分析（非支配排序 + L 型参考线，X/Y 轴可切换）；修复回测详情页 compat 层老数据无数值（acc/k/n/Wilson 从 bt_runs 标量字段 fallback）；Arena 创建候选仅收录已完成（status=done + done_events>0）的回测 Run
 - **3.10.0** · 2026-08-19 · 功能：多 horizon CAR 标签（T+3/7/15/30/60 + avg_all 加权平均）+ 6 个新 analyzer Skill（announcement_classifier / ar_decomposer / drift_context_analyzer / cn_ma_analyzer / cn_earnings_analyzer / us_ma_analyzer）+ Strict/Lenient 双口径 + 12 horizon ACC + confidence 分桶校准 + research_context 团队上下文共享 + backtesting/ 数据集目录（v1）

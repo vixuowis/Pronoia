@@ -15,7 +15,7 @@ from . import config, db
 from .log_bus import publish
 from .routes import admin, arena, backtest, cases, chat, logic, meta
 
-app = FastAPI(title="Pronoia", version="3.12.0", docs_url="/api/docs")
+app = FastAPI(title="Pronoia", version="3.12.1", docs_url="/api/docs")
 
 
 class TimingMiddleware(BaseHTTPMiddleware):

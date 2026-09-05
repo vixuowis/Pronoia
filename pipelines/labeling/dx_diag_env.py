@@ -1,13 +1,16 @@
 """诊断 config 是否能正确加载 ARK 密钥"""
 import sys, os
-sys.path.insert(0, '/workspace/backend')
 from pathlib import Path
 
-pr = Path('/workspace/backend/app/config.py').resolve().parents[1]
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_BACKEND_DIR = _PROJECT_ROOT / "backend"
+sys.path.insert(0, str(_BACKEND_DIR))
+
+pr = (_BACKEND_DIR / "app" / "config.py").resolve().parents[1]
 print("config PROJECT_ROOT parent =", pr)   # -> backend
-print("parent.parent (should be /workspace) =", pr.parent)
+print("parent.parent (project root) =", pr.parent)
 env_file = pr.parent / '.env'
-print("/workspace/.env exists:", env_file.exists())
+print("project .env exists:", env_file.exists())
 
 # 直接读 .env
 if env_file.exists():

@@ -3,14 +3,15 @@
   1. 所有事件：body = 优先用 event_text（非 notice 的已经是结构化正文）
   2. notice 类额外：body = "【公告标题】" + title + "\n【公告类型】" + event_type_l2 + "\n【摘要】" + event_text
   3. 保留 _body_source 字段标记补全来源，后续可重新遍历补深正文
-输出：/workspace/pronoia_run/data_v3/events_enriched.jsonl
+输出：pronoia_run/data_v3/events_enriched.jsonl
 """
 import json
 from pathlib import Path
 from collections import Counter
 
-SRC = Path("/workspace/pronoia_run/data_v3/events.jsonl")
-DST = Path("/workspace/pronoia_run/data_v3/events_enriched.jsonl")
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+SRC = _PROJECT_ROOT / "pronoia_run" / "data_v3" / "events.jsonl"
+DST = _PROJECT_ROOT / "pronoia_run" / "data_v3" / "events_enriched.jsonl"
 
 rows_in = [json.loads(l) for l in open(SRC, encoding="utf-8") if l.strip()]
 print(f"Read {len(rows_in)} rows from {SRC}")
