@@ -212,12 +212,8 @@ async def run_team_prompt(
             confidence = float(confidence_raw) if confidence_raw is not None else None
         except Exception:
             confidence = None
-        # I1 方案A硬闸：confidence<0.60 强制 neutral（0.60 为方向判别最低可信阈值，低于此即不应做方向性判断）
-        if confidence is not None and confidence < 0.60 and direction != "neutral":
-            direction = "neutral"
-            tag_conf = f"conf={confidence:.2f}<0.60→neutral"
-        else:
-            tag_conf = ""
+        # confidence 只表示方向判断的可靠程度，不再覆盖已判定的方向。
+        tag_conf = ""
         rationale = (str((obj or {}).get("rationale") or "").strip() or None)
         tag = f"variant={effective_variant} {tag_conf}".strip()
         pred = TeamPrediction(
@@ -284,7 +280,7 @@ A股（CN）先验：
 【Neutral 原则】
 - 目标比例 15~20%（非50%）。有≥2条一致信号时必须给出方向。
 - 仅在 |总分|≤2 且信号互相抵消时选 neutral。
-- confidence<0.50 时自动触发 neutral。
+- confidence 只表示可靠程度，不改变总分确定的方向。
 
 【Confidence 参考区间 — 非硬规则，根据信号质量灵活调整】
 - |总分|≥6 且无反向信号 → 0.70~0.85
@@ -349,7 +345,7 @@ A股(CN)：减持/定增偏空、财报略增有利好出尽效应(增速≥50%�
 【Neutral 使用原则】
 - 目标比例15~20%。有≥2条一致信号时必须给出方向。
 - 仅在信号互相抵消、|总分|≤2时选neutral。
-- confidence<0.50时自动触发neutral。
+- confidence只表示可靠程度，不改变总分确定的方向。
 - 不要因不确定就选neutral——不确定时应降低confidence而非放弃方向判断。
 
 【泛化原则】
@@ -568,11 +564,8 @@ async def run_team_full_one_event(
     if confidence is None:
         confidence = 0.55
 
-    # I1 方案A硬闸：confidence<0.60 强制 neutral（0.60 为方向判别最低可信阈值，低于此即不应做方向性判断）
+    # confidence 与方向解耦：保留字段以兼容历史 trajectory schema。
     applied_gate = False
-    if confidence < 0.60 and direction != "neutral":
-        direction = "neutral"
-        applied_gate = True
 
     # 落盘完整 trajectory（可被 `bt trajectory --event-id` 回放）
     ckpt_p = Path(trajectory_ckpt_dir)
@@ -619,14 +612,13 @@ async def run_team_full_one_event(
     }
     (ckpt_p / f"{eid}.json").write_text(_json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
 
-    gate_tag = f" [conf_gate: conf={confidence:.2f}<0.60→neutral]" if applied_gate else ""
     return TeamPrediction(
         event_id=eid,
         run_id=str(run_id),
         model_version=str(model_version),
         pred_direction=direction,
         confidence=float(confidence),
-        rationale=str(rationale) + gate_tag,
+        rationale=str(rationale),
     )
 
 
@@ -713,7 +705,8 @@ async def run_team_full_trajectory(
                             f"========== team_full fail(give up) {tag}  after {MAX_ATTEMPTS} attempts: {type(exc).__name__}: {exc} ==========\n{last_tb}",
                             file=_sys.stderr, flush=True,
                         )
-            # 所有尝试失败：Fallback 为 neutral abstain（与 I1 conf<0.52→neutral 硬闸口径一致）
+            # 所有尝试失败：Fallback 为 neutral abstain；这是执行失败兜底，
+            # 与模型正常返回的低 confidence 方向无关。
             exc_name = type(last_exc).__name__ if last_exc else "Unknown"
             exc_msg = str(last_exc)[:400] if last_exc else ""
             fallback_p = TeamPrediction(

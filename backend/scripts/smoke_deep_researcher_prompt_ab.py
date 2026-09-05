@@ -145,7 +145,7 @@ async def _judge_direction(event: dict[str, Any], payload: dict[str, Any]) -> di
    美股 beat/增长上修偏 up，miss/稀释偏 down。先验只能在图中证据支持时使用。
 
 先综合 supports/contradicts、claim status 与 missing；必须在 rationale 中简述净分依据。
-confidence 小于 0.60 的方向判断会被系统改为 neutral。
+confidence 只表示判断的可靠程度，不改变净分确定的方向。
 只输出单个 JSON：{{"pred_direction":"up|down|neutral","confidence":0.0,"rationale":"中文理由"}}
 
 EVENT_PACKET:
@@ -179,9 +179,7 @@ EVIDENCE_GRAPH:
     except (TypeError, ValueError):
         confidence = 0.5
     raw_direction = direction
-    gate_applied = confidence < 0.60 and direction != "neutral"
-    if gate_applied:
-        direction = "neutral"
+    gate_applied = False
     return {
         "pred_direction": direction,
         "raw_direction": raw_direction,

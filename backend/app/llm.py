@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextvars import ContextVar
 import json
 from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 
@@ -16,6 +17,24 @@ from . import config
 from .skills.registry import REGISTRY, ensure_skills_loaded, serialize_tool_result, tool_schema_subset, tools_for_agent
 
 _client: Optional[AsyncOpenAI] = None
+_skill_depth: ContextVar[int] = ContextVar("skill_execution_depth", default=0)
+_SLOW_NESTED_SKILLS = frozenset({"event_study"})
+
+
+def _skill_timeout(name: str, category: str, depth: int) -> float:
+    """Choose a deadline that leaves the calling composite time to aggregate.
+
+    Root calls preserve the historical FEVER_SKILL_TIMEOUT.  Nested composite
+    skills get a near-root budget, ordinary atomic calls get a shorter budget,
+    and known multi-provider atomics such as event_study get a small extension.
+    """
+    if depth <= 0:
+        return config.SKILL_TIMEOUT
+    if category == "skill":
+        return min(config.SKILL_COMPOSITE_SUB_TIMEOUT, config.SKILL_TIMEOUT)
+    if name in _SLOW_NESTED_SKILLS:
+        return min(config.SKILL_SLOW_SUB_TIMEOUT, config.SKILL_TIMEOUT)
+    return min(config.SKILL_SUB_TIMEOUT, config.SKILL_TIMEOUT)
 
 
 async def _create_with_hard_timeout(awaitable):
@@ -93,20 +112,26 @@ async def execute_skill(name: str, args: dict) -> dict:
     sd = REGISTRY.get(name)
     if sd is None:
         return {"ok": False, "error": f"未知技能: {name}"}
+    depth = _skill_depth.get()
+    timeout = _skill_timeout(name, sd.category, depth)
+    depth_token = _skill_depth.set(depth + 1)
     try:
         if asyncio.iscoroutinefunction(sd.handler):
             return await asyncio.wait_for(
-                sd.handler(**args), timeout=config.SKILL_TIMEOUT
+                sd.handler(**args), timeout=timeout
             )
         return await asyncio.wait_for(
-            asyncio.to_thread(sd.handler, **args), timeout=config.SKILL_TIMEOUT
+            asyncio.to_thread(sd.handler, **args), timeout=timeout
         )
     except asyncio.TimeoutError:
-        return {"ok": False, "error": f"技能 {name} 执行超时（>{int(config.SKILL_TIMEOUT)}s）"}
+        scope = "顶层" if depth == 0 else "子技能"
+        return {"ok": False, "error": f"技能 {name} 执行超时（>{timeout:g}s，{scope}）"}
     except TypeError as e:
         return {"ok": False, "error": f"技能参数错误: {e}"}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"技能执行失败: {type(e).__name__}: {e}"}
+    finally:
+        _skill_depth.reset(depth_token)
 
 
 def _preview(result: dict) -> str:

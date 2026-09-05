@@ -221,18 +221,16 @@ async def announcement_classifier(title: str, text: str = "",
 
 
 # ====== ar_decomposer ======
-# T0 AR 主动/被动分解：解决 case study 缺陷一
-# "基准跌导致的虚假超额"被当成方向信号。
-# 例：NFLX +0.23%, QQQ -1.86%, AR=+2.09% → 主动收益 +0.23%, 被动超额 +1.86%
-# 只有主动收益有方向信号价值。
+# T0 benchmark-relative 信号：评测目标是相对基准的 CAR，因此方向必须来自
+# stock_return - benchmark_return，而不能来自个股绝对涨跌。没有 beta 估计时，
+# 普通 AR 是可用的最小代理；未来如有 beta，可替换为 residual return。
 
 @skill(
     "ar_decomposer",
-    "T0 超额收益(AR)主动/被动分解：将 AR 分解为'个股主动涨跌'和'基准波动被动超额'。"
-    "解决问题：基准大跌时个股微涨产生虚假 AR，被误判为 up 信号。"
+    "T0 benchmark-relative 收益信号：使用 AR=个股涨跌-基准涨跌判断方向。"
+    "个股上涨但跑输基准应判 down；个股下跌但跑赢基准应判 up。"
     "输入：stock_return（个股 T0 涨跌%）、benchmark_return（基准 T0 涨跌%）。"
-    "输出：active_return（主动收益，有方向信号价值）、"
-    "passive_excess（被动超额，来自基准波动，噪声）、signal_valid（是否可用于方向判断）。",
+    "输出 relative_return、signal_direction 与 signal_valid；active_* 字段仅为旧调用方兼容别名。",
     {
         "type": "object",
         "properties": {
@@ -241,7 +239,7 @@ async def announcement_classifier(title: str, text: str = "",
             "benchmark_return_pct": {"type": "number",
                                      "description": "基准 T0 当日涨跌幅（%，如 -1.86 表示 -1.86%）"},
             "threshold_pct": {"type": "number",
-                              "description": "主动收益绝对值低于此阈值时 signal_valid=False（默认 0.5%）"},
+                              "description": "相对 AR 绝对值低于此阈值时 signal_valid=False（默认 0.5%）"},
         },
         "required": ["stock_return_pct", "benchmark_return_pct"],
         "additionalProperties": False,
@@ -253,31 +251,35 @@ async def ar_decomposer(stock_return_pct: float, benchmark_return_pct: float,
                         threshold_pct: float = 0.5) -> dict:
     stock = float(stock_return_pct)
     bench = float(benchmark_return_pct)
-    ar = stock - bench  # 传统 AR
-    active = stock  # 主动收益 = 个股绝对涨跌
-    passive = -bench  # 被动超额 = 来自基准波动的部分（基准跌时为正，基准涨时为负）
+    ar = stock - bench
 
-    signal_valid = abs(active) >= threshold_pct
-    # 主动收益方向（只看个股自己涨跌了没有）
-    if active > threshold_pct:
-        active_direction = "up"
-    elif active < -threshold_pct:
-        active_direction = "down"
+    threshold = abs(float(threshold_pct))
+    signal_valid = abs(ar) >= threshold
+    if ar >= threshold:
+        signal_direction = "up"
+    elif ar <= -threshold:
+        signal_direction = "down"
     else:
-        active_direction = "neutral"
+        signal_direction = "neutral"
 
     return ok({
         "ar_pct": round(ar, 4),
-        "active_return_pct": round(active, 4),
-        "passive_excess_pct": round(passive, 4),
+        "relative_return_pct": round(ar, 4),
+        "stock_return_pct": round(stock, 4),
+        "benchmark_return_pct": round(bench, 4),
         "signal_valid": signal_valid,
-        "active_direction": active_direction,
+        "signal_direction": signal_direction,
+        # Backward-compatible aliases.  Directional consumers must use the
+        # relative signal rather than the sign of stock_return_pct.
+        "active_return_pct": round(ar, 4),
+        "passive_excess_pct": 0.0,
+        "active_direction": signal_direction,
         "note": (
             f"个股 {'涨' if stock > 0 else '跌'} {abs(stock):.2f}%，"
             f"基准 {'涨' if bench > 0 else '跌'} {abs(bench):.2f}%，"
-            f"AR={ar:+.2f}% 但其中被动超额={passive:+.2f}%。"
-            + ("主动收益有方向信号价值。" if signal_valid
-               else "个股自身涨跌幅度太小，AR 主要来自基准波动，方向信号无效。")
+            f"benchmark-relative AR={ar:+.2f}%。"
+            + (f"相对方向信号有效（{signal_direction}）。" if signal_valid
+               else "相对 AR 落在噪声阈值内，方向信号无效。")
         ),
     }, meta("ar_decomposer", 1))
 
