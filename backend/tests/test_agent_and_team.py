@@ -4,6 +4,11 @@ from unittest.mock import patch
 
 import backend.app.agents.team as team_mod
 import backend.app.llm as llm_mod
+from backend.app.agents.roster import (
+    get_agent,
+    resolve_deep_researcher_prompt_variant,
+    system_prompt,
+)
 from backend.app.agents.research_context import ResearchContext
 from backend.app.llm import run_agent
 from backend.app.agents.roster import AGENTS
@@ -12,6 +17,22 @@ from backend.app.skills.registry import ensure_skills_loaded, tools_for_agent
 
 
 class TestAgentAndTeam(unittest.IsolatedAsyncioTestCase):
+    def test_deep_researcher_prompt_variants_are_registered(self):
+        self.assertEqual(resolve_deep_researcher_prompt_variant("v0"), "deep_researcher_v0")
+        self.assertEqual(
+            resolve_deep_researcher_prompt_variant("claim_v2"),
+            "deep_researcher_claim_v2",
+        )
+        old_prompt = system_prompt("deep_researcher", "deep_researcher_v0")
+        new_prompt = system_prompt("deep_researcher", "deep_researcher_claim_v2")
+        self.assertIn("第 8 轮（必做）", old_prompt)
+        self.assertIn("Evidence → Claim → Link → audit → export", new_prompt)
+        self.assertIn("audit()", new_prompt)
+        self.assertNotEqual(
+            get_agent("deep_researcher", "v0")["persona"],
+            get_agent("deep_researcher", "claim_v2")["persona"],
+        )
+
     def test_predictor_owns_async_scenario_handoff_without_probability_claim(self):
         predictor = AGENTS["predictor"]
         self.assertIn("异步多智能体事件推演", predictor["description"])

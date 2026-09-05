@@ -14,6 +14,8 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
+from ..skills.price_data import PriceFetchError, fetch_price_frame
+
 try:
     import akshare as ak  # type: ignore
 except Exception:
@@ -729,6 +731,24 @@ def _compute_cars_for_events(
     print(f"[INFO] Close universe: {len(all_tickers)} tickers; window {sd_iso} ~ {ed_iso}")
     closes_by_ticker: dict[str, pd.Series] = {}
 
+    def shared_close(symbol: str, market: str) -> Optional[pd.Series]:
+        """Use the same stock/ETF/index provider waterfall as research skills."""
+        try:
+            fetched = fetch_price_frame(
+                symbol,
+                sd_iso,
+                ed_iso,
+                market=market,
+                adjust="qfq",
+            )
+        except (PriceFetchError, ValueError) as exc:
+            print(f"[WARN] shared price route {market} {symbol}: {exc}")
+            return None
+        df = fetched.frame
+        dates = pd.to_datetime(df["date"], errors="coerce").dt.date
+        series = pd.Series(df["close"].astype(float).values, index=dates)
+        return series[~series.index.duplicated()].sort_index()
+
     # ===== 分类 =====
     # US 资产（非 .SS/.SZ 的非 9 位格式，例如 SPY, QQQ, AAPL, NFLX, AMZN）
     us_map: dict[str, str] = {}
@@ -781,7 +801,7 @@ def _compute_cars_for_events(
         n_ok = 0
         n_tot_us = len(us_map)
         for idx, (canonical, sym) in enumerate(us_map.items(), 1):
-            s = _ak_us_hist(sym, sd_iso, ed_iso)
+            s = shared_close(sym, "US")
             if s is not None and len(s) > 0:
                 closes_by_ticker[canonical] = s
                 n_ok += 1
@@ -794,7 +814,7 @@ def _compute_cars_for_events(
         n_ok = 0
         n_tot_cn = len(cn_asset_map)
         for idx, (canonical, sym) in enumerate(cn_asset_map.items(), 1):
-            s = _ak_cn_hist(sym, sd_iso, ed_iso)
+            s = shared_close(sym, "CN")
             if s is not None and len(s) > 0:
                 closes_by_ticker[canonical] = s
                 n_ok += 1
@@ -807,7 +827,7 @@ def _compute_cars_for_events(
         n_ok = 0
         n_tot_ci = len(cn_index_map)
         for idx, (canonical, sym) in enumerate(cn_index_map.items(), 1):
-            s = _ak_cn_index_hist(sym, sd_iso, ed_iso)
+            s = shared_close(sym, "CN")
             if s is not None and len(s) > 0:
                 closes_by_ticker[canonical] = s
                 n_ok += 1

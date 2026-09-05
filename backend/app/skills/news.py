@@ -128,12 +128,14 @@ def get_global_news(limit: int = 15) -> dict:
         "properties": {
             "date": {"type": "string", "description": "YYYYMMDD 或 YYYY-MM-DD，默认今天"},
             "keyword": {"type": "string", "description": "可选，按股票代码/名称/公告标题过滤"},
+            "limit": {"type": "integer", "description": "最多返回条数（1-100），默认 30"},
         },
         "required": [],
     },
     internal=True,
 )
-def get_announcements(date: Optional[str] = None, keyword: Optional[str] = None) -> dict:
+def get_announcements(date: Optional[str] = None, keyword: Optional[str] = None,
+                      limit: int = 30) -> dict:
     try:
         d8 = norm_date(date, _dt.date.today())
         df = ak.stock_notice_report(symbol="全部", date=d8)
@@ -149,7 +151,7 @@ def get_announcements(date: Optional[str] = None, keyword: Optional[str] = None)
                 | df["公告标题"].astype(str).str.contains(kw, na=False)
             )
             df = df[mask]
-        df = df.head(30)
+        df = df.head(max(1, min(int(limit or 30), 100)))
         items = [{
             "title": _clip(r.get("公告标题"), 120),
             "date": str(r.get("公告日期") or d8)[:10],

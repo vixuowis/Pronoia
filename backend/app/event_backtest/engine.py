@@ -212,12 +212,8 @@ async def run_team_prompt(
             confidence = float(confidence_raw) if confidence_raw is not None else None
         except Exception:
             confidence = None
-        # I1 方案A硬闸：confidence<0.60 强制 neutral（0.60 为方向判别最低可信阈值，低于此即不应做方向性判断）
-        if confidence is not None and confidence < 0.60 and direction != "neutral":
-            direction = "neutral"
-            tag_conf = f"conf={confidence:.2f}<0.60→neutral"
-        else:
-            tag_conf = ""
+        # confidence 只表示方向判断的可靠程度，不再覆盖已判定的方向。
+        tag_conf = ""
         rationale = (str((obj or {}).get("rationale") or "").strip() or None)
         tag = f"variant={effective_variant} {tag_conf}".strip()
         pred = TeamPrediction(
@@ -284,7 +280,7 @@ A股（CN）先验：
 【Neutral 原则】
 - 目标比例 15~20%（非50%）。有≥2条一致信号时必须给出方向。
 - 仅在 |总分|≤2 且信号互相抵消时选 neutral。
-- confidence<0.50 时自动触发 neutral。
+- confidence 只表示可靠程度，不改变总分确定的方向。
 
 【Confidence 参考区间 — 非硬规则，根据信号质量灵活调整】
 - |总分|≥6 且无反向信号 → 0.70~0.85
@@ -349,7 +345,7 @@ A股(CN)：减持/定增偏空、财报略增有利好出尽效应(增速≥50%�
 【Neutral 使用原则】
 - 目标比例15~20%。有≥2条一致信号时必须给出方向。
 - 仅在信号互相抵消、|总分|≤2时选neutral。
-- confidence<0.50时自动触发neutral。
+- confidence只表示可靠程度，不改变总分确定的方向。
 - 不要因不确定就选neutral——不确定时应降低confidence而非放弃方向判断。
 
 【泛化原则】
@@ -405,9 +401,9 @@ async def run_team_full_one_event(
     eid = getattr(event, "event_id", None) or event["event_id"]
     packet = _event_prompt(event)
 
-    # system prompt variant 目前不影响真 Team Agent（真 Team Agent 自己有 PLANNER_INSTRUCTION + 各专家 skill instruction），
-    # 但我们把 variant 塞进 trajectory 元信息，便于后续审计 / case-study 分类。
     variant_effective = str(system_prompt_variant or "v0")
+    from ..agents.roster import resolve_deep_researcher_prompt_variant
+    deep_researcher_prompt_variant = resolve_deep_researcher_prompt_variant(variant_effective)
 
     market = getattr(event, "market", "")
     symbol = getattr(event, "symbol", "")
@@ -441,7 +437,9 @@ async def run_team_full_one_event(
     #    （剔除 predictor，避免多跑 1 轮 LLM + 无意义多情景）
     # 2) question 中追加「预解上下文」：明确告诉专家 symbol/benchmark/事件类型、
     #    以及 as_of_packet 已经包含原文，让 expert 少做 stock_overview 解析型工具调用
-    team_kwargs: dict = {}
+    team_kwargs: dict = {
+        "agent_prompt_variants": {"deep_researcher": deep_researcher_prompt_variant},
+    }
     if FAST:
         team_kwargs["team_members"] = [
             "market_analyst", "fundamentals_analyst", "deep_researcher",
@@ -566,11 +564,8 @@ async def run_team_full_one_event(
     if confidence is None:
         confidence = 0.55
 
-    # I1 方案A硬闸：confidence<0.60 强制 neutral（0.60 为方向判别最低可信阈值，低于此即不应做方向性判断）
+    # confidence 与方向解耦：保留字段以兼容历史 trajectory schema。
     applied_gate = False
-    if confidence < 0.60 and direction != "neutral":
-        direction = "neutral"
-        applied_gate = True
 
     # 落盘完整 trajectory（可被 `bt trajectory --event-id` 回放）
     ckpt_p = Path(trajectory_ckpt_dir)
@@ -590,6 +585,7 @@ async def run_team_full_one_event(
         "run_id": str(run_id),
         "model_version": str(model_version),
         "system_prompt_variant": variant_effective,
+        "deep_researcher_prompt_variant": deep_researcher_prompt_variant,
         "llm_trajectory_stats": {
             "n_sse_events": n_sse_events_total,
             "n_sse_events_stored": len(traj_events),
@@ -616,14 +612,13 @@ async def run_team_full_one_event(
     }
     (ckpt_p / f"{eid}.json").write_text(_json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
 
-    gate_tag = f" [conf_gate: conf={confidence:.2f}<0.60→neutral]" if applied_gate else ""
     return TeamPrediction(
         event_id=eid,
         run_id=str(run_id),
         model_version=str(model_version),
         pred_direction=direction,
         confidence=float(confidence),
-        rationale=str(rationale) + gate_tag,
+        rationale=str(rationale),
     )
 
 
@@ -710,7 +705,8 @@ async def run_team_full_trajectory(
                             f"========== team_full fail(give up) {tag}  after {MAX_ATTEMPTS} attempts: {type(exc).__name__}: {exc} ==========\n{last_tb}",
                             file=_sys.stderr, flush=True,
                         )
-            # 所有尝试失败：Fallback 为 neutral abstain（与 I1 conf<0.52→neutral 硬闸口径一致）
+            # 所有尝试失败：Fallback 为 neutral abstain；这是执行失败兜底，
+            # 与模型正常返回的低 confidence 方向无关。
             exc_name = type(last_exc).__name__ if last_exc else "Unknown"
             exc_msg = str(last_exc)[:400] if last_exc else ""
             fallback_p = TeamPrediction(
@@ -774,6 +770,21 @@ _PROMPT_VARIANT_CATALOG: list[dict[str, str]] = [
         "label": "merged · cnv2 + usv1 自动路由",
         "description": "混合数据集时最常用：CN 走 cnv2，US 自动切到 usv1",
         "market_hint": "CN + US（按每条 event.market 动态选择）",
+    },
+]
+
+_TEAM_FULL_PROMPT_VARIANT_CATALOG: list[dict[str, str]] = [
+    {
+        "id": "deep_researcher_v0",
+        "label": "Deep Researcher v0 · 原始流程",
+        "description": "固定 8 轮节奏的原始 Evidence Graph prompt，作为 A/B 基线。",
+        "market_hint": "CN + US；只改变 Deep Researcher persona",
+    },
+    {
+        "id": "deep_researcher_claim_v2",
+        "label": "Deep Researcher claim-v2 · Claim 质量版",
+        "description": "Evidence→Claim→Link→audit→export 闭环，强化原子 Claim、关系语义和缺口审计。",
+        "market_hint": "CN + US；只改变 Deep Researcher persona",
     },
 ]
 
@@ -862,8 +873,19 @@ def list_prompt_variants(runner: str) -> list[dict[str, str]]:
         return (note.rstrip() + "\n" + "=" * 64 + "\n" + base_text.strip()).strip()
 
     if runner == "team_full":
+        from ..agents.roster import DEEP_RESEARCHER_PROMPT_VARIANTS
         tmpl = TEAM_FULL_QUESTION_TEMPLATE.strip()
-        return [{**item, "prompt_text": _with_note(tmpl, item["id"])} for item in _PROMPT_VARIANT_CATALOG]
+        return [
+            {
+                **item,
+                "prompt_text": (
+                    DEEP_RESEARCHER_PROMPT_VARIANTS[item["id"]].strip()
+                    + "\n" + "=" * 64 + "\n"
+                    + tmpl
+                ),
+            }
+            for item in _TEAM_FULL_PROMPT_VARIANT_CATALOG
+        ]
     # team_prompt 与其他：统一走单一 system prompt 判别
     sys_prompt = _build_system_prompt("v0")
     return [{**item, "prompt_text": _with_note(sys_prompt, item["id"])} for item in _PROMPT_VARIANT_CATALOG]

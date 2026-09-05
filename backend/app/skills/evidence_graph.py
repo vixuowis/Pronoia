@@ -46,6 +46,9 @@ from .registry import err, meta, ok, skill
 _CURRENT_GRAPH: contextvars.ContextVar[Optional["EvidenceGraph"]] = contextvars.ContextVar(
     "evidence_graph_var", default=None
 )
+_DEFER_EXPORT_ARTIFACT: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "evidence_graph_defer_export_artifact", default=False
+)
 
 
 def eg_attach(graph: "EvidenceGraph") -> contextvars.Token:
@@ -55,6 +58,20 @@ def eg_attach(graph: "EvidenceGraph") -> contextvars.Token:
 
 def eg_detach(token: contextvars.Token) -> None:
     _CURRENT_GRAPH.reset(token)
+
+
+def eg_defer_export_artifact(enabled: bool = True) -> contextvars.Token:
+    """Temporarily keep ``export`` as a graph snapshot, not a persisted artifact.
+
+    Team-mode Evidence Navigator may execute more than one graph-editing pass.
+    Deferring intermediate exports avoids persisting stale duplicate graph
+    artifacts; the orchestration layer persists one final snapshot instead.
+    """
+    return _DEFER_EXPORT_ARTIFACT.set(bool(enabled))
+
+
+def eg_restore_export_artifact(token: contextvars.Token) -> None:
+    _DEFER_EXPORT_ARTIFACT.reset(token)
 
 
 def get_current_graph() -> Optional["EvidenceGraph"]:
@@ -817,14 +834,15 @@ def _eg_export(format: str = "markdown") -> dict:
             )
         # markdown：作为 artifact 落库
         md = g.to_markdown()
-        artifact = {
+        artifact = None if _DEFER_EXPORT_ARTIFACT.get() else {
             "kind": "graph",
             "title": "证据图",
             "payload": g.to_payload(),
         }
         return ok(
             {"format": "markdown", "markdown": md,
-             "graph_stats": g._counts(), "audit": g.audit()},
+             "graph_stats": g._counts(), "audit": g.audit(),
+             "artifact_deferred": artifact is None},
             meta("evidence_graph", len(g.nodes) + len(g.edges)),
             artifact=artifact,
         )

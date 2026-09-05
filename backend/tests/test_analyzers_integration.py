@@ -100,10 +100,10 @@ class TestAnnouncementClassifier:
 
 
 class TestARDecomposer:
-    """T0 AR 主动/被动分解测试"""
+    """T0 benchmark-relative AR 方向信号测试"""
 
     def test_passive_ar_nflx(self):
-        """N01 NFLX: AR=+2.09% 但主动收益只有 0.23% → signal_valid=False"""
+        """NFLX 虽只涨0.23%，但跑赢基准2.09% → relative up。"""
         from app.skills.analyzers import ar_decomposer
         result = asyncio.run(ar_decomposer(
             stock_return_pct=0.23, benchmark_return_pct=-1.86,
@@ -111,10 +111,10 @@ class TestARDecomposer:
         assert result["ok"]
         d = result["data"]
         assert d["ar_pct"] == pytest.approx(2.09, abs=0.01)
-        assert d["active_return_pct"] == 0.23
-        assert d["passive_excess_pct"] == pytest.approx(1.86, abs=0.01)
-        assert d["signal_valid"] is False
-        assert d["active_direction"] == "neutral"
+        assert d["relative_return_pct"] == pytest.approx(2.09, abs=0.01)
+        assert d["signal_valid"] is True
+        assert d["signal_direction"] == "up"
+        assert d["active_direction"] == "up"
 
     def test_active_ar_huanlan(self):
         """P06 瀚蓝环境: 主动收益=-3.02% → signal_valid=True, direction=down"""
@@ -124,9 +124,9 @@ class TestARDecomposer:
         ))
         assert result["ok"]
         d = result["data"]
-        assert d["active_return_pct"] == -3.02
+        assert d["relative_return_pct"] == pytest.approx(-5.41, abs=0.01)
         assert d["signal_valid"] is True
-        assert d["active_direction"] == "down"
+        assert d["signal_direction"] == "down"
 
     def test_strong_up_signal(self):
         """强 up 主动收益"""
@@ -136,8 +136,20 @@ class TestARDecomposer:
         ))
         assert result["ok"]
         d = result["data"]
-        assert d["active_direction"] == "up"
+        assert d["signal_direction"] == "up"
         assert d["signal_valid"] is True
+
+    def test_absolute_up_but_relative_down(self):
+        """个股上涨但跑输基准时，benchmark-relative 方向必须为 down。"""
+        from app.skills.analyzers import ar_decomposer
+        result = asyncio.run(ar_decomposer(
+            stock_return_pct=0.8, benchmark_return_pct=1.5,
+        ))
+        assert result["ok"]
+        d = result["data"]
+        assert d["relative_return_pct"] == pytest.approx(-0.7, abs=0.01)
+        assert d["signal_valid"] is True
+        assert d["signal_direction"] == "down"
 
 
 class TestDriftContextAnalyzer:
