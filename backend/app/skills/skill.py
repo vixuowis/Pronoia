@@ -28,6 +28,7 @@ from typing import Any
 
 from ..llm import execute_skill
 from .market import is_a_share_index_symbol, is_us_symbol
+from .price_data import resolve_security_ref
 from .registry import err, meta, ok, skill
 
 
@@ -74,6 +75,20 @@ def _summarize_subs(results: list[dict]) -> dict:
         "data_points": data_points,
         "composed": [],  # 由调用方补充
     }
+
+
+def _finalize_composite(result: dict, summary: dict, name: str) -> dict:
+    """Expose partial failure honestly instead of reporting a false success."""
+    fail_count = int(summary.get("fail_count") or 0)
+    ok_count = int(summary.get("ok_count") or 0)
+    if fail_count:
+        result["degraded"] = True
+    if ok_count == 0:
+        result["ok"] = False
+        errors = summary.get("errors") or []
+        detail = "；".join(str(e) for e in errors[:3]) or "未知失败"
+        result["error"] = f"{name} 的所有子技能均失败：{detail}"
+    return result
 
 
 def _collect_artifacts(results: list[dict]) -> list[dict]:
@@ -191,18 +206,19 @@ async def evidence_graph(action: str, **kwargs) -> dict:
 async def market_research(symbol: str, lookback_days: int = 60,
                           focus: list[str] | None = None) -> dict:
     raw = (symbol or "").strip()
-    us = bool(raw) and is_us_symbol(raw)
+    try:
+        security = resolve_security_ref(raw)
+    except ValueError as exc:
+        return err(str(exc))
+    us = security.market == "US"
     focus = focus or ["price", "sector", "flow"]
     if us:
-        # 美股：akshare 无 US 行业/资金流/龙虎榜，强制只跑 price + 美股专属子集
-        # （实时行情 + 公司简介，让 market_research 在美股场景下不至于只返回 K 线）
-        sym = raw.upper()
+        # 美股默认只拉单标的历史价格。全市场 spot 和雪球 company-info
+        # 都是昂贵/需认证的补充接口，不应拖垮核心行情成功率。
+        sym = security.symbol
         focus_eff = ["price"]
     else:
-        code = "".join(ch for ch in raw if ch.isdigit())[-6:]
-        if len(code) != 6:
-            return err(f"symbol 不合法: {symbol}")
-        sym = code
+        sym = security.symbol
         focus_eff = focus
     from datetime import datetime, timedelta
     calendar_lookback = lookback_days if us else max(lookback_days * 2 + 30, lookback_days)
@@ -211,17 +227,14 @@ async def market_research(symbol: str, lookback_days: int = 60,
     tasks: list[tuple[str, dict]] = []
     if "price" in focus_eff:
         tasks.append(("get_stock_daily", {"symbol": sym, "start_date": start, "end_date": end, "adjust": "qfq"}))
-        if us:
-            # 美股追加：实时行情（spot）+ 公司简介（info），填补 ak share 无 US 行业/资金流的口子
-            tasks.append(("get_us_stock_spot", {"symbol": sym}))
-            tasks.append(("get_us_stock_info", {"symbol": sym}))
     if not us:
         if "sector" in focus_eff:
-            tasks.append(("list_industry_boards", {"symbol": sym}))
-            tasks.append(("get_board_change", {"symbol": sym}))
+            # 这两个 atomic 返回全市场板块上下文，不接受个股 symbol。
+            tasks.append(("list_industry_boards", {"sort_by": "涨跌幅", "limit": 30}))
+            tasks.append(("get_board_change", {"sort_by": "涨跌幅", "limit": 50}))
         if "flow" in focus_eff:
-            tasks.append(("get_industry_fund_flow", {"symbol": sym}))
-            tasks.append(("get_sector_fund_flow_rank", {"indicator": "今日"}))
+            tasks.append(("get_industry_fund_flow", {"sort_by": "净额", "limit": 30}))
+            tasks.append(("get_sector_fund_flow_rank", {"board_type": "industry", "limit": 30}))
         if "lhb" in focus_eff:
             # 龙虎榜：日期范围需要 sub-tool 支持，先尝试今天
             tasks.append(("get_lhb", {"start_date": start, "end_date": end}))
@@ -257,6 +270,7 @@ async def market_research(symbol: str, lookback_days: int = 60,
         break
     out: dict = {"symbol": sym, "lookback_days": lookback_days, "focus": focus_eff,
                  "market": "美股" if us else "A股",
+                 "security_kind": security.kind,
                  "price_metrics": price_metrics,
                  "sub_results": [{"skill": n, "ok": r.get("ok"),
                                   "preview": _clip(str(r.get("data") or r.get("error")), 200)}
@@ -267,11 +281,11 @@ async def market_research(symbol: str, lookback_days: int = 60,
         disabled = [x for x in ("sector", "flow", "lhb") if x in focus]
         if disabled:
             out["note"] = f"美股路径不支持 {','.join(disabled)}（akshare 无 US 接口），仅返回价格"
-    return ok(
+    return _finalize_composite(ok(
         out,
         meta("market_research", len(tasks)),
         artifacts=_collect_artifacts(results) or None,
-    )
+    ), summary, "market_research")
 
 
 # ============================================================== post_market_outlook
@@ -317,7 +331,8 @@ async def post_market_outlook(symbol: str, lookback_days: int = 30) -> dict:
         ("get_stock_daily", {"symbol": sym, "start_date": start, "end_date": end, "adjust": "qfq"}),
         ("get_industry_fund_flow", {"sort_by": "净额", "limit": 20}),
         ("get_individual_fund_flow_rank", {"limit": 10}),
-        ("list_industry_boards", {"symbol": sym}) if not us else ("get_global_news", {"limit": 8}),
+        (("list_industry_boards", {"sort_by": "涨跌幅", "limit": 30})
+         if not us else ("get_global_news", {"limit": 8})),
     ]
     # 个股新闻仅 A 股可拉，美股已在上面用 global news 替代
     if not us:
@@ -365,7 +380,7 @@ async def post_market_outlook(symbol: str, lookback_days: int = 30) -> dict:
             news_titles = [(n.get("title") or "")[:80] for n in d[:6]]
         elif name == "list_industry_boards" and isinstance(d, list) and d:
             sector_names = [(r.get("板块名称") or r.get("name") or "") for r in d[:3]]
-    return ok(
+    result = ok(
         {
             "symbol": sym, "market": "美股" if us else "A股",
             "lookback_days": lookback_days,
@@ -380,6 +395,7 @@ async def post_market_outlook(symbol: str, lookback_days: int = 30) -> dict:
         artifacts=_collect_artifacts(results) or None,
     ) | ({"note": "美股 ticker 已用全球快讯替代个股新闻；预测维度在 predictor Agent 中完成"}
          if us else {})
+    return _finalize_composite(result, summary, "post_market_outlook")
 
 
 # ========================================================== financial_research
@@ -435,7 +451,7 @@ async def financial_research(symbol: str, period: str = "annual") -> dict:
     results = await _gather_sub(tasks)
     summary = _summarize_subs(results)
     summary["composed"] = [n for n, _ in tasks]
-    return ok(
+    return _finalize_composite(ok(
         {"symbol": sym, "period": period, "market": market_label,
          "sub_results": [{"skill": n, "ok": r.get("ok"),
                           "preview": _clip(str(r.get("data") or r.get("error")), 200)}
@@ -443,7 +459,7 @@ async def financial_research(symbol: str, period: str = "annual") -> dict:
          **summary},
         meta("financial_research", len(tasks)),
         artifacts=_collect_artifacts(results) or None,
-    )
+    ), summary, "financial_research")
 
 
 # ================================================================== news_intel
@@ -518,7 +534,7 @@ async def news_intel(symbol: str | None = None,
     results = await _gather_sub(tasks)
     summary = _summarize_subs(results)
     summary["composed"] = [n for n, _ in tasks]
-    return ok(
+    result = ok(
         {"symbol": code or (raw_symbol or None), "kind": kind,
          "market": "美股" if us_stock else ("A股" if code else "全局"),
          "sub_results": [{"skill": n, "ok": r.get("ok"),
@@ -528,6 +544,7 @@ async def news_intel(symbol: str | None = None,
         meta("news_intel", len(tasks)),
         artifacts=_collect_artifacts(results) or None,
     ) | ({"note": "；".join(notes)} if notes else {})
+    return _finalize_composite(result, summary, "news_intel")
 
 
 # ============================================================== holder_research
@@ -545,7 +562,7 @@ async def news_intel(symbol: str | None = None,
         "additionalProperties": False,
     },
     category="skill",
-    composes=["get_holder_change", "get_restricted_release_summary",
+    composes=["get_holder_change", "get_restricted_release_detail",
               "get_us_stock_holder"],
 )
 async def holder_research(symbol: str) -> dict:
@@ -562,13 +579,13 @@ async def holder_research(symbol: str) -> dict:
         sym = code
         tasks = [
             ("get_holder_change", {"symbol": sym}),
-            ("get_restricted_release_summary", {"symbol": sym}),
+            ("get_restricted_release_detail", {"symbol": sym, "limit": 30}),
         ]
         market_label = "A股"
     results = await _gather_sub(tasks)
     summary = _summarize_subs(results)
     summary["composed"] = [n for n, _ in tasks]
-    return ok(
+    return _finalize_composite(ok(
         {"symbol": sym, "market": market_label,
          "sub_results": [{"skill": n, "ok": r.get("ok"),
                           "preview": _clip(str(r.get("data") or r.get("error")), 200)}
@@ -576,7 +593,7 @@ async def holder_research(symbol: str) -> dict:
          **summary},
         meta("holder_research", len(tasks)),
         artifacts=_collect_artifacts(results) or None,
-    )
+    ), summary, "holder_research")
 
 
 # ================================================================ macro_intel
@@ -585,7 +602,7 @@ async def holder_research(symbol: str) -> dict:
 @skill(
     "macro_intel",
     "宏观情报：宏观指标 + 行业资金流（按板块）。"
-    "topic 可选（如 'CPI' / 'GDP' / 'PMI'，不传则默认）。",
+    "topic 可选（CPI/PPI/GDP/PMI/bond_yield，不传默认 PMI）。",
     {
         "type": "object",
         "properties": {
@@ -598,22 +615,31 @@ async def holder_research(symbol: str) -> dict:
     composes=["get_macro", "get_sector_fund_flow_rank"],
 )
 async def macro_intel(topic: str | None = None) -> dict:
+    raw_topic = (topic or "PMI").strip().lower()
+    aliases = {
+        "cpi": "cpi", "ppi": "ppi", "pmi": "pmi", "gdp": "gdp",
+        "bond_yield": "bond_yield", "bond yield": "bond_yield",
+        "国债": "bond_yield", "十年期国债": "bond_yield",
+    }
+    indicator = aliases.get(raw_topic)
+    if indicator is None:
+        return err(f"不支持的宏观 topic: {topic}（支持 CPI/PPI/PMI/GDP/bond_yield）")
     tasks = [
-        ("get_macro", {} if not topic else {"topic": topic}),
-        ("get_sector_fund_flow_rank", {"indicator": "今日"}),
+        ("get_macro", {"indicator": indicator}),
+        ("get_sector_fund_flow_rank", {"board_type": "industry", "limit": 30}),
     ]
     results = await _gather_sub(tasks)
     summary = _summarize_subs(results)
     summary["composed"] = [n for n, _ in tasks]
-    return ok(
-        {"topic": topic,
+    return _finalize_composite(ok(
+        {"topic": topic or "PMI", "indicator": indicator,
          "sub_results": [{"skill": n, "ok": r.get("ok"),
                           "preview": _clip(str(r.get("data") or r.get("error")), 200)}
                          for (n, _), r in zip(tasks, results)],
          **summary},
         meta("macro_intel", len(tasks)),
         artifacts=_collect_artifacts(results) or None,
-    )
+    ), summary, "macro_intel")
 
 
 # ================================================================ event_study
@@ -639,6 +665,10 @@ async def macro_intel(topic: str | None = None) -> dict:
                       "description": "严格 as-of 回测模式：True=只返回事件日及以前数据（禁止未来函数，不返回 post-event CAR）"},
         },
         "required": ["event_date"],
+        "anyOf": [
+            {"required": ["symbol"]},
+            {"required": ["keyword"]},
+        ],
         "additionalProperties": False,
     },
     category="skill",
@@ -658,10 +688,19 @@ async def event_study_skill(event_date: str, symbol: str | None = None,
         # A 股指数：保留 sh000300 / sz399001 形式，不能截成 6 位股票代码
         sym = sym_raw.lower()
     elif sym_raw:
-        # A 股：截 6 位数字
+        # A 股：保留显式交易所前缀；若只有 6 位代码，则在这里补正确前缀。
+        # 不能先剥 SH/SZ 再交给下游，否则 51/56/58 开头的沪市 ETF 会被误判为深市。
         code6 = "".join(ch for ch in sym_raw if ch.isdigit())[-6:]
         if len(code6) == 6:
-            sym = code6
+            lowered = sym_raw.lower()
+            if lowered.startswith(("sh", "sz", "bj")):
+                sym = lowered[:2] + code6
+            elif code6.startswith(("50", "51", "52", "56", "58")):
+                sym = "sh" + code6
+            elif code6.startswith("15"):
+                sym = "sz" + code6
+            else:
+                sym = code6
         else:
             sym = ""
     else:
@@ -680,7 +719,15 @@ async def event_study_skill(event_date: str, symbol: str | None = None,
             else:
                 code6 = "".join(ch for ch in cand if ch.isdigit())[-6:]
                 if len(code6) == 6:
-                    sym = code6
+                    lowered = cand.lower()
+                    if lowered.startswith(("sh", "sz", "bj")):
+                        sym = lowered[:2] + code6
+                    elif code6.startswith(("50", "51", "52", "56", "58")):
+                        sym = "sh" + code6
+                    elif code6.startswith("15"):
+                        sym = "sz" + code6
+                    else:
+                        sym = code6
     if not sym:
         return err("必须提供 symbol 或 keyword")
 
@@ -1240,58 +1287,44 @@ async def industry_chain_transmission(material: str | None = None) -> dict:
 
 @skill(
     "stock_overview",
-    "股票概览：先用 search_stock 解析 keyword → symbol，再拉取财务摘要 + 最新行情。"
-    "适合 LLM 不知道具体代码、只有公司名/关键词时使用。",
+    "股票概览：显式 symbol 优先本地解析；只有 symbol 缺省时才按 keyword 搜索，"
+    "随后拉取财务摘要 + 最新行情。支持 A股/ETF/指数及美股 ticker。",
     {
         "type": "object",
         "properties": {
-            "keyword": {"type": "string", "description": "公司名 / 关键词"},
+            "symbol": {"type": "string", "description": "明确证券代码（优先），如 SH513080/600000/MDT"},
+            "keyword": {"type": "string", "description": "公司名 / 关键词（symbol 缺省时使用）"},
+            "market": {"type": "string", "description": "可选市场提示：CN/US/A股/美股"},
         },
-        "required": ["keyword"],
+        "required": [],
+        "anyOf": [{"required": ["symbol"]}, {"required": ["keyword"]}],
         "additionalProperties": False,
     },
     category="skill",
-    composes=["search_stock", "get_financial_abstract", "get_stock_daily",
+    composes=["resolve_security", "get_financial_abstract", "get_stock_daily",
               "get_us_stock_spot", "get_us_stock_info",
               "get_us_stock_finance", "get_us_stock_indicator",
               "get_us_stock_calendar"],
 )
-async def stock_overview(keyword: str) -> dict:
-    r = await execute_skill("search_stock", {"keyword": keyword})
-    if not r.get("ok") or not isinstance(r.get("data"), list) or not r["data"]:
-        return err(f"未找到股票: {keyword}")
-    matches = r["data"][:3]
-    primary = matches[0]
-    # 优先使用 search_stock 已经判定的 market 字段（A 股 sina 返回 symbol='sh600519'，
-    # 会让按 isalpha 启发式误判；这里直接以 search_stock 的结论为准）
-    market_str = str(primary.get("market", "") or "").strip()
-    raw_symbol = str(primary.get("symbol") or primary.get("代码") or primary.get("code") or "").strip()
-    if market_str == "美股" or is_us_symbol(raw_symbol):
-        market = "US"
-        code = raw_symbol.upper()
-    elif market_str == "A股" or (raw_symbol and re.match(r"^(sh|sz|bj)\d{6}$", raw_symbol.lower())):
-        market = "A"
-        code = raw_symbol.lower()
-        if re.match(r"^\d{6}$", code):
-            code = "sh" + code if code[0] in ("6", "9") else ("bj" + code if code[0] in ("4", "8") else "sz" + code)
-    else:
-        # 兜底：尝试抽 6 位
-        code6 = "".join(ch for ch in raw_symbol if ch.isdigit())[-6:]
-        if len(code6) == 6:
-            market = "A"
-            code = "sh" + code6 if code6[0] in ("6", "9") else ("bj" + code6 if code6[0] in ("4", "8") else "sz" + code6)
-        elif raw_symbol and any(c.isalpha() for c in raw_symbol):
-            market = "US"
-            code = raw_symbol.upper()
-        else:
-            return err(f"搜索结果无 symbol: {primary}")
-    if not code:
-        return err(f"搜索结果无 symbol: {primary}")
+async def stock_overview(keyword: str | None = None, symbol: str | None = None,
+                         market: str | None = None) -> dict:
+    resolve_args = {k: v for k, v in {
+        "symbol": symbol, "keyword": keyword, "market": market,
+    }.items() if v not in (None, "")}
+    r = await execute_skill("resolve_security", resolve_args)
+    primary = r.get("data") if isinstance(r, dict) else None
+    if not r.get("ok") or not isinstance(primary, dict):
+        return err(str(r.get("error") or f"未找到股票: {keyword or symbol}"))
+    code = str(primary.get("symbol") or "").strip()
+    market_code = str(primary.get("market") or "").strip().upper()
+    if not code or market_code not in {"CN", "US"}:
+        return err(f"解析结果不完整: {primary}")
+    is_us = market_code == "US"
     from datetime import datetime, timedelta
     end = datetime.now().strftime("%Y%m%d")
     start = (datetime.now() - timedelta(days=30)).strftime("%Y%m%d")
     # 美股没有 A 股财务摘要；并行拉取实时行情 + 基本信息 + 财务三表(资产负债表) + 财务指标 + 日K
-    if market == "US":
+    if is_us:
         tasks = [
             ("get_us_stock_spot",     {"symbol": code}),
             ("get_us_stock_info",     {"symbol": code}),
@@ -1307,19 +1340,21 @@ async def stock_overview(keyword: str) -> dict:
         ]
     results = await _gather_sub(tasks)
     summary = _summarize_subs(results)
-    summary["composed"] = ["search_stock"] + [n for n, _ in tasks]
-    summary["market"] = "美股" if market == "US" else "A股"
+    summary["composed"] = ["resolve_security"] + [n for n, _ in tasks]
+    summary["market"] = "美股" if is_us else "A股"
     sub_arts = _collect_artifacts(results)
     # search_stock 的 artifact 也捎上
     if r.get("artifact"):
         sub_arts = [r["artifact"]] + sub_arts
-    return ok(
-        {"keyword": keyword, "resolved_symbol": code, "market": market,
-         "matches": [{"name": primary.get("name") or primary.get("名称"),
-                      "symbol": code, "market": "美股" if market == "US" else "A股"}], **summary},
+    return _finalize_composite(ok(
+        {"keyword": keyword, "resolved_symbol": code, "market": market_code,
+         "security_kind": primary.get("kind"),
+         "resolution_source": primary.get("resolution_source"),
+         "matches": [{"name": primary.get("name") or keyword or code,
+                      "symbol": code, "market": "美股" if is_us else "A股"}], **summary},
         meta("stock_overview", len(tasks) + 1),
         artifacts=sub_arts or None,
-    )
+    ), summary, "stock_overview")
 
 
 @skill(

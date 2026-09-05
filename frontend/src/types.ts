@@ -2,7 +2,22 @@
 
 export type Mode = "auto" | "agent" | "team";
 export type RightTab = "artifacts" | "skills" | "team" | "logic";
-export type ArtifactKind = "kline" | "line" | "table" | "evidence" | "report" | "graph";
+export type ArtifactKind = "kline" | "line" | "table" | "evidence" | "report" | "graph" | "simulation";
+
+export interface SimulationJob {
+  id: string;
+  case_id: string;
+  graph_artifact_id: string;
+  gateway_job_id: string;
+  status: "queued" | "running" | "cancelling" | "completed" | "partial" | "failed" | "cancelled";
+  stage: string;
+  progress: number;
+  error?: string | null;
+  artifact_id?: string | null;
+  created_at: string;
+  updated_at: string;
+  finished_at?: string | null;
+}
 
 /** 左栏研究案例（POST /api/cases 返回时不带 message_count） */
 export interface CaseItem {
@@ -144,6 +159,7 @@ export type Part =
       note?: string;
       plan?: PlanItem[];
       verdict?: string;
+      simulationJobId?: string;
     }
   | { type: "logic_items"; items: LogicItem[] };
 
@@ -196,6 +212,7 @@ export interface SSEEvent {
   title?: string;
   message_id?: string;
   message?: string;
+  simulation_job_id?: string;
   /** logic_items 事件携带的待验证推演条目 */
   items?: LogicItem[];
 }

@@ -1,6 +1,7 @@
-import { AlertCircle, CheckCircle2, ListChecks, RefreshCw, ShieldCheck, User, XCircle } from "lucide-react";
-import { useMemo } from "react";
-import type { Message, Part } from "../types";
+import { AlertCircle, AlertTriangle, CheckCircle2, GitBranch, ListChecks, RefreshCw, ShieldCheck, User, XCircle } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { Message, Part, SimulationJob } from "../types";
+import { api } from "../api";
 import { agentColor, agentName } from "../names";
 import { useStore } from "../store";
 import ThinkingBlock, { type ThinkingSegment } from "./ThinkingBlock";
@@ -85,6 +86,103 @@ function mergeRenderItems(parts: Part[]): RenderItem[] {
   return items;
 }
 
+const SIMULATION_STAGE_CN: Record<string, string> = {
+  queued: "等待执行",
+  compiling_spec: "整理证据与参与方",
+  validating: "校验输入",
+  building_graph: "构建模拟世界",
+  retrying_ontology: "本体生成暂时失败，正在重试",
+  simulating: "多方行动推演",
+  compiling_scenarios: "汇总情景分支",
+  completed: "推演完成",
+  partial: "部分完成",
+  failed: "推演失败",
+  cancelled: "已取消",
+};
+
+function friendlySimulationError(message?: string | null) {
+  if (!message) return "";
+  if (message.includes("Ontology generation failed")) {
+    return "MiroFish 在整理参与方关系时暂时失败。证据图和团队报告已保留，可在侧边栏重新启动单次推演。";
+  }
+  if (message.includes("safety budget is exhausted")) {
+    return "MiroFish 本次服务的模型安全预算已经用完。证据图已保留；重启 MiroFish 后可在侧边栏重新启动单次推演。";
+  }
+  return message;
+}
+
+function SimulationHandoffView({ part }: { part: Extract<Part, { type: "agent_step" }> }) {
+  const caseId = useStore((s) => s.currentCaseId);
+  const streaming = useStore((s) => s.streaming);
+  const loadCase = useStore((s) => s.loadCase);
+  const artifacts = useStore((s) => s.artifacts);
+  const [job, setJob] = useState<SimulationJob | null>(null);
+  const [pollError, setPollError] = useState("");
+  const refreshed = useRef(false);
+  const jobId = part.simulationJobId;
+
+  useEffect(() => {
+    if (!jobId) return;
+    let active = true;
+    let timer: number | undefined;
+    const poll = async () => {
+      try {
+        const next = await api.simulation(jobId);
+        if (!active) return;
+        setJob(next);
+        setPollError("");
+        if (["queued", "running", "cancelling"].includes(next.status)) {
+          timer = window.setTimeout(() => void poll(), 2500);
+        }
+      } catch (reason) {
+        if (!active) return;
+        setPollError(reason instanceof Error ? reason.message : String(reason));
+        timer = window.setTimeout(() => void poll(), 5000);
+      }
+    };
+    void poll();
+    return () => {
+      active = false;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [jobId]);
+
+  useEffect(() => {
+    const artifactAlreadyLoaded = Boolean(
+      job?.artifact_id && artifacts.some((item) => item.id === job.artifact_id),
+    );
+    if (
+      refreshed.current || artifactAlreadyLoaded || !caseId || streaming || !job?.artifact_id ||
+      !["completed", "partial"].includes(job.status)
+    ) return;
+    refreshed.current = true;
+    void loadCase(caseId);
+  }, [artifacts, caseId, job, loadCase, streaming]);
+
+  const terminal = job && ["completed", "partial", "failed", "cancelled"].includes(job.status);
+  const successful = job && ["completed", "partial"].includes(job.status);
+  return (
+    <div className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-[12px] ${successful ? "border-jade/25 bg-jade-soft/60 text-jade" : terminal ? "border-amber-300/50 bg-amber-50 text-amber-800" : "border-jade/25 bg-jade-soft/60 text-jade"}`}>
+      {terminal && !successful ? <AlertTriangle size={13} className="mt-0.5 shrink-0" /> : <GitBranch size={13} className="mt-0.5 shrink-0" />}
+      <div className="min-w-0 flex-1">
+        <p className="font-medium">
+          {successful ? "单次多智能体推演已完成" : terminal ? (SIMULATION_STAGE_CN[job?.status ?? ""] ?? "推演已结束") : "单次多智能体推演正在后台运行"}
+        </p>
+        {!terminal && <p className="mt-0.5 text-jade/80">通常需要 5～10 分钟；聊天回答可能先结束，任务会继续运行。</p>}
+        {job && !terminal && (
+          <div className="mt-1.5 flex items-center gap-2 text-[10.5px] text-jade/75">
+            <span>{SIMULATION_STAGE_CN[job.stage] ?? job.stage}</span>
+            <span>{Math.round(job.progress * 100)}%</span>
+          </div>
+        )}
+        {successful && <p className="mt-0.5 text-jade/80">结果已写入侧边栏产出物。</p>}
+        {!job && part.note && <p className="mt-0.5 text-jade/80">{part.note}</p>}
+        {(job?.error || pollError) && <p className="mt-1 text-amber-700">{job?.error ? friendlySimulationError(job.error) : `状态更新暂时失败：${pollError}`}</p>}
+      </div>
+    </div>
+  );
+}
+
 /** Agent Envelope：把同一 agent 的连续 text parts 包成一个分组容器 */
 function AgentEnvelope({
   agent,
@@ -147,7 +245,7 @@ function AgentStepView({ part }: { part: Extract<Part, { type: "agent_step" }> }
       <div className="rounded-card border border-brand/25 bg-brand-soft/40 px-4 py-3 animate-fadeUp">
         <div className="mb-2 flex items-center gap-2 text-[12.5px] font-semibold text-brand">
           <ListChecks size={14} />
-          研究计划 · {part.plan.length} 个子任务并行
+          研究计划 · {part.plan.length} 个子任务串行
         </div>
         <ol className="space-y-1.5">
           {part.plan.map((p, i) => {
@@ -204,6 +302,34 @@ function AgentStepView({ part }: { part: Extract<Part, { type: "agent_step" }> }
           <span className="font-medium">复核完成</span>
           {part.verdict && <span className="text-jade/80"> — {part.verdict}</span>}
           {part.note && <span className="text-jade/80"> — {part.note}</span>}
+        </span>
+      </div>
+    );
+  }
+
+  if (part.phase === "simulation_started") {
+    return <SimulationHandoffView part={part} />;
+  }
+
+  if (part.phase === "simulation_skipped") {
+    return (
+      <div className="flex items-start gap-2 rounded-lg border border-amber-300/50 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
+        <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+        <span>
+          <span className="font-medium">多智能体推演未启动</span>
+          {part.note && <span className="text-amber-700"> — {part.note}</span>}
+        </span>
+      </div>
+    );
+  }
+
+  if (part.phase === "interrupted") {
+    return (
+      <div className="flex items-start gap-2 rounded-lg border border-amber-300/50 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
+        <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+        <span>
+          <span className="font-medium">本轮研究未完整结束</span>
+          {part.note && <span className="text-amber-700"> — {part.note}</span>}
         </span>
       </div>
     );

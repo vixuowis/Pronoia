@@ -22,6 +22,7 @@ import type {
   SkillMeta,
   SuggestionItem,
   SSEEvent,
+  SimulationJob,
 } from "./types";
 
 const BASE = "/api";
@@ -87,6 +88,51 @@ export const api = {
     }),
   genReport: (caseId: string) =>
     req<Artifact>(`/cases/${caseId}/report`, { method: "POST", body: "{}" }),
+  startSimulation: (
+    caseId: string,
+    body: {
+      source_graph_artifact_id: string;
+      question?: string;
+      horizon_days?: number;
+      mode?: "quick" | "calibrated";
+      max_actors?: number;
+    },
+  ) => req<SimulationJob>(`/cases/${caseId}/simulations`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  }),
+  simulationPreview: (
+    caseId: string,
+    body: {
+      source_graph_artifact_id: string;
+      question?: string;
+      horizon_days?: number;
+      mode?: "quick";
+      max_actors?: number;
+    },
+  ) => req<{
+    actor_selection: {
+      mode: "auto" | "manual_cap";
+      recommended_count: number;
+      applied_limit: number;
+      configured_count: number;
+      rationale: string;
+    };
+    actors: Array<{ id: string; label: string; kind: string; selection_reason: string }>;
+  }>(`/cases/${caseId}/simulations/preview`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  }),
+  simulation: (jobId: string) => req<SimulationJob>(`/simulations/${jobId}`),
+  simulations: (caseId: string) => req<SimulationJob[]>(`/cases/${caseId}/simulations`),
+  cancelSimulation: (jobId: string) => req<SimulationJob>(`/simulations/${jobId}/cancel`, {
+    method: "POST",
+    body: "{}",
+  }),
+  resumeSimulation: (jobId: string) => req<SimulationJob>(`/simulations/${jobId}/resume`, {
+    method: "POST",
+    body: "{}",
+  }),
   logicAutoCheck: (item: {
     hypothesis: string;
     category?: string;
@@ -407,12 +453,6 @@ export async function streamChat(
 ): Promise<void> {
   // 进入前先看 signal；已 abort 则不发请求
   if (signal?.aborted) throw new StreamAbortedError();
-  // 页面已隐藏（切 tab / 关闭 preview）时也别发请求 —— 浏览器随后会强 abort
-  // 留下 net::ERR_ABORTED 噪音；不如直接 throw 让 store 静默收尾。
-  if (typeof document !== "undefined" && document.visibilityState === "hidden") {
-    throw new StreamAbortedError();
-  }
-
   const res = await fetch(`${BASE}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "text/event-stream" },

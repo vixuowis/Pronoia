@@ -372,8 +372,8 @@ class TestTeamFullE2E:
         routing_events = [t for t in tool_trace if t.get("type") == "signal_routing"]
         assert len(routing_events) == 0
 
-    async def test_e2e_confidence_gate_triggers_neutral(self):
-        """confidence < 0.60 时被硬闸到 neutral。"""
+    async def test_e2e_low_confidence_preserves_direction(self):
+        """低 confidence 只描述可靠度，不再覆盖模型给出的方向。"""
         event = _make_cn_ma_event()
         event["event_id"] = "low_conf_gate_e2e"
         # 构造 confidence=0.55 的最终回答
@@ -413,6 +413,6 @@ class TestTeamFullE2E:
                 trajectory_ckpt_dir=str(ckpt_dir),
             )
 
-        # confidence=0.55<0.60 → 被硬闸到 neutral
-        assert pred.pred_direction == "neutral"
+        assert pred.pred_direction == "up"
         assert pred.confidence == pytest.approx(0.55, abs=0.01)
+        assert ckpt["structured_extract"]["conf_gate_applied"] is False

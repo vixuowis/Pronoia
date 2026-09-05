@@ -6,27 +6,77 @@
 from __future__ import annotations
 
 import asyncio
+from contextvars import ContextVar
 import json
 import time
 from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 
 from openai import AsyncOpenAI
+import httpx
 
 from . import config
 from .log_bus import publish
 from .skills.registry import REGISTRY, ensure_skills_loaded, serialize_tool_result, tool_schema_subset, tools_for_agent
 
 _client: Optional[AsyncOpenAI] = None
+_skill_depth: ContextVar[int] = ContextVar("skill_execution_depth", default=0)
+_SLOW_NESTED_SKILLS = frozenset({"event_study"})
+
+
+def _skill_timeout(name: str, category: str, depth: int) -> float:
+    """Choose a deadline that leaves the calling composite time to aggregate.
+
+    Root calls preserve the historical FEVER_SKILL_TIMEOUT.  Nested composite
+    skills get a near-root budget, ordinary atomic calls get a shorter budget,
+    and known multi-provider atomics such as event_study get a small extension.
+    """
+    if depth <= 0:
+        return config.SKILL_TIMEOUT
+    if category == "skill":
+        return min(config.SKILL_COMPOSITE_SUB_TIMEOUT, config.SKILL_TIMEOUT)
+    if name in _SLOW_NESTED_SKILLS:
+        return min(config.SKILL_SLOW_SUB_TIMEOUT, config.SKILL_TIMEOUT)
+    return min(config.SKILL_SUB_TIMEOUT, config.SKILL_TIMEOUT)
+
+
+async def _create_with_hard_timeout(awaitable):
+    """Cap the SDK await even when a local proxy keeps the socket alive."""
+    return await asyncio.wait_for(awaitable, timeout=config.LLM_TIMEOUT)
+
+
+async def _stream_with_hard_timeout(stream):
+    """Cap a complete streaming round instead of only individual socket reads."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + config.LLM_TIMEOUT
+    iterator = stream.__aiter__()
+    while True:
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            raise asyncio.TimeoutError(
+                f"LLM streaming round exceeded {config.LLM_TIMEOUT:.0f}s"
+            )
+        try:
+            chunk = await asyncio.wait_for(iterator.__anext__(), timeout=remaining)
+        except StopAsyncIteration:
+            return
+        yield chunk
 
 
 def get_client() -> AsyncOpenAI:
     """返回 AsyncOpenAI client。优先 MAAS，其次 ARK。统一 model_name 用 config.LLM_MODEL。"""
     global _client
     if _client is None:
+        http_client = None
+        if config.LLM_FORCE_IPV4:
+            http_client = httpx.AsyncClient(
+                transport=httpx.AsyncHTTPTransport(local_address="0.0.0.0", retries=2),
+                timeout=config.LLM_TIMEOUT,
+            )
         _client = AsyncOpenAI(
             base_url=config.LLM_BASE_URL,
             api_key=config.LLM_API_KEY,
             timeout=config.LLM_TIMEOUT,
+            http_client=http_client,
         )
     return _client
 
@@ -37,6 +87,18 @@ SkillExecutor = Callable[[str, dict], Awaitable[dict]]
 
 async def noop_artifact_store(kind: str, title: str, payload: Any) -> dict:
     return {"id": None, "kind": kind, "title": title, "payload": payload}
+
+
+def _is_retryable_stream_error(error: BaseException) -> bool:
+    """Recognize transport failures that are safe to retry before side effects."""
+
+    return type(error).__name__ in {
+        "RemoteProtocolError",
+        "ReadError",
+        "ReadTimeout",
+        "APIConnectionError",
+        "APITimeoutError",
+    }
 
 
 async def execute_skill(name: str, args: dict) -> dict:
@@ -69,14 +131,17 @@ async def execute_skill(name: str, args: dict) -> dict:
         print(f"SKILL name={name} ok=false err=unknown dur={time.time() - _t0:.2f}s", flush=True)
         publish(f"SKILL name={name} ok=false err=unknown dur={time.time() - _t0:.2f}s")
         return {"ok": False, "error": f"未知技能: {name}"}
+    depth = _skill_depth.get()
+    timeout = _skill_timeout(name, sd.category, depth)
+    depth_token = _skill_depth.set(depth + 1)
     try:
         if asyncio.iscoroutinefunction(sd.handler):
             result = await asyncio.wait_for(
-                sd.handler(**args), timeout=config.SKILL_TIMEOUT
+                sd.handler(**args), timeout=timeout
             )
         else:
             result = await asyncio.wait_for(
-                asyncio.to_thread(sd.handler, **args), timeout=config.SKILL_TIMEOUT
+                asyncio.to_thread(sd.handler, **args), timeout=timeout
             )
         _dur = time.time() - _t0
         _tag = " [VSLOW]" if _dur > 10 else (" [SLOW]" if _dur > 3 else "")
@@ -85,9 +150,10 @@ async def execute_skill(name: str, args: dict) -> dict:
         return result
     except asyncio.TimeoutError:
         _dur = time.time() - _t0
+        scope = "顶层" if depth == 0 else "子技能"
         print(f"SKILL name={name} ok=false err=timeout dur={_dur:.2f}s [VSLOW]", flush=True)
         publish(f"SKILL name={name} ok=false err=timeout dur={_dur:.2f}s [VSLOW]")
-        return {"ok": False, "error": f"技能 {name} 执行超时（>{int(config.SKILL_TIMEOUT)}s）"}
+        return {"ok": False, "error": f"技能 {name} 执行超时（>{timeout:g}s，{scope}）"}
     except TypeError as e:
         _dur = time.time() - _t0
         print(f"SKILL name={name} ok=false err=type_error dur={_dur:.2f}s", flush=True)
@@ -98,6 +164,8 @@ async def execute_skill(name: str, args: dict) -> dict:
         print(f"SKILL name={name} ok=false err={type(e).__name__} dur={_dur:.2f}s", flush=True)
         publish(f"SKILL name={name} ok=false err={type(e).__name__} dur={_dur:.2f}s")
         return {"ok": False, "error": f"技能执行失败: {type(e).__name__}: {e}"}
+    finally:
+        _skill_depth.reset(depth_token)
 
 
 def _preview(result: dict) -> str:
@@ -138,7 +206,10 @@ async def run_agent(
     ensure_skills_loaded()
     # 三层模型：自动过滤 internal=True 的 atomic tool（LLM 不可见）
     # skill 走 LLM 可见
-    tools = tools_for_agent(agent_def.get("skills", []) or agent_id)
+    configured_skills = agent_def.get("skills")
+    tools = tools_for_agent(
+        configured_skills if configured_skills is not None else agent_id
+    )
     client = get_client()
     consecutive_failures: dict[str, int] = {}
 
@@ -154,35 +225,48 @@ async def run_agent(
         if config.AGENT_MAX_TOKENS > 0:
             kwargs["max_tokens"] = config.AGENT_MAX_TOKENS
         _llm_t0 = time.time()
-        stream = await client.chat.completions.create(**kwargs)
-
         tc_acc: dict[int, dict] = {}
         saw_content = False
         round_content = ""
         finish_reason = None
-        async for chunk in stream:
-            if not chunk.choices:
-                continue
-            choice = chunk.choices[0]
-            delta = choice.delta
-            rc = getattr(delta, "reasoning_content", None)
-            if rc and emit_thinking:
-                yield {"type": "thinking", "agent": agent_id, "delta": rc}
-            if delta.content:
-                saw_content = True
-                round_content += delta.content
-            if delta.tool_calls:
-                for tc in delta.tool_calls:
-                    slot = tc_acc.setdefault(tc.index, {"id": "", "name": "", "arguments": ""})
-                    if tc.id:
-                        slot["id"] = tc.id
-                    if tc.function:
-                        if tc.function.name:
-                            slot["name"] += tc.function.name
-                        if tc.function.arguments:
-                            slot["arguments"] += tc.function.arguments
-            if choice.finish_reason:
-                finish_reason = choice.finish_reason
+        for transport_attempt in range(2):
+            tc_acc = {}
+            round_content = ""
+            saw_content = False
+            finish_reason = None
+            try:
+                stream = await _create_with_hard_timeout(client.chat.completions.create(**kwargs))
+                async for chunk in _stream_with_hard_timeout(stream):
+                    if not chunk.choices:
+                        continue
+                    choice = chunk.choices[0]
+                    delta = choice.delta
+                    rc = getattr(delta, "reasoning_content", None)
+                    if rc and emit_thinking:
+                        yield {"type": "thinking", "agent": agent_id, "delta": rc}
+                    if delta.content:
+                        saw_content = True
+                        round_content += delta.content
+                    if delta.tool_calls:
+                        for tc in delta.tool_calls:
+                            slot = tc_acc.setdefault(tc.index, {"id": "", "name": "", "arguments": ""})
+                            if tc.id:
+                                slot["id"] = tc.id
+                            if tc.function:
+                                if tc.function.name:
+                                    slot["name"] += tc.function.name
+                                if tc.function.arguments:
+                                    slot["arguments"] += tc.function.arguments
+                    if choice.finish_reason:
+                        finish_reason = choice.finish_reason
+                break
+            except BaseException as error:  # noqa: BLE001
+                if (
+                    transport_attempt >= 1
+                    or not _is_retryable_stream_error(error)
+                ):
+                    raise
+                await asyncio.sleep(0.5)
 
         tool_calls = [tc_acc[i] for i in sorted(tc_acc)]
         _llm_dur = time.time() - _llm_t0
@@ -239,12 +323,20 @@ async def run_agent(
                                                    art.get("title", name),
                                                    art.get("payload", {}))
                         artifact_ids.append(row.get("id"))
-                        yield {"type": "artifact", "agent": agent_id, "artifact": row}
+                        if not row.get("_reused"):
+                            yield {"type": "artifact", "agent": agent_id, "artifact": row}
                     except Exception as e:  # noqa: BLE001
                         yield {"type": "thinking", "agent": agent_id,
                                "delta": f"\n[artifact 落库失败: {e}]\n"}
 
             preview = ("复用团队数据；" if reused else "") + _preview(result)
+            serialized_result = serialize_tool_result(result, config.TOOL_RESULT_MAX_CHARS)
+            # preview 只包含“返回 N 行”，不足以让后续 Deep Researcher 构图。
+            # 保存一个有界、已通过 strict-as-of skill 清洗的结果片段，供团队证据预灌；
+            # 避免保存 evidence_graph 自身结果造成图谱递归膨胀。
+            result_excerpt = ""
+            if result.get("ok") and name not in {"evidence_graph", "evidence_ledger"}:
+                result_excerpt = serialized_result[:2000]
             yield {"type": "tool_result", "agent": agent_id, "id": tc_id,
                    "skill": name, "ok": bool(result.get("ok")), "preview": preview,
                    "artifact_id": artifact_ids[0] if artifact_ids else None,
@@ -252,6 +344,7 @@ async def run_agent(
             state["tool_trace"].append({
                 "type": "tool", "agent": agent_id, "id": tc_id, "skill": name,
                 "args": args, "ok": bool(result.get("ok")), "preview": preview,
+                "result_excerpt": result_excerpt,
                 "artifact_ids": artifact_ids,
                 "reused": reused,
             })
@@ -259,7 +352,6 @@ async def run_agent(
                 consecutive_failures[name] = 0
             else:
                 consecutive_failures[name] = consecutive_failures.get(name, 0) + 1
-            serialized_result = serialize_tool_result(result, config.TOOL_RESULT_MAX_CHARS)
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc_id,
@@ -280,8 +372,10 @@ async def run_agent(
             }
             if config.AGENT_MAX_TOKENS > 0:
                 summary_kwargs["max_tokens"] = config.AGENT_MAX_TOKENS
-            summary_stream = await client.chat.completions.create(**summary_kwargs)
-            async for chunk in summary_stream:
+            summary_stream = await _create_with_hard_timeout(
+                client.chat.completions.create(**summary_kwargs)
+            )
+            async for chunk in _stream_with_hard_timeout(summary_stream):
                 if not chunk.choices:
                     continue
                 delta = chunk.choices[0].delta
@@ -303,8 +397,8 @@ async def run_agent(
         }
         if config.AGENT_MAX_TOKENS > 0:
             summary_kwargs["max_tokens"] = config.AGENT_MAX_TOKENS
-        stream = await client.chat.completions.create(**summary_kwargs)
-        async for chunk in stream:
+        stream = await _create_with_hard_timeout(client.chat.completions.create(**summary_kwargs))
+        async for chunk in _stream_with_hard_timeout(stream):
             if not chunk.choices:
                 continue
             delta = chunk.choices[0].delta
@@ -322,12 +416,12 @@ async def run_agent(
 async def complete_text(system: str, user: str, *, max_tokens: int = 2000) -> str:
     """Non-streaming single completion (returns content only)."""
     client = get_client()
-    resp = await client.chat.completions.create(
+    resp = await _create_with_hard_timeout(client.chat.completions.create(
         model=config.LLM_MODEL,
         messages=[{"role": "system", "content": system},
                   {"role": "user", "content": user}],
         max_tokens=max_tokens,
-    )
+    ))
     msg = resp.choices[0].message
     return (msg.content or "").strip()
 
@@ -351,13 +445,13 @@ async def complete_json(system: str, user: str, *, max_tokens: int = 2000) -> Op
     for attempt in range(1, _MAX_ATTEMPTS + 1):
         _t0 = time.time()
         try:
-            resp = await client.chat.completions.create(
+            resp = await _create_with_hard_timeout(client.chat.completions.create(
                 model=config.LLM_MODEL,
                 messages=[{"role": "system", "content": system},
                           {"role": "user", "content": user}],
                 max_tokens=max_tokens,
                 response_format={"type": "json_object"},
-            )
+            ))
             _dur = time.time() - _t0
             _tag = " [VSLOW]" if _dur > 15 else (" [SLOW]" if _dur > 5 else "")
             text = (resp.choices[0].message.content or "").strip()
