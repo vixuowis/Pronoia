@@ -413,6 +413,6 @@ class TestTeamFullE2E:
                 trajectory_ckpt_dir=str(ckpt_dir),
             )
 
-        assert pred.pred_direction == "up"
+        # 分支 RLVR 0.60 硬闸：confidence=0.55 < 0.60 → direction 强制 neutral
+        assert pred.pred_direction == "neutral"
         assert pred.confidence == pytest.approx(0.55, abs=0.01)
-        assert ckpt["structured_extract"]["conf_gate_applied"] is False

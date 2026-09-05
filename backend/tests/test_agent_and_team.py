@@ -25,7 +25,8 @@ class TestAgentAndTeam(unittest.IsolatedAsyncioTestCase):
         )
         old_prompt = system_prompt("deep_researcher", "deep_researcher_v0")
         new_prompt = system_prompt("deep_researcher", "deep_researcher_claim_v2")
-        self.assertIn("第 8 轮（必做）", old_prompt)
+        # v0 = 分支 RLVR 版（含量价 regime 校验 step 0）
+        self.assertIn("量价 regime 校验", old_prompt)
         self.assertIn("Evidence → Claim → Link → audit → export", new_prompt)
         self.assertIn("audit()", new_prompt)
         self.assertNotEqual(
@@ -34,11 +35,13 @@ class TestAgentAndTeam(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_predictor_owns_async_scenario_handoff_without_probability_claim(self):
+        # 分支 RLVR 设计：predictor 改用世界模型三情景（乐观/中性/悲观），
+        # 不再使用 main 的「异步多智能体事件推演」hand-off 表述。
         predictor = AGENTS["predictor"]
-        self.assertIn("异步多智能体事件推演", predictor["description"])
-        self.assertIn("交给事件预测员推演", predictor["persona"])
-        self.assertIn("不输出校准概率", predictor["persona"])
-        self.assertNotIn("3) 概率（%）", predictor["persona"])
+        self.assertIn("后市推演", predictor["description"])
+        self.assertIn("前瞻推演", predictor["persona"])
+        self.assertIn("乐观", predictor["persona"])
+        self.assertIn("悲观", predictor["persona"])
 
     def test_agent_tools_visibility_filters_internal(self):
         ensure_skills_loaded()

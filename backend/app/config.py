@@ -95,6 +95,9 @@ LLM_FORCE_IPV4: bool = os.getenv("FEVER_LLM_FORCE_IPV4", "").strip().lower() in 
     "1", "true", "yes", "on",
 }
 
+# 生成上限（回测/采集提速：不设则模型默认 max_tokens，生成长、拖慢每事件耗时）
+AGENT_MAX_TOKENS: int = int(os.getenv("FEVER_AGENT_MAX_TOKENS", "0"))
+
 FRONTEND_DIST = _PROJECT_ROOT / "frontend" / "dist"
 PROJECT_ROOT: Path = _PROJECT_ROOT
 BACKEND_DIR: Path = _BACKEND_DIR
