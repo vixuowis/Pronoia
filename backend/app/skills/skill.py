@@ -111,8 +111,8 @@ def _collect_artifacts(results: list[dict]) -> list[dict]:
 
 
 # ============================================================ evidence_graph
-# 9 个 _eg_* 的高层 dispatcher。LLM 只看到 1 个 evidence_graph skill，
-# 通过 action 参数路由到对应 sub-tool。LLM 不需要记住 9 个 sub-tool 名。
+# 10 个 _eg_* 的高层 dispatcher。LLM 只看到 1 个 evidence_graph skill，
+# 通过 action 参数路由到对应 sub-tool。LLM 不需要记住 10 个 sub-tool 名。
 
 _VALID_GRAPH_ACTIONS = {
     "add_evidence", "add_claim", "link", "set_status", "merge",
@@ -140,8 +140,10 @@ _GRAPH_ACTION_TO_SUB: dict[str, str] = {
     "证据图操作（建图/编辑/导出）。action 决定子操作："
     "add_evidence / add_claim / link / set_status / merge / add_missing / "
     "set_sufficient / audit / export / clear。"
-    "link 使用 source_id/target_id；audit 返回图谱质量发现且不修改图。"
-    "子操作需要的参数按 action 传递；export 也会附带 audit。",
+    "link 使用 source_id/target_id：supports、contradicts、context 为 claim→evidence；"
+    "addresses 为 evidence→missing。子操作需要的参数按 action 传递（除 action 外的所有参数透传给对应 sub-tool）。"
+    "audit 不修改图，返回孤立节点、缺少实质证据的 Claim、重复边和缺少 note 等质量发现；"
+    "export 也会附带相同 audit。导出时返回 markdown 摘要 + JSON 统计，可同时作为 graph 类型的 artifact 沉淀。",
     {
         "type": "object",
         "properties": {

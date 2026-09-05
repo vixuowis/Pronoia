@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { api, streamChat, StreamAbortedError } from "./api";
 import type {
   AgentMeta,
+  ArenaItem,
   Artifact,
   ArtifactKind,
   BTRun,
@@ -9,6 +10,7 @@ import type {
   HistoryMessage,
   LogicCheckEntry,
   LogicItem,
+  LogEntry,
   Message,
   Mode,
   Part,
@@ -225,6 +227,7 @@ export function partsFromHistory(m: HistoryMessage): Part[] {
         note: it.note as string | undefined,
         plan: it.plan as PlanItem[] | undefined,
         verdict: it.verdict as string | undefined,
+        simulationJobId: it.simulation_job_id as string | undefined,
       });
     }
   }
@@ -240,8 +243,10 @@ export function partsFromHistory(m: HistoryMessage): Part[] {
 
 /* ---------------- store ---------------- */
 
-/** P0 视图：chat（研究工作台）/ backtest-list（回测列表页）/ backtest-detail（回测详情页） */
-export type ViewName = "chat" | "backtest-list" | "backtest-detail";
+/** P0 视图：chat（研究工作台）/ backtest-list（回测列表页）/ backtest-detail（回测详情页）
+ *  arena-list（Arena 比对列表）/ arena-detail（Arena 比对详情）
+ */
+export type ViewName = "chat" | "backtest-list" | "backtest-detail" | "arena-list" | "arena-detail";
 
 interface FeverState {
   cases: CaseItem[];
@@ -273,7 +278,7 @@ interface FeverState {
 
   /* ===================================== Backtest (P0) ===================================== */
 
-  /** 当前页：chat 工作台 / 回测列表 / 回测详情 */
+  /** 当前页：chat 工作台 / 回测列表 / 回测详情 / Arena 列表 / Arena 详情 */
   view: ViewName;
   /** 回测详情页当前 run_id（view=backtest-detail 时使用） */
   currentBTRunId: string | null;
@@ -281,9 +286,18 @@ interface FeverState {
   btRuns: BTRun[];
   btRunsLoading: boolean;
 
+  /* ===================================== Arena ===================================== */
+
+  /** Arena 列表缓存 */
+  arenaItems: ArenaItem[];
+  arenaLoading: boolean;
+  /** Arena 详情页当前 arena_id */
+  currentArenaId: string | null;
+
   init: () => Promise<void>;
   sendMessage: (text: string, mode?: Mode, agent?: string) => Promise<void>;
   stop: () => void;
+  retryLastMessage: () => Promise<void>;
   loadCase: (id: string) => Promise<void>;
   newCase: () => void;
   deleteCase: (id: string) => Promise<void>;
@@ -314,6 +328,19 @@ interface FeverState {
   /** 正在被深度验证的 logic id（用于 UI loading 态） */
   logicChecking: Set<string>;
 
+  /* ===================================== Backend status / Live Log (debug) ===================================== */
+
+  /** 后端运行状态：每 5 秒轮询 /api/health；online=绿点 offline=红点 */
+  backendStatus: "online" | "offline";
+  /** LLM 调用日志（来自 EventSource /api/admin/live-log，最多 200 条，最新在前） */
+  liveLogs: LogEntry[];
+  /** 底部浮动日志面板是否展开 */
+  liveLogOpen: boolean;
+  /** 切换日志面板开合（开时建立 EventSource 连接，关时断开） */
+  toggleLiveLog: () => void;
+  /** 清空已收集的日志 */
+  clearLiveLogs: () => void;
+
   /* ---- Backtest 方法 ---- */
   setView: (v: ViewName) => void;
   /** 进入某个回测详情页（自动 setView("backtest-detail")） */
@@ -324,15 +351,27 @@ interface FeverState {
   loadBTRuns: (force?: boolean) => Promise<BTRun[]>;
   /** 列表里单独更新某条 run（start/cancel 后调用） */
   patchBTRun: (runId: string, patch: Partial<BTRun>) => void;
+
+  /* ---- Arena 方法 ---- */
+  /** 进入某个 Arena 详情页（自动 setView("arena-detail")） */
+  openArenaDetail: (arenaId: string) => void;
+  /** 返回 Arena 列表页 */
+  backFromArenaDetail: () => void;
+  /** 拉取 Arena 列表（强制刷新） */
+  loadArenas: (force?: boolean) => Promise<ArenaItem[]>;
+  /** 列表里单独更新某条 Arena */
+  patchArena: (arenaId: string, patch: Partial<ArenaItem>) => void;
 }
 
 let abortCtl: AbortController | null = null;
 /** 当前流式所属 case / message / question：logic_items 事件入库存档时使用 */
 let currentCtx: { caseId: string; messageId: string; question: string } | null = null;
 
-// 页面隐藏 / 关闭 / 切换 tab 时主动 abort in-flight 请求，
-// 避免浏览器随后再用 net::ERR_ABORTED 强 abort、留下 console 噪音。
-// 装上 once: true + capture，避免被业务清理时漏掉。
+/** live-log 的 EventSource 连接（liveLogOpen=true 时建立，关闭时 close） */
+let liveLogEs: EventSource | null = null;
+
+// Only a real page unload should stop the attached stream. Merely switching
+// tabs/windows must not cancel a multi-minute team research run.
 if (typeof window !== "undefined") {
   const silentAbort = () => {
     if (abortCtl) {
@@ -341,9 +380,6 @@ if (typeof window !== "undefined") {
   };
   window.addEventListener("pagehide", silentAbort, { capture: true });
   window.addEventListener("beforeunload", silentAbort, { capture: true });
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") silentAbort();
-  }, { capture: true });
 }
 
 export const useStore = create<FeverState>((set, get) => {
@@ -377,6 +413,10 @@ export const useStore = create<FeverState>((set, get) => {
     switch (ev.type) {
       case "meta":
         if (ev.mode) patchPending((m) => ({ ...m, mode: ev.mode }));
+        // 后端可能新建了 case（前端传入的 case_id 无效时），同步到前端
+        if (ev.case_id && ev.case_id !== get().currentCaseId) {
+          set({ currentCaseId: ev.case_id });
+        }
         break;
       case "thinking":
         if (ev.delta) patchParts((p) => appendDelta(p, "thinking", ev.agent, ev.delta!));
@@ -434,6 +474,7 @@ export const useStore = create<FeverState>((set, get) => {
             note: ev.note,
             plan: ev.plan,
             verdict: ev.verdict,
+            simulationJobId: ev.simulation_job_id,
           },
         ]);
         break;
@@ -462,6 +503,10 @@ export const useStore = create<FeverState>((set, get) => {
         break;
       case "done":
         finalizePending((m) => ({ ...m, id: ev.message_id ?? m.id }));
+        // 兜底：确保 currentCaseId 与后端一致
+        if (ev.case_id && ev.case_id !== get().currentCaseId) {
+          set({ currentCaseId: ev.case_id });
+        }
         // 刷新 case 列表（updated_at / message_count）
         api
           .cases()
@@ -469,8 +514,7 @@ export const useStore = create<FeverState>((set, get) => {
           .catch(() => void 0);
         break;
       case "error":
-        patchParts((p) => [...p, { type: "text", text: `⚠️ ${ev.message ?? "发生未知错误"}` }]);
-        finalizePending((m) => ({ ...m, error: true }));
+        finalizePending((m) => ({ ...m, error: true, errorMessage: ev.message ?? "发生未知错误" }));
         break;
     }
   };
@@ -502,11 +546,21 @@ export const useStore = create<FeverState>((set, get) => {
     logicLibOpen: false,
     logicChecking: new Set<string>(),
 
+    /* ---- Backend status / Live Log 默认值 ---- */
+    backendStatus: "online",
+    liveLogs: [],
+    liveLogOpen: false,
+
     /* ---- Backtest 默认值 ---- */
     view: "chat",
     currentBTRunId: null,
     btRuns: [],
     btRunsLoading: false,
+
+    /* ---- Arena 默认值 ---- */
+    arenaItems: [],
+    arenaLoading: false,
+    currentArenaId: null,
 
     init: async () => {
       if (get().initialized) return;
@@ -563,8 +617,9 @@ export const useStore = create<FeverState>((set, get) => {
               {
                 id: uid(),
                 role: "assistant",
-                content: `⚠️ 创建研究失败：${e instanceof Error ? e.message : String(e)}`,
+                content: "",
                 error: true,
+                errorMessage: `创建研究失败：${e instanceof Error ? e.message : String(e)}`,
               },
             ],
           }));
@@ -605,15 +660,16 @@ export const useStore = create<FeverState>((set, get) => {
           // 页面隐藏/切 tab/关 preview 触发的 abort：不写"已停止生成"，让用户无感
           const silent = document.visibilityState === "hidden";
           if (!silent) {
-            patchParts((p) => [...p, { type: "text", text: "*已停止生成。*" }]);
+            finalizePending((m) => ({ ...m, error: true, errorMessage: "已停止生成" }));
+          } else {
+            finalizePending();
           }
-          finalizePending();
         } else {
-          patchParts((p) => [
-            ...p,
-            { type: "text", text: `⚠️ 请求失败：${e instanceof Error ? e.message : String(e)}` },
-          ]);
-          finalizePending((m) => ({ ...m, error: true }));
+          finalizePending((m) => ({
+            ...m,
+            error: true,
+            errorMessage: `请求失败：${e instanceof Error ? e.message : String(e)}`,
+          }));
         }
       } finally {
         abortCtl = null;
@@ -623,6 +679,36 @@ export const useStore = create<FeverState>((set, get) => {
 
     stop: () => {
       abortCtl?.abort();
+    },
+
+    retryLastMessage: async () => {
+      if (get().streaming) return;
+      const msgs = get().messages;
+      // 找最后一条 user 消息
+      let lastUserIdx = -1;
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i].role === "user") { lastUserIdx = i; break; }
+      }
+      if (lastUserIdx < 0) return;
+      const lastUser = msgs[lastUserIdx];
+      // 在 lastUser 之后找 error 的 assistant，优先保留它的 mode 用于重试
+      let errorMode: Message["mode"] | undefined;
+      for (let i = lastUserIdx + 1; i < msgs.length; i++) {
+        const m = msgs[i];
+        if (m.role === "assistant" && m.error && m.mode) {
+          errorMode = m.mode;
+          break;
+        }
+      }
+      // 移除 lastUser 之后所有 error assistant 消息
+      const newMsgs = msgs.filter((m, i) => {
+        if (m.role === "assistant" && m.error) {
+          return i <= lastUserIdx;
+        }
+        return true;
+      });
+      set({ messages: newMsgs });
+      await get().sendMessage(lastUser.content, errorMode ?? lastUser.mode);
     },
 
     loadCase: async (id) => {
@@ -952,6 +1038,48 @@ export const useStore = create<FeverState>((set, get) => {
     },
     setLogicLibOpen: (v) => set({ logicLibOpen: v }),
 
+    /* ---------------- Backend status / Live Log (debug) ---------------- */
+    toggleLiveLog: () => {
+      const open = !get().liveLogOpen;
+      set({ liveLogOpen: open });
+      if (open) {
+        // 建立连接：已有连接则复用，避免重复订阅
+        if (!liveLogEs) {
+          try {
+            const es = new EventSource("/api/admin/live-log");
+            es.onmessage = (e) => {
+              try {
+                const data = JSON.parse(e.data) as { ts?: string; msg?: string };
+                const entry: LogEntry = {
+                  ts: data.ts ?? new Date().toISOString(),
+                  msg: data.msg ?? "",
+                };
+                // 最新在前，最多保留 200 条
+                useStore.setState((s) => ({
+                  liveLogs: [entry, ...s.liveLogs].slice(0, 200),
+                }));
+              } catch {
+                /* 忽略坏帧 */
+              }
+            };
+            // 连接异常时浏览器会自动重连，这里只标记断开态
+            es.onerror = () => {
+              /* EventSource 自动重连，无需手动处理 */
+            };
+            liveLogEs = es;
+          } catch {
+            /* EventSource 不可用（如 SSR 环境），忽略 */
+          }
+        }
+      } else {
+        if (liveLogEs) {
+          try { liveLogEs.close(); } catch { /* ignore */ }
+          liveLogEs = null;
+        }
+      }
+    },
+    clearLiveLogs: () => set({ liveLogs: [] }),
+
     /* ===================================== Backtest 方法 ===================================== */
 
     setView: (v) => {
@@ -966,8 +1094,9 @@ export const useStore = create<FeverState>((set, get) => {
     },
 
     backFromBTDetail: () => {
-      // 详情页返回到列表页
+      // 详情页返回列表页；列表数据以最新 DB 为准（详情页运行期间的进度不再向 store 双写）
       set({ view: "backtest-list", currentBTRunId: null });
+      void get().loadBTRuns(true);
     },
 
     loadBTRuns: async (force) => {
@@ -990,5 +1119,53 @@ export const useStore = create<FeverState>((set, get) => {
         btRuns: s.btRuns.map((r) => (r.id === runId ? { ...r, ...patch } : r)),
       }));
     },
+
+    /* ===================================== Arena 方法 ===================================== */
+
+    openArenaDetail: (arenaId) => {
+      if (get().streaming) get().stop();
+      set({ view: "arena-detail", currentArenaId: arenaId });
+    },
+
+    backFromArenaDetail: () => {
+      set({ view: "arena-list", currentArenaId: null });
+      void get().loadArenas(true);
+    },
+
+    loadArenas: async (force) => {
+      if (!force && get().arenaItems.length > 0) return get().arenaItems;
+      set({ arenaLoading: true });
+      try {
+        const res = await api.arenaList(200);
+        set({ arenaItems: res.items ?? [], arenaLoading: false });
+        return res.items ?? [];
+      } catch (e) {
+        set({ arenaLoading: false });
+        throw e;
+      }
+    },
+
+    patchArena: (arenaId, patch) => {
+      set((s) => ({
+        arenaItems: s.arenaItems.map((a) => (a.id === arenaId ? { ...a, ...patch } : a)),
+      }));
+    },
   };
 });
+
+/* ---------------- 后端健康检查轮询（每 3 秒） ----------------
+ * 不走 api.ts 的 req（health 端点只需知道是否 reachable，无需解析 body）：
+ * fetch 成功且 res.ok → online；网络失败 / 非 2xx → offline。
+ * 初始值 "online"（乐观），首次轮询失败立刻改 offline。 */
+if (typeof window !== "undefined") {
+  const checkHealth = async () => {
+    try {
+      const res = await fetch("/api/health", { method: "GET" });
+      useStore.setState({ backendStatus: res.ok ? "online" : "offline" });
+    } catch {
+      useStore.setState({ backendStatus: "offline" });
+    }
+  };
+  void checkHealth();
+  window.setInterval(checkHealth, 3000);
+}

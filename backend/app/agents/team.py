@@ -20,14 +20,15 @@ from .roster import AGENTS, get_agent, system_prompt
 
 EXPERT_IDS = ["event_scout", "market_analyst", "fundamentals_analyst", "deep_researcher", "predictor"]
 
-PLANNER_INSTRUCTION = """你是任务规划器。把用户问题拆成 2~4 个子任务，每个子任务指定一个专家 Agent：
+PLANNER_INSTRUCTION = """你是任务规划器。把用户问题拆成 2~5 个子任务，每个子任务指定一个专家 Agent：
 - event_scout（事件猎手：新闻/公告/快讯检索，筛高影响事件）
 - market_analyst（行情分析师：K线/指数/板块/龙虎榜/融资融券/事件研究）
 - fundamentals_analyst（基本面分析师：财务摘要/财务指标/研报评级/宏观）
 - deep_researcher（深度研究者：基于证据图的多轮研究 —— 适合需要从多个数据源反复验证假设的复杂问题；
   会把研究过程沉淀为一张可回看的证据图谱作为产出物。问题较深、可量化、可分多轮验证时优先用）
-- predictor（事件预测员：后市推演世界模型 —— 基于近期 K线/资金/新闻/板块输出
-  「乐观/中性/悲观」三档情景 + 概率 + 关键催化 + 可证伪假设。
+- predictor（事件预测员：后市推演协调者 —— 基于近期 K线/资金/新闻/板块输出
+  「乐观/中性/悲观」候选情景 + 相对倾向 + 关键催化 + 可证伪假设；深度研究者导出
+  证据图后，可由其发起独立的异步多智能体事件推演。
   适合「接下来怎么走 / 后市如何 / 某事件后行情」类前瞻问题）
 
 【硬规则 —— 深度研究团队必派 deep_researcher】
@@ -39,13 +40,13 @@ PLANNER_INSTRUCTION = """你是任务规划器。把用户问题拆成 2~4 个�
 【软规则 —— 涉及预测/后市时加派 predictor】
 当用户问题含「预测 / 后市 / 怎么看 / 接下来 / 会不会 / 行情推演 / 短期 / 未来 X 天 / 下周」等
 前瞻关键词时，plan 列表里 **应当** 包含 predictor —— 它专门做多情景推演，比 deep_researcher
-更轻、更有针对性（不沉淀证据图，只输出概率 + 情景 + 催化）。
+更轻、更有针对性（不沉淀证据图；先输出候选情景，再由证据图支持异步多智能体推演）。
 
-通常结构（推荐 3 任务）：
+通常结构（推荐 3~5 任务）：
 - event_scout：扫事件/公告/快讯
 - market_analyst 或 fundamentals_analyst：行情/基本面之一（按问题倾向选一个）
-- deep_researcher：**始终最后**，把上面所有 expert 拿到的数据建图、标 claim、最后 export
-- （预测类问题）predictor：可加在 deep_researcher 之后或之前，由 LLM 按需调度
+- deep_researcher：放在资料型专家之后，把已有发现建图、标 claim、最后 export
+- （预测类问题）predictor：**放在 deep_researcher 之后**，读取研究交接并协调异步推演
 
 简单事实型问题也至少派 1 个 expert + deep_researcher 两任务。
 
@@ -188,6 +189,40 @@ def _seed_graph_from_findings(
     return added
 
 
+def _ensure_minimum_graph_structure(graph: EvidenceGraph, question: str) -> None:
+    """Keep a tool-budget-limited graph honest and structurally reviewable.
+
+    This fallback never upgrades evidence or invents a directional forecast. It
+    creates one explicitly insufficient placeholder claim so loose evidence is
+    not silently presented as a completed research argument.
+    """
+    counts = graph._counts()
+    evidence_ids = [node.id for node in graph.nodes if node.kind == "evidence"]
+    if counts["n_claim"] == 0:
+        claim_id = graph.add_claim(
+            f"推断：围绕“{question[:120]}”的未来路径仍需条件情景检验",
+            rationale=(
+                "研究轮次内只沉淀了背景证据，尚未形成可由这些证据直接验证的方向性结论；"
+                "该节点是保守的结构占位，不是预测结果。"
+            ),
+            status="insufficient",
+            confidence=0.0,
+        )
+        for evidence_id in evidence_ids[:3]:
+            graph.link(
+                claim_id,
+                evidence_id,
+                relation="context",
+                note="仅作为情景背景，不构成方向性验证",
+            )
+    if graph._counts()["n_missing"] == 0:
+        graph.add_missing(
+            "可证伪的情景触发条件与反证数据",
+            "当前图未在研究轮次内完成方向性 claim 的支持/反驳闭环，需由后续情景推演与市场数据补充。",
+            priority=5,
+        )
+
+
 async def _run_expert_serial(
     agent_id: str,
     task_text: str,
@@ -205,6 +240,7 @@ async def _run_expert_serial(
     external_skill_budget: int | None = None,
     extra_context: str = "",
     event_meta: dict | None = None,
+    prior_conversation: str = "",
 ) -> AsyncIterator[dict]:
     """单 expert 串行执行：agent_start → events → agent_done 收尾。失败也收尾。
 
@@ -223,6 +259,19 @@ async def _run_expert_serial(
         token = eg_attach(graph)
         graph_export_token = eg_defer_export_artifact(not export_graph)
     try:
+        if agent_id == "predictor" and prior_findings:
+            findings = (
+                "深度研究证据图已完成交接。事件预测员在团队流程中只协调独立的后台多智能体推演，"
+                "不在聊天阶段重复取数、等待任务或预先编造模拟结论。系统仅在证据图通过入口校验时"
+                "自动启动；运行状态和最终情景卡片会显示在右侧产出物中。当前 quick 模式是单次"
+                "情景发现，分支频率与置信度均不代表校准概率。"
+            )
+            yield {"type": "token", "agent": agent_id, "delta": findings}
+            yield {"type": "agent_step", "phase": "agent_done", "agent": agent_id,
+                   "note": _short_summary(findings)}
+            yield {"type": "agent_findings", "agent": agent_id, "findings": findings,
+                   "tool_trace": []}
+            return
         evidence_context = ""
         if agent_id == "deep_researcher":
             digest_blocks: list[str] = []
@@ -239,11 +288,31 @@ async def _run_expert_serial(
                     "你必须优先围绕这张图工作：先补 claim / link / status / missing，再决定是否继续取数。\n\n"
                     + "\n\n".join(digest_blocks)
                 )
+            else:
+                evidence_context = (
+                    "\n\n【本轮没有前序专家交接】\n"
+                    "禁止声称 event_scout / market_analyst / fundamentals_analyst 已经执行。"
+                    "你需要自行获取最少量核心事实，并优先完成 claim、link、status 和 missing；"
+                    "不要把全部轮次都消耗在重复取数上。"
+                )
+        elif agent_id == "predictor":
+            digest_blocks = []
+            for aid, txt in (prior_findings or {}).items():
+                if txt.strip():
+                    digest_blocks.append(f"【{aid} 研究交接】\n{txt[:800]}")
+            if digest_blocks:
+                evidence_context = (
+                    "\n\n【证据图后的研究交接】\n"
+                    "深度研究者已在上一阶段整理证据图。以下内容用于判断情景和协调后续推演；"
+                    "不得把模拟判断写成已观察证据。\n\n"
+                    + "\n\n".join(digest_blocks)
+                )
         messages = [
             {"role": "system", "content": system_prompt(agent_id, prompt_variant)},
             {"role": "user", "content":
                 f"【用户原始问题】{question}\n\n【你的子任务】{task_text}\n\n"
                 "请调用你的技能获取真实数据后作答；最后用不超过600字总结发现（含关键数字+来源）。"
+                + prior_conversation
                 + evidence_context
                 + (f"\n\n【Evidence Navigator 图谱上下文】\n{extra_context}" if extra_context else "")},
         ]
@@ -269,6 +338,17 @@ async def _run_expert_serial(
             return await research_context.execute(execute_skill, name, args)
 
         resolved_agent_def = agent_def or get_agent(agent_id, prompt_variant)
+        if agent_id == "deep_researcher" and prior_findings:
+            # Source experts have already fetched the evidence and the graph is
+            # pre-seeded above. Keeping all seven data skills available caused
+            # the model to fetch the same tables again and run out of graph
+            # construction rounds.
+            resolved_agent_def = {**resolved_agent_def, "skills": ["evidence_graph"]}
+        elif agent_id == "predictor" and prior_findings:
+            # In team mode the predictor is a scenario synthesizer. The actual
+            # multi-agent run starts asynchronously from the exported graph, so
+            # repeating source data calls here only delays that handoff.
+            resolved_agent_def = {**resolved_agent_def, "skills": []}
         async for ev in run_agent(agent_id, messages, agent_def=resolved_agent_def,
                                   state=expert_state, artifact_store=artifact_store,
                                   skill_executor=team_skill_executor,
@@ -280,6 +360,7 @@ async def _run_expert_serial(
             try:
                 cur = get_current_graph()
                 if cur is not None:
+                    _ensure_minimum_graph_structure(cur, question)
                     payload = cur.to_payload()
                     row = await artifact_store("graph", "证据图", payload)
                     yield {"type": "artifact", "agent": agent_id, "artifact": row}
@@ -679,11 +760,22 @@ async def run_team(
     agent_prompt_variants: 按 agent_id 指定 persona 变体；回测 A/B 当前用于 deep_researcher。
     """
     # ------------------------------------------------------------ 1) plan --
+    # 构建历史上下文摘要（最近 3 轮），让 router 知道之前聊了什么
+    history_ctx = ""
+    if history:
+        recent = [m for m in history[-6:] if (m.get("content") or "").strip()]
+        if recent:
+            history_ctx = "\n\n【之前的对话记录（供参考，不要重复已有结论，聚焦用户当前追问）】\n" + "\n".join(
+                f"{m['role']}: {m['content'][:300]}" for m in recent
+            )
+
     plan: list[dict] = []
     try:
+        yield {"type": "thinking", "agent": "router",
+               "delta": "正在拆解研究任务，规划专家分工…"}
         plan_json = await complete_json(
             system_prompt("router") + "\n\n" + PLANNER_INSTRUCTION,
-            f"用户问题：{question}",
+            f"用户问题：{question}{history_ctx}",
             max_tokens=2000,
         )
         if plan_json:
@@ -702,6 +794,19 @@ async def run_team(
              f"把 market_analyst / fundamentals_analyst 的发现沉淀到证据图：每条关键数字作为 evidence，"
              f"每条可证伪推断作为 claim，标 supports/contradicts 关系，最后 export 证据图"},
         ]
+    # Planner occasionally violates the hard rule despite the prompt. Enforce
+    # it in orchestration so a selected predictor can never run without the
+    # evidence-graph stage merely because of one malformed plan.
+    if not any(p["agent"] == "deep_researcher" for p in plan):
+        plan.append({
+            "agent": "deep_researcher",
+            "task": (
+                f"把本轮其他专家围绕「{question}」的发现沉淀到证据图："
+                "关键事实作为 evidence，可证伪推断作为 claim，标注 "
+                "supports/contradicts、研究缺口与状态，最后 export 证据图"
+            ),
+        })
+
     # 应用 team_members 白名单：
     # 1) 剔除未勾选的专家（deep_researcher 永不被剔除，硬规则）
     # 2) 若剔除后没有任何 deep_researcher 之外的任务则保留 deep_researcher 单跑
@@ -718,9 +823,24 @@ async def run_team(
             plan = [{"agent": "deep_researcher", "task":
                      f"围绕「{question}」直接沉淀到证据图：每条关键数字作为 evidence，"
                      f"每条可证伪推断作为 claim，最后 export"}]
-    plan = [p for p in plan if p["agent"] != "deep_researcher"] + [p for p in plan if p["agent"] == "deep_researcher"]
-    plan = plan[:4]
+    # Source-oriented experts run first, graph synthesis follows, and predictor
+    # receives that handoff last. This prevents simulated forecasts from being
+    # seeded back into the evidence graph as if they were observations.
+    source_tasks = [
+        p for p in plan
+        if p["agent"] not in {"deep_researcher", "predictor"}
+    ][:3]
+    graph_task = next(p for p in plan if p["agent"] == "deep_researcher")
+    predictor_task = next(
+        (p for p in plan if p["agent"] == "predictor"), None
+    )
+    plan = source_tasks + [graph_task]
+    if predictor_task is not None:
+        plan.append(predictor_task)
     plan_public = [{**p, "agent_name": AGENTS[p["agent"]]["name"]} for p in plan]
+    # The chat orchestrator uses the final filtered plan as the main agent's
+    # explicit decision about whether an asynchronous predictor run is useful.
+    state["team_plan"] = plan_public
     yield {"type": "agent_step", "phase": "plan", "note": f"拆解为 {len(plan)} 个子任务",
            "plan": plan_public}
     state["tool_trace"].append({"type": "plan", "plan": plan_public})
@@ -729,7 +849,10 @@ async def run_team(
     findings: dict[str, str] = {}
     research_context = ResearchContext()
     team_graph: EvidenceGraph | None = None
-    for p in plan:
+    total_experts = len(plan)
+    for ei, p in enumerate(plan):
+        yield {"type": "thinking", "agent": "router",
+               "delta": f"正在调度第 {ei+1}/{total_experts} 位专家：{AGENTS.get(p['agent'], {}).get('name', p['agent'])}…"}
         is_deep_researcher = p["agent"] == "deep_researcher"
         if is_deep_researcher:
             # Keep this graph alive through the Navigator's verification pass.
@@ -739,13 +862,22 @@ async def run_team(
             _seed_graph_from_findings(team_graph, findings, state["tool_trace"])
         async for ev in _run_expert_serial(
             p["agent"], p["task"], question, artifact_store,
-            prior_findings=findings if is_deep_researcher else None,
-            prior_tool_trace=state["tool_trace"] if is_deep_researcher else None,
+            prior_findings=(
+                findings
+                if p["agent"] in {"deep_researcher", "predictor"}
+                else None
+            ),
+            prior_tool_trace=(
+                state["tool_trace"]
+                if p["agent"] in {"deep_researcher", "predictor"}
+                else None
+            ),
             research_context=research_context,
             event_meta=event_meta,
             prompt_variant=(agent_prompt_variants or {}).get(p["agent"]),
             graph=team_graph if is_deep_researcher else None,
             export_graph=not is_deep_researcher,
+            prior_conversation=history_ctx,
         ):
             # 提取 agent_findings 写入 state + findings；其余原样 yield
             if ev.get("type") == "agent_findings":
@@ -935,7 +1067,10 @@ async def run_team(
             "输出格式要求（与 parser 对齐，必须严格包含中文标签行）：\n"
             "【最终方向】 up / down / neutral 三选一\n"
             "【置信度】 0.xx（0.50-0.99）\n"
-            "【中文理由】 不超过 300 字，列举 2-4 条关键支撑信号"
+            "【中文理由】 不超过 300 字，列举 2-4 条关键支撑信号。"
+            "专家文字中没有对应工具证据的数字不得继承为事实。事件预测员的后台推演尚未作为"
+            "本轮聊天输入返回，不得声称已经看到模拟结果；quick 单次推演不得输出百分比概率，"
+            "只能使用高/中/低等未校准的相对倾向。"
         ),
     })
     # synthesize 阶段：禁用所有 skill，强制纯文字总结，避免 deepseek-v4-flash 发起无意义 tool call 导致 max_rounds 耗尽 content 为空
@@ -952,6 +1087,8 @@ async def run_team(
     if draft and not skip_verify:
         try:
             evidence = _evidence_digest(state["tool_trace"])
+            yield {"type": "thinking", "agent": "verifier",
+                   "delta": "正在复核研究结论的事实性与逻辑一致性…"}
             verdict_json = await complete_json(
                 system_prompt("verifier"),
                 f"【分析草稿】\n{draft[:4000]}\n\n【证据摘要（工具调用记录）】\n{evidence}",
@@ -1007,6 +1144,8 @@ async def run_team(
     final_answer = state["content"].strip()
     if final_answer and not skip_hypothesis:
         try:
+            yield {"type": "thinking", "agent": "router",
+                   "delta": "正在提炼可证伪的研究假设…"}
             extracted = await complete_json(
                 system_prompt("router") + "\n\n" + HYPOTHESIS_EXTRACT_INSTRUCTION,
                 f"用户原始问题：{question}\n\n【研究结论】\n{final_answer[:3500]}",

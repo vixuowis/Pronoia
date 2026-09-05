@@ -53,6 +53,75 @@ def load_events(path: str | Path) -> list[EventRecord]:
     return [EventRecord.from_dict(x) for x in read_jsonl(path)]
 
 
+def discover_backtesting_datasets() -> dict[str, int]:
+    """扫描 <PROJECT_ROOT>/backtesting 目录，把 events/labels JSONL 对注册进 bt_datasets。
+
+    命名约定（二者皆支持，前者为当前默认规范）：
+      - 前缀式：events_<name>.jsonl + labels_<name>.jsonl
+      - 后缀式：<name>.events.jsonl + <name>.labels.jsonl
+
+    path/labels_path 一律写为绝对路径；扫描后清理 path 已失效的旧数据集记录。
+    返回 {dataset_id: 事件数}（仅成功注册的项）。供后端启动时调用，保证「创建回测」的数据源
+    始终来自 backtesting 目录，而不是数据库里残留的硬编码旧路径。
+    """
+    from .. import config, db
+
+    btdir = Path(config.PROJECT_ROOT) / "backtesting"
+    if not btdir.is_dir():
+        return {}
+
+    pairs: dict[str, dict[str, str]] = {}
+    for p in btdir.glob("*.jsonl"):
+        stem = p.name[: -len(".jsonl")]
+        if stem.startswith("events_"):
+            pairs.setdefault(stem[len("events_"):], {})["events"] = p.name
+        elif stem.startswith("labels_"):
+            pairs.setdefault(stem[len("labels_"):], {})["labels"] = p.name
+        elif stem.endswith(".events"):
+            pairs.setdefault(stem[: -len(".events")], {})["events"] = p.name
+        elif stem.endswith(".labels"):
+            pairs.setdefault(stem[: -len(".labels")], {})["labels"] = p.name
+
+    registered: dict[str, int] = {}
+    for key, parts in pairs.items():
+        ev_fn = parts.get("events")
+        if not ev_fn:
+            continue
+        ev_path = btdir / ev_fn
+        try:
+            rows = list(read_jsonl(ev_path))
+        except Exception:
+            continue
+        if not rows:
+            continue
+
+        total = len(rows)
+        by_market = Counter(str(r.get("market") or "—") for r in rows)
+        by_type = Counter(str(r.get("event_type_l2") or "—") for r in rows)
+        by_symbol = Counter(str(r.get("symbol") or "—") for r in rows)
+        times = [str(r.get("event_time") or "") for r in rows if r.get("event_time")]
+        date_range = None
+        if times:
+            date_range = {"min": min(times)[:10], "max": max(times)[:10]}
+
+        lab_fn = parts.get("labels")
+        db.upsert_bt_dataset(
+            dataset_id=key,
+            path=str(ev_path),
+            name=key.replace("_", " ").strip() or key,
+            total_events=total,
+            by_market=dict(by_market) if by_market else None,
+            by_type=dict(by_type) if by_type else None,
+            by_symbol=dict(by_symbol) if by_symbol else None,
+            date_range=date_range,
+            labels_path=str(btdir / lab_fn) if lab_fn else None,
+        )
+        registered[key] = total
+
+    db.prune_missing_bt_datasets()
+    return registered
+
+
 def validate_events_file(path: str | Path) -> list[str]:
     return validate_events(load_events(path))
 

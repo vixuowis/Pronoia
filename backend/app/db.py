@@ -70,9 +70,26 @@ def init_db() -> None:
                 created_at TEXT NOT NULL,
                 FOREIGN KEY(case_id) REFERENCES cases(id) ON DELETE CASCADE
             );
+            CREATE TABLE IF NOT EXISTS simulation_jobs(
+                id TEXT PRIMARY KEY,
+                case_id TEXT NOT NULL,
+                graph_artifact_id TEXT NOT NULL,
+                gateway_job_id TEXT NOT NULL UNIQUE,
+                status TEXT NOT NULL,
+                stage TEXT NOT NULL,
+                progress REAL NOT NULL DEFAULT 0,
+                request_payload TEXT NOT NULL,
+                error TEXT,
+                artifact_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                finished_at TEXT,
+                FOREIGN KEY(case_id) REFERENCES cases(id) ON DELETE CASCADE,
+                FOREIGN KEY(graph_artifact_id) REFERENCES artifacts(id) ON DELETE CASCADE,
+                FOREIGN KEY(artifact_id) REFERENCES artifacts(id) ON DELETE SET NULL
+            );
             CREATE INDEX IF NOT EXISTS idx_messages_case ON messages(case_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_artifacts_case ON artifacts(case_id, pinned DESC, created_at);
-
             -- ==================== Pronoia Backtest tables (P0) ====================
             CREATE TABLE IF NOT EXISTS bt_runs(
                 id TEXT PRIMARY KEY,
@@ -164,9 +181,46 @@ def init_db() -> None:
                 created_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_evo_level_status ON evolution_items(level, status);
+
+            -- ==================== Pronoia Arena 横向比对 ====================
+            -- arena = 同一数据集 × 多组 Run（不同 Agent/LLM/配置）的比对实验
+            CREATE TABLE IF NOT EXISTS bt_arenas(
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                dataset_id TEXT,                   -- 对应 bt_datasets.id（可选）
+                dataset_name TEXT,                 -- 显示用的数据集名（冗余，防止 dataset 被删后丢失名字）
+                run_ids_json TEXT NOT NULL,        -- JSON 数组：参与比对的 run_id 列表
+                description TEXT,                  -- 自由描述
+                config_json TEXT,                  -- 额外配置：选定的 metric 列表、分组维度等
+                status TEXT NOT NULL,              -- ready / computing / done / failed
+                result_json TEXT,                  -- 完整比对结果（排名、雷达图数据、显著性检验等）
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                finished_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_bt_arenas_created ON bt_arenas(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_bt_arenas_status ON bt_arenas(status);
+            CREATE INDEX IF NOT EXISTS idx_simulation_jobs_case ON simulation_jobs(case_id, created_at);
             """
         )
         conn.commit()
+
+        # 幂等补充缺失列（bt_runs.metrics_json）
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(bt_runs)").fetchall()]
+        if "metrics_json" not in cols:
+            try:
+                conn.execute("ALTER TABLE bt_runs ADD COLUMN metrics_json TEXT")
+                conn.commit()
+            except Exception:
+                pass
+        # bt_metrics_snapshots.metrics_json（快照也存完整指标，向后兼容）
+        cols_snap = [r[1] for r in conn.execute("PRAGMA table_info(bt_metrics_snapshots)").fetchall()]
+        if "metrics_json" not in cols_snap:
+            try:
+                conn.execute("ALTER TABLE bt_metrics_snapshots ADD COLUMN metrics_json TEXT")
+                conn.commit()
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------- cases ----
@@ -221,6 +275,7 @@ def touch_case(case_id: str) -> None:
 def delete_case(case_id: str) -> bool:
     with _lock:
         conn = _get_conn()
+        conn.execute("DELETE FROM simulation_jobs WHERE case_id=?", (case_id,))
         conn.execute("DELETE FROM messages WHERE case_id=?", (case_id,))
         conn.execute("DELETE FROM artifacts WHERE case_id=?", (case_id,))
         cur = conn.execute("DELETE FROM cases WHERE id=?", (case_id,))
@@ -253,6 +308,36 @@ def add_message(
         "id": mid, "case_id": case_id, "role": role, "agent": agent,
         "content": content, "tool_trace": tool_trace, "created_at": ts,
     }
+
+
+def update_message(
+    message_id: str,
+    *,
+    content: str,
+    tool_trace: Optional[Any] = None,
+    agent: Optional[str] = None,
+) -> Optional[dict]:
+    """Checkpoint an in-flight assistant message without changing its identity."""
+
+    trace_json = json.dumps(tool_trace, ensure_ascii=False) if tool_trace else None
+    ts = now_iso()
+    with _lock:
+        conn = _get_conn()
+        row = conn.execute(
+            "SELECT case_id FROM messages WHERE id=?", (message_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        conn.execute(
+            "UPDATE messages SET agent=?,content=?,tool_trace=? WHERE id=?",
+            (agent, content, trace_json, message_id),
+        )
+        conn.execute(
+            "UPDATE cases SET updated_at=? WHERE id=?", (ts, row["case_id"])
+        )
+        conn.commit()
+    messages = [m for m in list_messages(row["case_id"]) if m["id"] == message_id]
+    return messages[0] if messages else None
 
 
 def list_messages(case_id: str, limit: Optional[int] = None) -> list[dict]:
@@ -433,7 +518,9 @@ def update_bt_run_status(run_id: str, status: str, *, error_msg: str | None = No
     if status == "running":
         fields.append("started_at = COALESCE(started_at, ?)")
         args.append(ts)
-    if status in {"done", "failed"}:
+        # 重新运行/恢复运行：清掉上次残留的错误信息
+        fields.append("error_msg = NULL")
+    if status in {"done", "failed", "cancelled"}:
         fields.append("finished_at = ?")
         args.append(ts)
     if error_msg is not None:
@@ -673,6 +760,23 @@ def get_bt_dataset(dataset_id: str) -> dict | None:
     return d
 
 
+def prune_missing_bt_datasets() -> int:
+    """删除 path 在磁盘上不存在的数据集记录（例如项目目录迁移后残留的旧绝对路径），返回删除条数。"""
+    from pathlib import Path
+
+    with _lock:
+        rows = _get_conn().execute("SELECT id, path FROM bt_datasets").fetchall()
+    stale = [r["id"] for r in rows if not r["path"] or not Path(r["path"]).is_file()]
+    if not stale:
+        return 0
+    with _lock:
+        conn = _get_conn()
+        for did in stale:
+            conn.execute("DELETE FROM bt_datasets WHERE id=?", (did,))
+        conn.commit()
+    return len(stale)
+
+
 # ========================================================== evolution_items ====
 
 def create_evolution_item(
@@ -761,3 +865,240 @@ def update_evolution_status(item_id: str, status: str, **kwargs) -> dict | None:
         conn.execute(f"UPDATE evolution_items SET {', '.join(fields)} WHERE id=?", tuple(args))
         conn.commit()
     return get_evolution_item(item_id)
+
+
+# ============================================================== bt_runs.metrics_json 存取 ====
+
+def update_bt_run_metrics(run_id: str, metrics_dict: dict | None) -> dict | None:
+    """将完整的 metrics_registry 结果 JSON 存入 bt_runs.metrics_json。"""
+    ts = now_iso()
+    m_json = json.dumps(metrics_dict, ensure_ascii=False) if metrics_dict is not None else None
+    with _lock:
+        conn = _get_conn()
+        conn.execute(
+            "UPDATE bt_runs SET metrics_json = ?, updated_at = ? WHERE id = ?",
+            (m_json, ts, run_id),
+        )
+        conn.commit()
+    return get_bt_run(run_id)
+
+
+def _row_to_bt_run(row: sqlite3.Row | None) -> dict | None:
+    if not row:
+        return None
+    d = dict(row)
+    d["config"] = json.loads(d["config_json"]) if d.get("config_json") else None
+    d["metrics"] = json.loads(d["metrics_json"]) if d.get("metrics_json") else None
+    d["concurrency"] = int(d["concurrency"] or 2)
+    d["total_events"] = int(d["total_events"] or 0)
+    d["done_events"] = int(d["done_events"] or 0)
+    return d
+
+
+# ============================================================== bt_metrics_snapshots.metrics_json 补存取 ====
+
+def add_bt_metrics_snapshot(
+    *,
+    run_id: str,
+    done_count: int,
+    acc_t3_strict: float | None = None,
+    acc_t3_strict_lo: float | None = None,
+    acc_t3_non_neutral: float | None = None,
+    neutral_ratio: float | None = None,
+    metrics_dict: dict | None = None,
+) -> int:
+    ts = now_iso()
+    m_json = json.dumps(metrics_dict, ensure_ascii=False) if metrics_dict is not None else None
+    with _lock:
+        conn = _get_conn()
+        cur = conn.execute(
+            "INSERT INTO bt_metrics_snapshots(run_id,done_count,acc_t3_strict,"
+            "acc_t3_strict_lo,acc_t3_non_neutral,neutral_ratio,created_at,metrics_json)"
+            " VALUES(?,?,?,?,?,?,?,?)",
+            (run_id, int(done_count), acc_t3_strict, acc_t3_strict_lo,
+             acc_t3_non_neutral, neutral_ratio, ts, m_json),
+        )
+        conn.commit()
+        return int(cur.lastrowid or 0)
+
+
+def list_bt_metrics_snapshots(run_id: str) -> list[dict]:
+    with _lock:
+        rows = _get_conn().execute(
+            "SELECT * FROM bt_metrics_snapshots WHERE run_id=? ORDER BY done_count ASC",
+            (run_id,),
+        ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        if d.get("metrics_json"):
+            d["metrics"] = json.loads(d["metrics_json"])
+        else:
+            d["metrics"] = None
+        out.append(d)
+    return out
+
+
+# ==================================================================== bt_arenas (Arena CRUD) ====
+
+def _row_to_bt_arena(row: sqlite3.Row | None) -> dict | None:
+    if not row:
+        return None
+    d = dict(row)
+    d["run_ids"] = json.loads(d["run_ids_json"]) if d.get("run_ids_json") else []
+    d.pop("run_ids_json", None)
+    d["config"] = json.loads(d["config_json"]) if d.get("config_json") else None
+    d.pop("config_json", None)
+    d["result"] = json.loads(d["result_json"]) if d.get("result_json") else None
+    d.pop("result_json", None)
+    return d
+
+
+def create_bt_arena(
+    *,
+    name: str,
+    run_ids: list[str],
+    dataset_id: str | None = None,
+    dataset_name: str | None = None,
+    description: str | None = None,
+    config: dict | None = None,
+    arena_id: str | None = None,
+) -> dict:
+    aid, ts = arena_id or new_id(), now_iso()
+    cfg_json = json.dumps(config or {}, ensure_ascii=False) if config else None
+    with _lock:
+        conn = _get_conn()
+        conn.execute(
+            "INSERT INTO bt_arenas(id,name,dataset_id,dataset_name,run_ids_json,"
+            "description,config_json,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (aid, name, dataset_id, dataset_name, json.dumps(run_ids or [], ensure_ascii=False),
+             description, cfg_json, "ready", ts, ts),
+        )
+        conn.commit()
+    row = _get_conn().execute("SELECT * FROM bt_arenas WHERE id=?", (aid,)).fetchone()
+    return _row_to_bt_arena(row) or {"id": aid, "name": name, "run_ids": run_ids or [], "status": "ready"}
+
+
+def list_bt_arenas(limit: int = 100, offset: int = 0) -> list[dict]:
+    with _lock:
+        rows = _get_conn().execute(
+            "SELECT * FROM bt_arenas ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            (int(limit), int(offset)),
+        ).fetchall()
+    return [_row_to_bt_arena(r) for r in rows if _row_to_bt_arena(r)]
+
+
+def get_bt_arena(arena_id: str) -> dict | None:
+    with _lock:
+        row = _get_conn().execute("SELECT * FROM bt_arenas WHERE id=?", (arena_id,)).fetchone()
+    return _row_to_bt_arena(row)
+
+
+def update_bt_arena_status(
+    arena_id: str,
+    status: str,
+    *,
+    result: dict | None = None,
+) -> dict | None:
+    ts = now_iso()
+    fields = ["status = ?", "updated_at = ?"]
+    args: list[Any] = [status, ts]
+    if status in {"done", "failed"}:
+        fields.append("finished_at = ?")
+        args.append(ts)
+    if result is not None:
+        fields.append("result_json = ?")
+        args.append(json.dumps(result, ensure_ascii=False))
+    args.append(arena_id)
+    with _lock:
+        conn = _get_conn()
+        conn.execute(f"UPDATE bt_arenas SET {', '.join(fields)} WHERE id=?", tuple(args))
+        conn.commit()
+    return get_bt_arena(arena_id)
+
+
+def delete_bt_arena(arena_id: str) -> bool:
+    with _lock:
+        conn = _get_conn()
+        cur = conn.execute("DELETE FROM bt_arenas WHERE id=?", (arena_id,))
+        conn.commit()
+        return cur.rowcount > 0
+
+
+# ------------------------------------------------------ simulation jobs ----
+
+def _decode_simulation_job(row: sqlite3.Row | None) -> Optional[dict]:
+    if row is None:
+        return None
+    data = dict(row)
+    data["request_payload"] = json.loads(data["request_payload"])
+    return data
+
+
+def create_simulation_job(
+    case_id: str,
+    graph_artifact_id: str,
+    gateway_job: dict[str, Any],
+    request_payload: dict[str, Any],
+) -> dict:
+    job_id, ts = new_id(), now_iso()
+    with _lock:
+        conn = _get_conn()
+        existing = conn.execute(
+            "SELECT * FROM simulation_jobs WHERE gateway_job_id=?",
+            (str(gateway_job["job_id"]),),
+        ).fetchone()
+        if existing:
+            return _decode_simulation_job(existing) or {}
+        conn.execute(
+            """
+            INSERT INTO simulation_jobs(
+                id,case_id,graph_artifact_id,gateway_job_id,status,stage,progress,
+                request_payload,error,artifact_id,created_at,updated_at,finished_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                job_id, case_id, graph_artifact_id, str(gateway_job["job_id"]),
+                str(gateway_job.get("status") or "queued"),
+                str(gateway_job.get("stage") or "queued"),
+                float(gateway_job.get("progress") or 0),
+                json.dumps(request_payload, ensure_ascii=False, default=str),
+                gateway_job.get("error"), None, ts, ts, gateway_job.get("finished_at"),
+            ),
+        )
+        conn.commit()
+    return get_simulation_job(job_id) or {}
+
+
+def get_simulation_job(job_id: str) -> Optional[dict]:
+    with _lock:
+        row = _get_conn().execute(
+            "SELECT * FROM simulation_jobs WHERE id=?", (job_id,)
+        ).fetchone()
+    return _decode_simulation_job(row)
+
+
+def list_simulation_jobs(case_id: str) -> list[dict]:
+    with _lock:
+        rows = _get_conn().execute(
+            "SELECT * FROM simulation_jobs WHERE case_id=? ORDER BY created_at DESC",
+            (case_id,),
+        ).fetchall()
+    return [_decode_simulation_job(row) or {} for row in rows]
+
+
+def update_simulation_job(job_id: str, **values: Any) -> Optional[dict]:
+    allowed = {"status", "stage", "progress", "error", "artifact_id", "finished_at"}
+    fields = {key: value for key, value in values.items() if key in allowed}
+    if not fields:
+        return get_simulation_job(job_id)
+    fields["updated_at"] = now_iso()
+    assignments = ",".join(f"{key}=?" for key in fields)
+    with _lock:
+        conn = _get_conn()
+        conn.execute(
+            f"UPDATE simulation_jobs SET {assignments} WHERE id=?",
+            (*fields.values(), job_id),
+        )
+        conn.commit()
+    return get_simulation_job(job_id)

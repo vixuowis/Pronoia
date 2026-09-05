@@ -18,13 +18,41 @@ Evidence Graph 中的 Evidence 是从工具、公告、行情或专家子任务�
 4. **推断**：只有事实和比较足够时，形成一句带有“推断”标识、可被证伪的判断；
 5. **验证条件**：说明未来哪一项数据、事件或结果会支持、削弱或推翻该判断。
 
-`add_claim` 的 `claim` 字段只保留第 4 步结论；`rationale` 保留完整推理过程，格式为：
+`add_claim` 的 `claim` 字段只保留第 4 步结论，且应为一句约 25–50 个汉字的原子化判断；`rationale` 保留完整推理过程，格式为：
 
 ```text
 事实：…；比较：…；反方/限制：…；验证条件：…
 ```
 
+Claim 不重复罗列数字、比较、反方或验证条件；这些内容应留在 `rationale` 与相连 Evidence 中。若两个判断可以被不同 Evidence 独立支持、反驳或更新，必须拆成两个 Claim。例如，写“推断：2026Q1 收入增长尚未转化为利润弹性”，不要把营收增速、利润增速、市场走势和行业解释全部堆进同一个节点。
+
+系统会在 `add_claim` 返回时机械检查标题：超过 50 字、包含多个数字、含分号/句号或误含 rationale 段落标记时返回软警告。它不会拒绝创建 Claim；模型应检查警告是否说明标题包含多个判断，并在必要时用 `merge` 改写成更短的 canonical Claim。
+
 当模型仅掌握事实、尚无合适比较或推断依据时，应使用 `add_missing` 记录数据缺口，而不是为了“图谱完整”强行生成 Claim。
+
+### 2.1 Evidence 预分类与关键证据筛选
+
+在形成 Claim 前，模型先在内部把现有 Evidence 分为五类：基本面、市场、估值、事件政策、筹码资金行业。它只从和当前问题相关的维度中，各选择一到两条关键 Evidence：一条事实或比较锚点；如有，再选一条反方或验证锚点。
+
+关键 Evidence 的判断标准是：删除后，候选 Claim 的事实基础、比较依据、反方限制或验证条件会明显减弱。泛泛的专家摘要、同一事实的重复转述和无关背景不因“可以连边”而变成关键 Evidence。
+
+每条候选 Claim 至少需要一个事实锚点，且还应具有比较、反方或验证锚点中的至少一项；否则应记录 Missing，而不是形成强 Claim。最后，模型扫描关键 Evidence，确保每条都有明确去向：连接到 Claim（`supports`、`contradicts`、`context`），或在新资料补齐缺口时连接到 Missing（`addresses`）。与当前问题没有实质影响的 Evidence 可以不纳入主线，不能为了增加边数强行连接。
+
+图层会校验边的基本方向：`supports`、`contradicts`、`context` 只能是 **Claim → Evidence**；`addresses` 只能是 **Evidence → Missing**。这防止 Evidence→Evidence、Claim→Claim 和 Claim→Missing 等语义不清的边进入图谱。
+
+### 2.2 图谱自检与安全合并
+
+在导出前可调用 `audit()`；`export()` 也会自动附带同一份审计结果。审计只报告、不自动改图，覆盖六类需要人工或模型复核的情形：缺少 `supports` / `contradicts` 的 Claim、仅有 `context` 的 Claim、孤立 Evidence、尚未被 `addresses` 补足的 Missing、重复的同向同类边，以及缺少关系说明（`note`）的边。
+
+这不是要求消除所有警告：一个与当前问题无关的背景 Evidence 可以保持不连边，尚未解决的关键问题也应保留为 Missing。它的作用是把“为何这张图还不完整”明确展示出来，避免模型为了增加边数而制造弱关系。
+
+`merge()` 只允许合并 Claim：`keep_id` 和每个 `merge_ids` 都必须是 Claim。合并重连后，系统会按 `source + target + relation` 去除完全重复的边，并优先保留带有关系说明的那一条。
+
+### 2.3 有限工具预算下的最小完整闭环
+
+深度研究者不按固定“第几轮”工作，但必须为图谱闭环保留操作空间：先沉淀或继承 Evidence，再创建 Claim；待 `add_claim` 返回真实 Claim ID 后，立即创建至少一条 `supports` 或 `contradicts` 边；最后 `audit()` 并 `export()`。`context` 只是背景，不能替代 Claim 的实质证据连接。
+
+因此，空图或尚未形成可用 Claim 时不得为了“防止超时”提前 `export()`；创建 Claim 后也不得在尚有可连 Evidence 时直接导出。确实被外部失败或预算截断时，可以导出不完整图，但应以 `set_sufficient(false, stop_reason=...)` 明确记录缺失环节。
 
 ## 3. 这项变化带来的优势
 
@@ -95,7 +123,7 @@ Evidence 保持原始来源和内容，Claim 专注于解释。读者可以从 C
 
 阅读时可按以下顺序检查：
 
-1. Claim 是否明确是“推断”，而非把事实写成结论；
+1. Claim 是否明确是“推断”、只表达一个判断，而非把事实和多个结论写成一段；
 2. `rationale` 中的事实能否回溯到相连的 Evidence；
 3. 比较口径是否合理，例如不能仅凭一季数据推断全年趋势；
 4. 反方/限制是否真的触及结论的薄弱处，而不是泛泛写“存在风险”；

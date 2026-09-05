@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  ArrowLeft,
   ArrowRight,
   CheckCircle2,
+  ChevronDown,
   CircleDashed,
   Database,
   Loader2,
@@ -9,13 +11,14 @@ import {
   Play,
   Plus,
   RefreshCw,
+  Swords,
   Square,
   Trash2,
   X,
 } from "lucide-react";
 import { api } from "../api";
 import { useStore } from "../store";
-import type { BTDataset, BTEventsCount, BTRun, BTStatus, BTRunner } from "../types";
+import type { BTMetricDef, BTDataset, BTRun, BTStatus, BTRunner } from "../types";
 import { cls, relTime, uid } from "../utils";
 
 /* ===================================== 辅助：状态徽章 ===================================== */
@@ -402,15 +405,55 @@ export default function BacktestList() {
   const loadBTRuns = useStore((s) => s.loadBTRuns);
   const patchBTRun = useStore((s) => s.patchBTRun);
   const openBTDetail = useStore((s) => s.openBTDetail);
+  const setView = useStore((s) => s.setView);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [actionErr, setActionErr] = useState<string | null>(null);
   const [actingId, setActingId] = useState<string | null>(null);
+  const [subView, setSubView] = useState<"backtest" | "arena">("backtest");
+
+  /* ---- 可插拔指标列：默认显示 2 列，可随时切换 ---- */
+  const DEFAULT_METRIC_A = "acc_t3_strict";
+  const DEFAULT_METRIC_B = "acc_primary_non_neutral";
+  const [metricA, setMetricA] = useState<string>(DEFAULT_METRIC_A);
+  const [metricB, setMetricB] = useState<string>(DEFAULT_METRIC_B);
+  const [metricDefs, setMetricDefs] = useState<Record<string, BTMetricDef>>({});
+  const [metricPickerFor, setMetricPickerFor] = useState<"A" | "B" | null>(null);
 
   useEffect(() => {
     void loadBTRuns();
+    void (async () => {
+      try {
+        const defs = await api.btMetricDefs();
+        setMetricDefs(defs);
+      } catch {
+        /* 忽略：回退默认 */
+      }
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const metricsArr = useMemo(() => Object.entries(metricDefs), [metricDefs]);
+
+  /** 从 Run 中取某一指标数值：优先 metrics_json，否则回退旧字段 */
+  const getMetric = (run: BTRun, id: string): number | null | undefined => {
+    const m = (run.metrics as any)?.[id];
+    if (m && typeof m.value === "number") return m.value;
+    // 旧字段兼容（只覆盖最常用的 2 个）
+    if (id === "acc_t3_strict") return run.acc_t3_strict;
+    if (id === "acc_t3_non_neutral") return run.acc_t3_non_neutral;
+    return undefined;
+  };
+
+  /** Wilson lo (如果存在) */
+  const getMetricLo = (run: BTRun, id: string): number | null | undefined => {
+    const m = (run.metrics as any)?.[id];
+    if (m && m.breakdown?.wilson && typeof m.breakdown.wilson.lo_95 === "number") {
+      return m.breakdown.wilson.lo_95;
+    }
+    if (id === "acc_t3_strict") return run.acc_t3_strict_lo;
+    return undefined;
+  };
 
   const rows = useMemo(() => btRuns, [btRuns]);
 
@@ -501,33 +544,159 @@ export default function BacktestList() {
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col overflow-hidden">
       {/* ===================================== Header ===================================== */}
-      <header className="flex shrink-0 items-center justify-between border-b border-edge bg-paper px-6 py-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <h2 className="font-serif text-[20px] font-bold tracking-wide text-ink">回测中心</h2>
-            <span className="rounded bg-jade-soft px-1.5 py-px text-[10px] font-semibold text-jade">P0</span>
+      <header className="flex shrink-0 flex-col gap-3 border-b border-edge bg-paper px-6 py-3.5">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex min-w-0 items-center gap-2">
+            <button
+              onClick={() => setView("chat")}
+              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11.5px] text-mute transition hover:bg-edge hover:text-ink"
+              title="返回研究工作台"
+            >
+              <ArrowLeft size={13} />
+              研究工作台
+            </button>
+            <span className="text-[11px] text-faint">/</span>
+            <div className="flex items-center gap-1 rounded-lg bg-edge/50 p-0.5">
+              <button
+                onClick={() => setSubView("backtest")}
+                className={cls(
+                  "rounded-md px-2.5 py-1 text-[11.5px] font-medium transition",
+                  subView === "backtest" ? "bg-card text-jade shadow-card" : "text-mute hover:text-ink",
+                )}
+              >
+                回测 Run
+              </button>
+              <button
+                onClick={() => {
+                  setSubView("arena");
+                  setView("arena-list");
+                }}
+                className={cls(
+                  "inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-[11.5px] font-medium transition",
+                  subView === "arena" ? "bg-card text-violet shadow-card" : "text-mute hover:text-ink",
+                )}
+              >
+                <Swords size={12} />
+                Arena 横向比对
+              </button>
+            </div>
           </div>
-          <p className="mt-0.5 font-serif text-[11.5px] italic text-mute">
-            Backtest &amp; Benchmark Suite — 批量验证、追踪指标、沉淀可进化知识
-          </p>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => void loadBTRuns(true)}
+              disabled={btRunsLoading}
+              className="flex items-center gap-1 rounded-lg border border-edge bg-card px-3 py-1.5 text-[12px] text-mute transition hover:bg-edge/40 hover:text-ink disabled:opacity-50"
+              title="刷新列表"
+            >
+              <RefreshCw size={13} className={cls(btRunsLoading && "animate-spin")} />
+              刷新
+            </button>
+            <button
+              onClick={() => setModalOpen(true)}
+              className="flex items-center gap-1.5 rounded-lg bg-brand px-3.5 py-1.5 text-[12.5px] font-medium text-card shadow-card transition hover:bg-brand-hover hover:shadow-pop"
+            >
+              <Plus size={14} />
+              新建回测
+            </button>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => void loadBTRuns(true)}
-            disabled={btRunsLoading}
-            className="flex items-center gap-1 rounded-lg border border-edge bg-card px-3 py-1.5 text-[12px] text-mute transition hover:bg-edge/40 hover:text-ink disabled:opacity-50"
-            title="刷新列表"
-          >
-            <RefreshCw size={13} className={cls(btRunsLoading && "animate-spin")} />
-            刷新
-          </button>
-          <button
-            onClick={() => setModalOpen(true)}
-            className="flex items-center gap-1.5 rounded-lg bg-brand px-3.5 py-1.5 text-[12.5px] font-medium text-card shadow-card transition hover:bg-brand-hover hover:shadow-pop"
-          >
-            <Plus size={14} />
-            新建回测
-          </button>
+        {/* 指标列切换条 */}
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5">
+              <h2 className="font-serif text-[18px] font-bold tracking-wide text-ink">回测中心</h2>
+              <span className="rounded bg-jade-soft px-1.5 py-px text-[10px] font-semibold text-jade">P0</span>
+            </div>
+            <p className="font-serif text-[11.5px] italic text-mute">
+              Backtest &amp; Benchmark Suite — 可插拔指标 · 追踪进度 · 沉淀知识
+            </p>
+          </div>
+          <div className="flex items-center gap-2 text-[11.5px]">
+            <span className="text-mute">显示指标列：</span>
+            {/* 指标列 A */}
+            <div className="relative">
+              <button
+                onClick={() => setMetricPickerFor(metricPickerFor === "A" ? null : "A")}
+                className="inline-flex items-center gap-1.5 rounded-md border border-edgeDark/70 bg-card px-2 py-1 text-mute transition hover:text-ink"
+                title={`当前：${metricDefs[metricA]?.display_name ?? metricA}`}
+              >
+                <span
+                  className={cls(
+                    "inline-block h-1.5 w-1.5 rounded-full",
+                    (metricDefs[metricA]?.tier ?? "core") === "core"
+                      ? "bg-brand"
+                      : (metricDefs[metricA]?.tier ?? "extended") === "extended"
+                      ? "bg-amber"
+                      : "bg-violet",
+                  )}
+                />
+                <span className="max-w-[140px] truncate">
+                  <span className="text-[10px] text-faint mr-1">A</span>
+                  {metricDefs[metricA]?.display_name ?? metricA}
+                </span>
+                <ChevronDown size={11} />
+              </button>
+              {metricPickerFor === "A" && (
+                <MetricPickerPop
+                  defs={metricsArr}
+                  value={metricA}
+                  other={metricB}
+                  onPick={(v) => {
+                    setMetricA(v);
+                    setMetricPickerFor(null);
+                  }}
+                  onClose={() => setMetricPickerFor(null)}
+                />
+              )}
+            </div>
+            <span className="text-faint">/</span>
+            {/* 指标列 B */}
+            <div className="relative">
+              <button
+                onClick={() => setMetricPickerFor(metricPickerFor === "B" ? null : "B")}
+                className="inline-flex items-center gap-1.5 rounded-md border border-edgeDark/70 bg-card px-2 py-1 text-mute transition hover:text-ink"
+                title={`当前：${metricDefs[metricB]?.display_name ?? metricB}`}
+              >
+                <span
+                  className={cls(
+                    "inline-block h-1.5 w-1.5 rounded-full",
+                    (metricDefs[metricB]?.tier ?? "core") === "core"
+                      ? "bg-brand"
+                      : (metricDefs[metricB]?.tier ?? "extended") === "extended"
+                      ? "bg-amber"
+                      : "bg-violet",
+                  )}
+                />
+                <span className="max-w-[140px] truncate">
+                  <span className="text-[10px] text-faint mr-1">B</span>
+                  {metricDefs[metricB]?.display_name ?? metricB}
+                </span>
+                <ChevronDown size={11} />
+              </button>
+              {metricPickerFor === "B" && (
+                <MetricPickerPop
+                  defs={metricsArr}
+                  value={metricB}
+                  other={metricA}
+                  onPick={(v) => {
+                    setMetricB(v);
+                    setMetricPickerFor(null);
+                  }}
+                  onClose={() => setMetricPickerFor(null)}
+                />
+              )}
+            </div>
+            <button
+              onClick={() => {
+                setMetricA(DEFAULT_METRIC_A);
+                setMetricB(DEFAULT_METRIC_B);
+              }}
+              className="rounded-md border border-edgeDark/70 px-2 py-1 text-[10.5px] text-mute hover:text-ink"
+              title="恢复默认指标列"
+            >
+              重置
+            </button>
+          </div>
         </div>
       </header>
 
@@ -560,8 +729,30 @@ export default function BacktestList() {
                 <th className="py-2.5 pr-4 font-medium">Runner</th>
                 <th className="py-2.5 pr-4 font-medium">状态</th>
                 <th className="py-2.5 pr-4 font-medium">进度</th>
-                <th className="py-2.5 pr-4 font-medium">T+3 ACC (Strict)</th>
-                <th className="py-2.5 pr-4 font-medium">T+3 ACC (Non-Neutral)</th>
+                <th
+                  className="py-2.5 pr-4 font-medium"
+                  title={metricDefs[metricA]?.description}
+                >
+                  <div className="inline-flex items-center gap-1 normal-case tracking-normal">
+                    <span className="rounded bg-brand/10 px-1 py-px text-[9.5px] font-semibold text-brand">A</span>
+                    {metricDefs[metricA]?.display_name ?? metricA}
+                    <span className="text-[9.5px] text-faint">
+                      {(metricDefs[metricA]?.higher_is_better ?? true) ? "↑" : "↓"}
+                    </span>
+                  </div>
+                </th>
+                <th
+                  className="py-2.5 pr-4 font-medium"
+                  title={metricDefs[metricB]?.description}
+                >
+                  <div className="inline-flex items-center gap-1 normal-case tracking-normal">
+                    <span className="rounded bg-violet/10 px-1 py-px text-[9.5px] font-semibold text-violet">B</span>
+                    {metricDefs[metricB]?.display_name ?? metricB}
+                    <span className="text-[9.5px] text-faint">
+                      {(metricDefs[metricB]?.higher_is_better ?? true) ? "↑" : "↓"}
+                    </span>
+                  </div>
+                </th>
                 <th className="py-2.5 pr-4 font-medium">更新时间</th>
                 <th className="py-2.5 pr-2 text-right font-medium">操作</th>
               </tr>
@@ -571,6 +762,16 @@ export default function BacktestList() {
                 <RunRow
                   key={r.id}
                   run={r}
+                  metricA={{
+                    id: metricA,
+                    value: getMetric(r, metricA),
+                    lo: getMetricLo(r, metricA),
+                  }}
+                  metricB={{
+                    id: metricB,
+                    value: getMetric(r, metricB),
+                    lo: getMetricLo(r, metricB),
+                  }}
                   actingId={actingId}
                   onStart={() => doStart(r.id)}
                   onPause={() => doPause(r.id)}
@@ -594,10 +795,158 @@ export default function BacktestList() {
   );
 }
 
+/* ===================================== MetricPickerPop：可插拔指标选择弹层 ===================================== */
+
+function MetricPickerPop({
+  defs,
+  value,
+  other,
+  onPick,
+  onClose,
+}: {
+  defs: Array<[string, BTMetricDef]>;
+  value: string;
+  other: string;
+  onPick: (id: string) => void;
+  onClose: () => void;
+}) {
+  const [q, setQ] = useState("");
+  useEffect(() => {
+    const onDoc = (e: MouseEvent) => {
+      const t = e.target as HTMLElement;
+      if (!t.closest("[data-metric-pop]")) onClose();
+    };
+    setTimeout(() => document.addEventListener("mousedown", onDoc), 0);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [onClose]);
+
+  const tiersOrder: Array<BTMetricDef["tier"] | "core" | "extended" | "debug"> = ["core", "extended", "debug"];
+  const filtered = defs.filter(([id, d]) => {
+    const s = q.trim().toLowerCase();
+    if (!s) return true;
+    return (
+      id.toLowerCase().includes(s) ||
+      (d.display_name ?? "").toLowerCase().includes(s) ||
+      (d.description ?? "").toLowerCase().includes(s)
+    );
+  });
+  const grouped = tiersOrder.map((tier) => ({
+    tier,
+    items: filtered.filter(([, d]) => (d.tier ?? "core") === tier),
+  }));
+
+  return (
+    <div
+      data-metric-pop
+      className="absolute right-0 z-20 mt-1 w-[340px] overflow-hidden rounded-lg border border-edgeDark/80 bg-paper shadow-pop"
+    >
+      <div className="border-b border-edge/70 p-2">
+        <div className="relative">
+          <input
+            autoFocus
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="搜索指标名 / 描述…"
+            className="w-full rounded-md border border-edgeDark/70 bg-card py-1.5 pl-7 pr-2 text-[12px] outline-none placeholder:text-faint focus:border-brand/60"
+          />
+          <svg
+            className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-faint"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <circle cx="11" cy="11" r="8" />
+            <path d="m21 21-4.3-4.3" />
+          </svg>
+        </div>
+      </div>
+      <div className="max-h-80 overflow-y-auto">
+        {grouped.map(
+          (g) =>
+            g.items.length > 0 && (
+              <div key={g.tier}>
+                <div className="sticky top-0 flex items-center gap-1.5 border-b border-edge/70 bg-edge/40 px-2 py-1 text-[10.5px] font-semibold uppercase tracking-wide text-faint">
+                  <span
+                    className={cls(
+                      "inline-block h-1.5 w-1.5 rounded-full",
+                      g.tier === "core"
+                        ? "bg-brand"
+                        : g.tier === "extended"
+                        ? "bg-amber"
+                        : "bg-violet",
+                    )}
+                  />
+                  {g.tier === "core" ? "Core 核心指标" : g.tier === "extended" ? "Extended 扩展指标" : "Debug 诊断指标"}
+                  <span className="ml-auto text-[9.5px] font-normal normal-case">
+                    {g.items.length} 个
+                  </span>
+                </div>
+                <ul>
+                  {g.items.map(([id, d]) => {
+                    const selected = id === value;
+                    const conflict = id === other;
+                    return (
+                      <li key={id}>
+                        <button
+                          disabled={conflict && !selected}
+                          onClick={() => onPick(id)}
+                          className={cls(
+                            "block w-full border-b border-edge/50 px-2.5 py-2 text-left transition last:border-b-0",
+                            selected
+                              ? "bg-brand/5"
+                              : conflict
+                              ? "cursor-not-allowed opacity-50"
+                              : "hover:bg-edge/40",
+                          )}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="truncate text-[12px] font-medium text-ink">
+                                {d.display_name ?? id}
+                              </div>
+                              <div className="mt-0.5 truncate text-[10.5px] text-faint">
+                                {d.description ?? id}
+                              </div>
+                            </div>
+                            <div className="shrink-0 text-right">
+                              {conflict ? (
+                                <span className="text-[10px] text-faint">另一列已选</span>
+                              ) : selected ? (
+                                <span className="rounded bg-brand/10 px-1.5 py-0.5 text-[10px] font-medium text-brand">
+                                  当前
+                                </span>
+                              ) : (
+                                <span className="text-[10px] text-mute">
+                                  {(d.higher_is_better ?? true) ? "↑越高越好" : "↓越低越好"}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            ),
+        )}
+        {filtered.length === 0 && (
+          <div className="py-6 text-center text-[11px] text-faint">没有匹配的指标</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ===================================== RunRow ===================================== */
 
 function RunRow({
   run,
+  metricA,
+  metricB,
   actingId,
   onStart,
   onPause,
@@ -607,6 +956,8 @@ function RunRow({
   onOpen,
 }: {
   run: BTRun;
+  metricA: { id: string; value?: number | null; lo?: number | null };
+  metricB: { id: string; value?: number | null; lo?: number | null };
   actingId: string | null;
   onStart: () => void;
   onPause: () => void;
@@ -663,10 +1014,10 @@ function RunRow({
         </div>
       </td>
       <td className="py-3 pr-4">
-        <AccCell acc={run.acc_t3_strict} lo={run.acc_t3_strict_lo} />
+        <AccCell acc={metricA.value} lo={metricA.lo} />
       </td>
       <td className="py-3 pr-4">
-        <AccCell acc={run.acc_t3_non_neutral} />
+        <AccCell acc={metricB.value} lo={metricB.lo} />
       </td>
       <td className="py-3 pr-4 text-[11.5px] text-mute">
         <div>{relTime(run.updated_at)}</div>

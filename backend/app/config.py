@@ -47,6 +47,14 @@ LLM_BASE_URL, LLM_API_KEY, LLM_MODEL = resolve_llm()
 DB_PATH: str = os.getenv("FEVER_DB_PATH", str(_BACKEND_DIR / "fever.db"))
 DATA_DIR: str = os.getenv("FEVER_DATA_DIR", str(_PROJECT_ROOT / "data"))
 
+# Long-running actor simulation is isolated behind an asynchronous gateway.
+SIMULATION_GATEWAY_URL: str = os.getenv(
+    "FEVER_SIMULATION_GATEWAY_URL", "http://127.0.0.1:5010"
+).rstrip("/")
+SIMULATION_GATEWAY_TIMEOUT: float = float(
+    os.getenv("FEVER_SIMULATION_GATEWAY_TIMEOUT", "15")
+)
+
 # Skill execution guardrails (design.md §2/§4)
 #
 # Trajectory analysis showed that every top-level 60s timeout added roughly
