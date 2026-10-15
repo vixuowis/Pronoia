@@ -395,7 +395,7 @@ Qwen3-8B (bf16, backbone frozen, LoRA rank 16) trained with GRPO~\cite{grpo2025}
 
 Reward is six-element tuple (R0--R5): claim accuracy (core), confidence calibration (Brier), verifiability ratio, diversity (family coverage), format compliance, length penalty.
 
-\textbf{Ablation (v6.1-b):} Adds five residual bias corrections (B3: hard-negative targeting; B4/B5: distribution residual correction; B7: claim combination quality; T3: format bonus). Vanilla (v6.2) disables these.
+\textbf{Reward variants:} \textbf{PAVR-C} adds five residual bias corrections (B3: hard-negative targeting; B4/B5: distribution residual correction; B7: claim combination quality; T3: format bonus); \textbf{PAVR} uses settlement-only reward without these corrections.
 
 \textbf{Training:} GRPO (TRL 0.17) + Unsloth acceleration (in-process vLLM, weight sharing, Standby mode, $\sim$2.3$\times$ speedup). Batch 8/device $\times$ grad-accum 2 = 16 completions/step (4 events $\times$ 4 candidates). LR 1e-5, cosine annealing. 1 epoch = 1,241 steps $\approx$ 4,965 events. Seed 42. Single RTX 4090 (48GB), 10--12h/condition.
 
@@ -459,7 +459,7 @@ Key findings: (1)~S1 51.6\% $\approx$ random---priors alone cannot trade; (2)~Se
 \label{tab:main}
 \begin{tabular}{@{}lccc@{}}
 \toprule
-Metric & Base & v6.1-b & v6.2-vanilla \\
+Metric & Base & PAVR-C & PAVR \\
 \midrule
 \textbf{Claim ACC} & 0.5729 & 0.6093 & \textbf{0.6322} \\
 Brier & 0.2826 & 0.2569 & \textbf{0.2539} \\
@@ -470,13 +470,13 @@ Settled claims & 2,978 & 4,056 & 3,154 \\
 \end{tabular}
 \end{table}
 
-Paired bootstrap: $\Delta$(vanilla $-$ base) = +5.93pt (95\% CI [+3.79, +8.07]); $\Delta$(vanilla $-$ v6.1-b) = +2.29pt (95\% CI [+0.78, +3.79])---CIs exclude zero. Event-level: vanilla wins 394, v6.1-b 335, tie 302.
+Paired bootstrap: $\Delta$(PAVR $-$ base) = +5.93pt (95\% CI [+3.79, +8.07]); $\Delta$(PAVR $-$ PAVR-C) = +2.29pt (95\% CI [+0.78, +3.79])---CIs exclude zero. Event-level: PAVR wins 394, PAVR-C 335, tie 302.
 
-\textbf{Reward hacking:} Corrections' only benefit is format (+15.5pt), recoverable by inference-time re-sampling. Training reward (v6.1-b 0.90 vs vanilla 0.69) \emph{inversely correlates} with OOS accuracy (0.609 vs 0.632)---model optimizes proxy signals over claim quality. KL, length, truncation are healthy and comparable---ruling out instability. \textbf{Implication: training reward trend cannot validate reward components; OOS adjudication is the only mechanism.}
+\textbf{Reward hacking:} Corrections' only benefit is format (+15.5pt), recoverable by inference-time re-sampling. Training reward (PAVR-C 0.90 vs PAVR 0.69) \emph{inversely correlates} with OOS accuracy (0.609 vs 0.632)---model optimizes proxy signals over claim quality. KL, length, truncation are healthy and comparable---ruling out instability. \textbf{Implication: training reward trend cannot validate reward components; OOS adjudication is the only mechanism.}
 
 \subsection{Hard-Negative Subset}
 
-146 events (M\&A success, turnaround, beat, additional issuance, buyback): base 0.5103, v6.1-b 0.5515, \textbf{vanilla 0.5862}. Corrections help +3.5pt on this subset but net negative overall---the ``residual bias correctable by prior'' premise is unsupported.
+146 events (M\&A success, turnaround, beat, additional issuance, buyback): base 0.5103, PAVR-C 0.5515, \textbf{PAVR 0.5862}. Corrections help +3.5pt on this subset but net negative overall---the ``residual bias correctable by prior'' premise is unsupported.
 
 \begin{figure}[t]
 \centering
@@ -488,19 +488,19 @@ Paired bootstrap: $\Delta$(vanilla $-$ base) = +5.93pt (95\% CI [+3.79, +8.07]);
     height=5cm,
     ymin=0, ymax=0.8,
     ylabel={Claim Accuracy},
-    symbolic x coords={Base, v6.1-b, v6.2-vanilla},
+    symbolic x coords={Base, PAVR-C, PAVR},
     xtick=data,
     nodes near coords,
     nodes near coords align={vertical},
     every node near coord/.append style={font=\footnotesize},
     legend style={at={(0.5,-0.15)}, anchor=north, legend columns=-1}
 ]
-\addplot[fill=blue!40] coordinates {(Base,0.5729) (v6.1-b,0.6093) (v6.2-vanilla,0.6322)};
-\addplot[fill=green!40] coordinates {(Base,0.5103) (v6.1-b,0.5515) (v6.2-vanilla,0.5862)};
+\addplot[fill=blue!40] coordinates {(Base,0.5729) (PAVR-C,0.6093) (PAVR,0.6322)};
+\addplot[fill=green!40] coordinates {(Base,0.5103) (PAVR-C,0.5515) (PAVR,0.5862)};
 \legend{Full OOS (1,034), Hard Negatives (146)}
 \end{axis}
 \end{tikzpicture}
-\caption{Claim accuracy comparison: full OOS set vs. hard-negative subset. v6.2-vanilla achieves best performance on both, with larger margin on hard negatives (+7.6pt vs. base).}
+\caption{Claim accuracy comparison: full OOS set vs. hard-negative subset. PAVR achieves best performance on both, with larger margin on hard negatives (+7.6pt vs. base).}
 \label{fig:results}
 \end{figure}
 
@@ -514,7 +514,7 @@ Paired bootstrap: $\Delta$(vanilla $-$ base) = +5.93pt (95\% CI [+3.79, +8.07]);
 \label{tab:bytype}
 \begin{tabular}{@{}lcccc@{}}
 \toprule
-Event Type & Events & Base & v6.2 & $\Delta$ \\
+Event Type & Events & Base & PAVR & $\Delta$ \\
 \midrule
 Earnings beat/miss & 478 & 0.524 & 0.598 & \textbf{+7.4pt} \\
 M\&A/spinoff/financing & 373 & 0.618 & 0.661 & +4.4pt \\
@@ -534,7 +534,7 @@ Earnings: largest relative lift (+7.4pt) but lowest absolute (0.598)---strongest
 \label{tab:byfamily}
 \begin{tabular}{@{}lcccc@{}}
 \toprule
-Slice & Claims & Base & v6.2 & $\Delta$ \\
+Slice & Claims & Base & PAVR & $\Delta$ \\
 \midrule
 Significance ($p$-val) & 944 & 0.614 & \textbf{0.791} & \textbf{+17.7pt} \\
 CAR & 1,207 & 0.566 & 0.592 & +2.6pt \\
@@ -561,9 +561,9 @@ Significance family strongest (+17.7pt to 79.1\%): most A-share CARs insignifica
 \section{Case Study}
 \label{sec:cases}
 
-\subsection{Case 1 (Success): Shengtong Turnaround --- vanilla 3/3, base 1/3}
+\subsection{Case 1 (Success): Shengtong Turnaround --- PAVR 3/3, base 1/3}
 
-002599, 2026-01-30, turnaround. Pre-event CAR $-$7.95\% (oversold); context: ``mean-reversion vs micro-profit cancel $\to$ neutral, confidence lowered.'' All three v6.2 claims settle correct: \texttt{car\_t7>0} TRUE (0.72); \texttt{bm\_ret\_t30>0} FALSE (0.65); \texttt{car\_t30\_pvalue<0.05} FALSE (0.55). Base ignores context, bets $p$-value TRUE with arbitrary thresholds. \textbf{Success = context absorption + diversity planning + betting FALSE.}
+002599, 2026-01-30, turnaround. Pre-event CAR $-$7.95\% (oversold); context: ``mean-reversion vs micro-profit cancel $\to$ neutral, confidence lowered.'' All three PAVR claims settle correct: \texttt{car\_t7>0} TRUE (0.72); \texttt{bm\_ret\_t30>0} FALSE (0.65); \texttt{car\_t30\_pvalue<0.05} FALSE (0.55). Base ignores context, bets $p$-value TRUE with arbitrary thresholds. \textbf{Success = context absorption + diversity planning + betting FALSE.}
 
 \subsection{Case 2 (Failure): Zhongjin Gold Beat --- all models wrong}
 
@@ -611,7 +611,7 @@ Conclusion & Grade & Basis \\
 \midrule
 RLVR effective (+5.9pt) & High & Effect $\gg$ noise; same pipeline/OOS \\
 Structure (FALSE$>$TRUE; t30$>$t15) & High & Hundreds/thousands per cell; 3 models agree \\
-Vanilla $>$ v6.1-b 2.29pt & \textbf{Low} & 3 confounders; CI lower bound +0.78 \\
+PAVR $>$ PAVR-C 2.29pt & \textbf{Low} & 3 confounders; CI lower bound +0.78 \\
 Confidence 0.90 $\to$ 0.926 & Verify & Self-selection; n(0.90) unconfirmed \\
 US conclusions & Unusable & OOS US = 7 events \\
 \bottomrule
