@@ -411,6 +411,28 @@ Known biases: US near-absent in OOS; no macro events in OOS; scope limited to CN
 
 \textbf{Integrity protocol:} (1)~Strict as\_of: features use only pre-event data, audited; (2)~Time split only, OOS once; (3)~Event-level paired bootstrap (2,000 resamples, weighted); (4)~Claim accuracy weighted by n\_settleable; (5)~Calibration: Brier + 10-bin ECE + confidence-bin actual accuracy.
 
+\subsubsection{Settlement Validity: LLM-as-Judge vs. Market}
+
+PAV's premise (Ch2) is that market settlement cannot be replaced by LLM-as-judge. We test this premise directly: an independent judge model, given exactly the same pre-event information as the evaluatee (zero leakage), rules on a sample of already-settled claims; its verdicts are scored against market ground truth.
+
+\begin{table}[t]
+\centering\small
+\caption{Judge-vs-market validity on sampled settled claims (judge sees the same information as the evaluatee). \emph{Data pending; populated upon completion of the evaluation runs.}}
+\label{tab:judge}
+\begin{tabular}{@{}lc@{}}
+\toprule
+Metric & Value \\
+\midrule
+Judge accuracy (vs.\ market truth) & -- \\
+Cohen's $\kappa$ (judge vs.\ truth) & -- \\
+Agreement (judge vs.\ evaluatee) & -- \\
+Settled claims judged & -- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:judge} will report judge accuracy, judge--truth agreement, and judge--evaluatee agreement. The motivating hypothesis: if the judge agrees with the evaluatee far more than with the market, then judge verdicts measure \emph{plausibility}, not correctness---and only market settlement provides the training signal RLVR requires.
+
 \subsection{RQ1: Signal Validation via Rule-Driven Backtest}
 \label{sec:backtest}
 
@@ -457,6 +479,46 @@ Settled claims & 2,978 & 3,154 \\
 \end{table}
 
 Paired bootstrap: $\Delta$(PAVR $-$ base) = +5.93pt (95\% CI [+3.79, +8.07])---CI excludes zero.
+
+\begin{table}[t]
+\centering\small
+\caption{Zero-shot API baselines on the same 1,034 OOS events, identical PAV prompt and settlement machinery (temperature 0.6). \emph{Data pending; populated upon completion of the evaluation runs.}}
+\label{tab:external}
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{@{}lccccc@{}}
+\toprule
+Model & Params & ACC & Brier & ECE & Format \\
+\midrule
+Base (Qwen3-8B) & 8B & 0.573 & 0.283 & 0.163 & 0.775 \\
+PAVR (ours) & 8B+LoRA & \textbf{0.632} & \textbf{0.254} & \textbf{0.107} & 0.842 \\
+\midrule
+GLM-5.3 & -- & -- & -- & -- & -- \\
+GLM-5.3-Flash & -- & -- & -- & -- & -- \\
+DeepSeek-V4-Pro & -- & -- & -- & -- & -- \\
+DeepSeek-V4-Flash & -- & -- & -- & -- & -- \\
+Kimi-K3 & -- & -- & -- & -- & -- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:external} adds zero-shot API baselines: five frontier models run the identical PAV contract on the same OOS events and are settled by the same machinery. This separates the contribution of market-settlement training from raw model scale---if untuned 60$\times$-larger API models do not exceed PAVR, the gain is attributable to RLVR on verifiable rewards rather than backbone capacity.
+
+\begin{table}[t]
+\centering\small
+\caption{PAVR robustness across random seeds (identical pipeline and OOS set). \emph{Seeds 43/44 pending; mean$\pm$std to be reported.}}
+\label{tab:seeds}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Seed & 42 & 43 & 44 \\
+\midrule
+Claim ACC & 0.6322 & -- & -- \\
+Brier & 0.2539 & -- & -- \\
+ECE & 0.1070 & -- & -- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Seed robustness is summarized in Table~\ref{tab:seeds}; the single-seed risk flagged in \S\ref{sec:audit} is being addressed with the 3-seed matrix.
 
 \textbf{Ablation (reward corrections):} Adding the five residual bias corrections of \S\ref{sec:rlvr-training} to the reward (variant PAVR-C) yields 0.6093 claim ACC---\emph{below} PAVR by 2.29pt (95\% CI [+0.78, +3.79]); event-level: PAVR wins 394, PAVR-C 335, tie 302. PAVR-C's only gains are format compliance (0.997 vs 0.842) and settled-claim volume (4,056 vs 3,154); calibration is equivalent (ECE 0.1064 vs 0.1070).
 
@@ -552,6 +614,34 @@ RQ4 asks what failure modes reward design and event reasoning expose. Two are do
 
 \textbf{Reward hacking.} Corrections' format benefit (+15.5pt) is recoverable by inference-time re-sampling. Training reward (PAVR-C 0.90 vs PAVR 0.69) \emph{inversely correlates} with OOS accuracy (0.609 vs 0.632)---the model optimizes proxy signals over claim quality. KL, length, and truncation diagnostics are healthy and comparable, ruling out instability. \textbf{Implication: training reward trend cannot validate reward components; OOS adjudication is the only mechanism.}
 
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+    ybar=2pt,
+    bar width=0.55cm,
+    width=7.6cm,
+    height=4.6cm,
+    ymin=0, ymax=1.0,
+    ylabel={Score},
+    symbolic x coords={PAVR-C, PAVR},
+    xtick=data,
+    nodes near coords,
+    every node near coord/.append style={font=\footnotesize},
+    legend style={at={(0.5,-0.16)}, anchor=north, legend columns=-1},
+    ymajorgrids
+]
+\addplot[fill=orange!50] coordinates {(PAVR-C,0.90) (PAVR,0.69)};
+\addplot[fill=blue!40] coordinates {(PAVR-C,0.609) (PAVR,0.632)};
+\legend{Training reward, OOS claim ACC}
+\end{axis}
+\end{tikzpicture}
+\caption{Reward--performance divergence. PAVR-C attains higher training reward (0.90 vs 0.69) yet lower OOS claim accuracy (0.609 vs 0.632)---the model optimizes proxy reward signals instead of claim quality.}
+\label{fig:divergence}
+\end{figure}
+
+Figure~\ref{fig:divergence} visualizes the divergence: the variant with the higher training reward delivers the lower OOS accuracy.
+
 \textbf{Reasoning failures.} Claim-level tracing of OOS events (three representative cases in Appendix~\ref{app:cases}; full synthesis there) reveals two recurring patterns: (i)~failures concentrate in ``bullish text + T0 positive reaction'' configurations, where the model's prior is momentum but A-share reality is mean reversion---risk paragraphs are \emph{cognitively correct but behaviorally inert}, never converting into hedging claims; and (ii)~upstream context with strong priors contaminates downstream reasoning (individual-stock weakness extrapolated to benchmark direction, near coin-flip), while cross-indicator claims are silently dropped. The success case shows the complementary mechanism: context absorption, claim diversity, and willingness to bet FALSE.
 
 \section{Discussion}
@@ -570,6 +660,7 @@ Two experiments validate one proposition at three levels:
 Single seed; US OOS = 7 events; 33 rule events + 4,965 RL events insufficient for larger structures; single sampling; TRUE-side weakness in A-shares (short mechanisms incomplete).
 
 \subsection{Validity Audit}
+\label{sec:audit}
 
 \begin{table}[t]
 \centering\footnotesize
