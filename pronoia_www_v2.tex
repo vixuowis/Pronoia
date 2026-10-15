@@ -97,6 +97,7 @@ We present PRONOIA, an event-driven financial reasoning agent deployed as an ope
 \maketitle
 
 \section{Introduction}
+\label{sec:intro}
 
 Every trading day, hundreds of corporate disclosures hit the Web---earnings surprises, contract wins, guidance revisions, policy shifts---and each triggers the same race: who reads \emph{what the announcement means} most accurately. Event-driven trading has shifted from \emph{speed alpha}, won by co-location and low-latency feeds, to \emph{cognitive alpha}, won by reasoning more deeply about magnitude, wording, surprise, and cross-sector transmission. But depth does not scale: a skilled analyst can work through only a handful of events per day, and this coverage--depth trade-off is precisely where event-driven performance is capped.
 
@@ -129,6 +130,28 @@ These gaps motivate three research questions, answered in \S\ref{sec:experiments
     \item \textbf{RQ3 (Failure):} what failure modes do reward design and event reasoning expose under controlled comparison?
 \end{itemize}
 
+Table~\ref{tab:comparison} situates PRONOIA among event-driven financial AI systems: reported direction accuracy saturates at 55--62\%, consistent with the limited headroom of single-hop ``event $\to$ reaction'' mappings scored by non-verifiable signals.
+
+\begin{table}[t]
+\centering\footnotesize
+\caption{Comparison with event-driven financial AI systems. ACC = direction accuracy on respective test sets.}
+\label{tab:comparison}
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}p{1.75cm}p{1.75cm}p{3.15cm}c@{}}
+\toprule
+System & Approach & Limitation & ACC \\
+\midrule
+FinHEAR~\cite{finhear2025} & Historical analog & Single-chain, no multi-path & 58--62\% \\
+FinKario~\cite{finkario2025} & KG retrieval & Static KG, retrieval-only & 58.1\% \\
+Trading\-Agents~\cite{tradingagents2024} & Multi-agent vote & Not event-driven & $\sim$55\% \\
+Janus-Q~\cite{janusq2026} & Gated PnL reward & Episode-level, no per-claim check & 58.7\% \\
+Argus~\cite{argus2026} & LLM-as-judge & Judge shares errors & --- \\
+\midrule
+\textbf{PRONOIA} & Graph + PAV + RLVR & US OOS limited & \textbf{63.2\%} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
 \subsection{The PRONOIA Approach}
 
 We present PRONOIA, an event-driven financial reasoning agent built on three pillars (Figure~\ref{fig:paradigm}c):
@@ -154,29 +177,7 @@ We present PRONOIA, an event-driven financial reasoning agent built on three pil
 
 The event study of Ball \& Brown~\cite{ball1968} and Fama et al.~\cite{fama1969} remains the empirical cornerstone of event analysis, and its limitations are well documented: event dummies discard the surprise component that moves prices~\cite{kuttner2001}, cross-sectional CAR correlation inflates test statistics~\cite{kolari2010}, and the pipeline offers no slot for economic transmission. Financial NLP supplies richer event representations---detection and coreference (MAVEN~\cite{maven2020}, MAVEN-ERE~\cite{mavenere2022}), document-level extraction (Doc2EDAG~\cite{doc2edag2019}, DCFEE~\cite{dcfee2018}), and event-enhanced knowledge graphs (FinKario~\cite{finkario2025})---but stops at the \emph{perception} layer: structured events are produced without a reasoning layer that propagates them or a verification layer that settles predictions. PRONOIA's contribution is exactly these two missing layers.
 
-A recent wave of LLM systems targets event-driven prediction directly (Table~\ref{tab:comparison}).
-
-\begin{table}[t]
-\centering\footnotesize
-\caption{Comparison with event-driven financial AI systems. ACC = direction accuracy on respective test sets.}
-\label{tab:comparison}
-\setlength{\tabcolsep}{3pt}
-\begin{tabular}{@{}p{1.75cm}p{1.75cm}p{3.15cm}c@{}}
-\toprule
-System & Approach & Limitation & ACC \\
-\midrule
-FinHEAR~\cite{finhear2025} & Historical analog & Single-chain, no multi-path & 58--62\% \\
-FinKario~\cite{finkario2025} & KG retrieval & Static KG, retrieval-only & 58.1\% \\
-Trading\-Agents~\cite{tradingagents2024} & Multi-agent vote & Not event-driven & $\sim$55\% \\
-Janus-Q~\cite{janusq2026} & Gated PnL reward & Episode-level, no per-claim check & 58.7\% \\
-Argus~\cite{argus2026} & LLM-as-judge & Judge shares errors & --- \\
-\midrule
-\textbf{PRONOIA} & Graph + PAV + RLVR & US OOS limited & \textbf{63.2\%} \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-Table~\ref{tab:comparison} situates PRONOIA. FinHEAR~\cite{finhear2025} retrieves historical analogs along a single chain; FinKario~\cite{finkario2025} retrieves from a static knowledge graph; TradingAgents~\cite{tradingagents2024} aggregates multi-agent votes that are not event-conditioned; Argus~\cite{argus2026} validates with LLM-as-judge. Reported direction accuracy saturates at 55--62\%, consistent with the limited headroom of single-hop ``event $\to$ reaction'' mappings scored by non-verifiable signals. Closest to PRONOIA is the concurrent Janus-Q~\cite{janusq2026}, which likewise trains on event--CAR pairs with a gated trading reward. It differs in three ways: (i)~its prediction target is a trading action validated end-to-end by PnL, whereas PAV decomposes each prediction into 3--6 independently settled claims, exposing \emph{which} component fails; (ii)~it models no explicit multi-path transmission; and (iii)~it reports aggregate trading metrics, whereas we additionally analyze calibration and document a reward-hacking failure mode that aggregate metrics would mask (\S\ref{sec:ablation}).
+Among LLM systems targeting event-driven prediction (Table~\ref{tab:comparison}, \S\ref{sec:intro}), FinHEAR~\cite{finhear2025} retrieves historical analogs along a single chain; FinKario~\cite{finkario2025} retrieves from a static knowledge graph; TradingAgents~\cite{tradingagents2024} aggregates multi-agent votes that are not event-conditioned; Argus~\cite{argus2026} validates with LLM-as-judge. Closest to PRONOIA is the concurrent Janus-Q~\cite{janusq2026}, which likewise trains on event--CAR pairs with a gated trading reward. It differs in three ways: (i)~its prediction target is a trading action validated end-to-end by PnL, whereas PAV decomposes each prediction into 3--6 independently settled claims, exposing \emph{which} component fails; (ii)~it models no explicit multi-path transmission; and (iii)~it reports aggregate trading metrics, whereas we additionally analyze calibration and document a reward-hacking failure mode that aggregate metrics would mask (\S\ref{sec:ablation}).
 
 \subsection{LLM Agents with Verifiable Rewards}
 
@@ -403,7 +404,7 @@ Reward is six-element tuple (R0--R5): claim accuracy (core), confidence calibrat
 \section{Experiments}
 \label{sec:experiments}
 
-This section answers RQ1--RQ3 in sequence. \textbf{RQ1} is tested by a rule-driven backtest isolating the marginal value of structured events and market confirmation over type-level priors (\S\ref{sec:backtest}, Table~\ref{tab:backtest}). \textbf{RQ2} is tested by the PAV-RLVR controlled ablation on 1,034 time-split out-of-sample events and its condition slices (\S\ref{sec:ablation}--\S\ref{sec:conditional}, Tables~\ref{tab:main}--\ref{tab:byfamily}). \textbf{RQ3} is addressed by the reward-hacking record within the ablation and three case studies (\S\ref{sec:ablation}, \S\ref{sec:cases}). Each experiment uses the same time-split protocol and settlement machinery described next.
+This section answers RQ1--RQ3 in sequence. \textbf{RQ1} is tested by a rule-driven backtest isolating the marginal value of structured events and market confirmation over type-level priors (\S\ref{sec:backtest}, Table~\ref{tab:backtest}). \textbf{RQ2} is tested by the PAV-RLVR controlled ablation on 1,034 time-split out-of-sample events (\S\ref{sec:ablation}, Table~\ref{tab:main}), then localized by condition slices---hard negatives, event types, indicator families, and calibration---in \S\ref{sec:analysis}. \textbf{RQ3} is answered by the reward-hacking record within the ablation (\S\ref{sec:ablation}) and three claim-level case studies (\S\ref{sec:cases}). Each experiment uses the same time-split protocol and settlement machinery described next.
 
 \subsection{Dataset and Protocol}
 
@@ -426,7 +427,7 @@ Known biases: US near-absent in OOS; no macro events in OOS; scope limited to CN
 
 \textbf{Integrity protocol:} (1)~Strict as\_of: features use only pre-event data, audited; (2)~Time split only, OOS once; (3)~Event-level paired bootstrap (2,000 resamples, weighted); (4)~Claim accuracy weighted by n\_settleable; (5)~Calibration: Brier + 10-bin ECE + confidence-bin actual accuracy.
 
-\subsection{Rule-Driven Backtest (Skeleton Validation)}
+\subsection{RQ1: Signal Validation via Rule-Driven Backtest}
 \label{sec:backtest}
 
 \textbf{Design:} 27 A-share blue chips + 8 sector ETFs, CSI300 benchmark, 2023-01 to 2026-07, 33 events, 20 types, CAR via market model (120d estimation, 20d gap, T+3 holding). We do not claim tradability: transaction costs, slippage, and capacity are deliberately excluded---the backtest serves solely as an \emph{economic-materiality lens} verifying that claim-level directional judgments carry exploitable signal, not as a deployable trading system.
@@ -451,7 +452,7 @@ S5 StrongNonPriceIn & 85 & \textbf{78.8\%} & [69, 87] & 0.81 & +0.13\% \\
 
 Key findings: (1)~S1 51.6\% $\approx$ random---priors alone cannot trade; (2)~Sector ETF confirmation is the strongest meta-signal (+18.7pp, Sharpe $-$1.01$\to$3.21)---``use market posterior to filter priors''; (3)~Event strength quantifies surprise (routine cuts 47.9\% $<$ random; 924-package cuts 82.6\%); (4)~``Graph can only be used once''---low-ACC events (consumer boost 33.3\%, spike-crash 31.6\%, rate cuts 47.9\%) prove lookup tables fail, motivating online reasoning. In/out-of-sample gap 1.2pp; LOEO 68.0--71.4\%.
 
-\subsection{PAV-RLVR Main Results and Reward Ablation}
+\subsection{RQ2: PAV-RLVR Main Results and Reward Ablation}
 \label{sec:ablation}
 
 \begin{table}[t]
@@ -476,6 +477,9 @@ Paired bootstrap: $\Delta$(PAVR $-$ base) = +5.93pt (95\% CI [+3.79, +8.07])---C
 \textbf{Ablation (reward corrections):} Adding the five residual bias corrections of \S\ref{sec:rlvr-training} to the reward (variant PAVR-C) yields 0.6093 claim ACC---\emph{below} PAVR by 2.29pt (95\% CI [+0.78, +3.79]); event-level: PAVR wins 394, PAVR-C 335, tie 302. PAVR-C's only gains are format compliance (0.997 vs 0.842) and settled-claim volume (4,056 vs 3,154); calibration is equivalent (ECE 0.1064 vs 0.1070).
 
 \textbf{Reward hacking:} Corrections' format benefit (+15.5pt) is recoverable by inference-time re-sampling. Training reward (PAVR-C 0.90 vs PAVR 0.69) \emph{inversely correlates} with OOS accuracy (0.609 vs 0.632)---model optimizes proxy signals over claim quality. KL, length, truncation are healthy and comparable---ruling out instability. \textbf{Implication: training reward trend cannot validate reward components; OOS adjudication is the only mechanism.}
+
+\section{RQ2 (Continued): Where Do Gains Concentrate?}
+\label{sec:analysis}
 
 \subsection{Hard-Negative Subset}
 
@@ -506,8 +510,6 @@ Paired bootstrap: $\Delta$(PAVR $-$ base) = +5.93pt (95\% CI [+3.79, +8.07])---C
 \caption{Claim accuracy comparison: full OOS set vs. hard-negative subset. PAVR achieves best performance on both, with larger margin on hard negatives (+7.6pt vs. base).}
 \label{fig:results}
 \end{figure}
-
-\section{Analysis}
 
 \subsection{By Event Type}
 
@@ -561,8 +563,10 @@ Significance family strongest (+17.7pt to 79.1\%): most A-share CARs insignifica
 
 \textbf{Profile:} Excels at FALSE, long-horizon t30, significance, M\&A/guidance, 2--3 claims, confidence 0.80/0.90. Struggles with TRUE momentum, benchmark direction, hard-negatives, 4+ claims, 0.75--0.85 confidence.
 
-\section{Case Study}
+\section{RQ3: Failure Modes in Practice}
 \label{sec:cases}
+
+RQ3 asks what failure modes reward design and event reasoning expose. The reward-design failure is already documented in \S\ref{sec:ablation} (reward hacking: training reward inversely correlates with OOS accuracy). This section completes the picture at the reasoning level: three case studies---one success and two failures---traced claim by claim against market settlements.
 
 \subsection{Case 1 (Success): Shengtong Turnaround --- PAVR 3/3, base 1/3}
 
