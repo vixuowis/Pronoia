@@ -390,6 +390,7 @@ Key choices: DAG not tree (multiple causes per effect); market posterior not LLM
 The departure: PAV shifts core metric from ``did you guess direction right?'' to ``are your claims testable and correct?'' Evaluation goes from event-level to claim-level.
 
 \subsection{RLVR Training}
+\label{sec:rlvr-training}
 
 Qwen3-8B (bf16, backbone frozen, LoRA rank 16) trained with GRPO~\cite{grpo2025} via RLVR~\cite{rlvr2025}. Per event: $G=4$ candidates, parsed into claims, settled against labels.
 
@@ -450,29 +451,31 @@ S5 StrongNonPriceIn & 85 & \textbf{78.8\%} & [69, 87] & 0.81 & +0.13\% \\
 
 Key findings: (1)~S1 51.6\% $\approx$ random---priors alone cannot trade; (2)~Sector ETF confirmation is the strongest meta-signal (+18.7pp, Sharpe $-$1.01$\to$3.21)---``use market posterior to filter priors''; (3)~Event strength quantifies surprise (routine cuts 47.9\% $<$ random; 924-package cuts 82.6\%); (4)~``Graph can only be used once''---low-ACC events (consumer boost 33.3\%, spike-crash 31.6\%, rate cuts 47.9\%) prove lookup tables fail, motivating online reasoning. In/out-of-sample gap 1.2pp; LOEO 68.0--71.4\%.
 
-\subsection{PAV-RLVR Controlled Ablation}
+\subsection{PAV-RLVR Main Results and Reward Ablation}
 \label{sec:ablation}
 
 \begin{table}[t]
 \centering\small
 \caption{PAV-RLVR main results (1,034 OOS events, $t=0.6$).}
 \label{tab:main}
-\begin{tabular}{@{}lccc@{}}
+\begin{tabular}{@{}lcc@{}}
 \toprule
-Metric & Base & PAVR-C & PAVR \\
+Metric & Base & PAVR \\
 \midrule
-\textbf{Claim ACC} & 0.5729 & 0.6093 & \textbf{0.6322} \\
-Brier & 0.2826 & 0.2569 & \textbf{0.2539} \\
-ECE & 0.1632 & \textbf{0.1064} & 0.1070 \\
-Format & 0.775 & \textbf{0.997} & 0.842 \\
-Settled claims & 2,978 & 4,056 & 3,154 \\
+\textbf{Claim ACC} & 0.5729 & \textbf{0.6322} \\
+Brier & 0.2826 & \textbf{0.2539} \\
+ECE & 0.1632 & \textbf{0.1070} \\
+Format & 0.775 & 0.842 \\
+Settled claims & 2,978 & 3,154 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Paired bootstrap: $\Delta$(PAVR $-$ base) = +5.93pt (95\% CI [+3.79, +8.07]); $\Delta$(PAVR $-$ PAVR-C) = +2.29pt (95\% CI [+0.78, +3.79])---CIs exclude zero. Event-level: PAVR wins 394, PAVR-C 335, tie 302.
+Paired bootstrap: $\Delta$(PAVR $-$ base) = +5.93pt (95\% CI [+3.79, +8.07])---CI excludes zero.
 
-\textbf{Reward hacking:} Corrections' only benefit is format (+15.5pt), recoverable by inference-time re-sampling. Training reward (PAVR-C 0.90 vs PAVR 0.69) \emph{inversely correlates} with OOS accuracy (0.609 vs 0.632)---model optimizes proxy signals over claim quality. KL, length, truncation are healthy and comparable---ruling out instability. \textbf{Implication: training reward trend cannot validate reward components; OOS adjudication is the only mechanism.}
+\textbf{Ablation (reward corrections):} Adding the five residual bias corrections of \S\ref{sec:rlvr-training} to the reward (variant PAVR-C) yields 0.6093 claim ACC---\emph{below} PAVR by 2.29pt (95\% CI [+0.78, +3.79]); event-level: PAVR wins 394, PAVR-C 335, tie 302. PAVR-C's only gains are format compliance (0.997 vs 0.842) and settled-claim volume (4,056 vs 3,154); calibration is equivalent (ECE 0.1064 vs 0.1070).
+
+\textbf{Reward hacking:} Corrections' format benefit (+15.5pt) is recoverable by inference-time re-sampling. Training reward (PAVR-C 0.90 vs PAVR 0.69) \emph{inversely correlates} with OOS accuracy (0.609 vs 0.632)---model optimizes proxy signals over claim quality. KL, length, truncation are healthy and comparable---ruling out instability. \textbf{Implication: training reward trend cannot validate reward components; OOS adjudication is the only mechanism.}
 
 \subsection{Hard-Negative Subset}
 
