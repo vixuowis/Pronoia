@@ -41,7 +41,15 @@ Structural analysis reveals asymmetric capability: the model excels at falsifiab
 
 \subsection{Relevance to the Web}
 
-Financial event analysis is fundamentally a Web problem. Announcements, filings, news, and market data are published on the Web; reasoning agents must retrieve, parse, and synthesize heterogeneous Web sources in real time. PRONOIA is deployed as an open-source Web application\footnote{https://github.com/vixuowis/Pronoia} where researchers interact through a conversational interface, the system orchestrates multi-agent reasoning over Web-scale financial data, and results are persisted as shareable research assets. The platform's Arena evaluation system enables Web-based collaborative benchmarking of reasoning strategies. This work sits at the intersection of Web-based AI agents, retrieval-augmented reasoning, and online market feedback loops---core themes of the Web conference.
+The central scientific challenge in this work is \emph{created} by the Web, not merely hosted on it. Three Web-specific properties make the problem what it is.
+
+\emph{(i) Web-source heterogeneity is the core difficulty.} Financial information never arrives as one authoritative record: the same event is disclosed across exchange announcements, newswires, filings, social media, and macro-data portals that differ in format, latency, granularity, and reliability. Reconstructing a single structured state from these conflicting, continuously updated Web sources---and measuring its departure from what the market already expects---is a Web-scale data-integration and trust problem. It is precisely this heterogeneity that defeats the traditional event-study pipeline, which assumes a clean, single-source event signal.
+
+\emph{(ii) The Web is the ground-truth feedback channel.} The market is a Web-mediated information-aggregation system: prices and abnormal returns are emergent artifacts of continuously published, time-stamped Web data. The Web therefore supplies not only the agent's inputs but also the \emph{verification signal} that settles every prediction. PRONOIA closes this loop---agent reasoning is rewarded against market data as it is published---which makes it an instance of online, real-world reinforcement learning \emph{on the live Web} rather than offline simulation. This is why the strongest meta-signal we measure is market confirmation itself (+18.7pp).
+
+\emph{(iii) Web non-stationarity defeats static evaluation.} Sources, formats, and return distributions shift continuously, so any benchmark frozen at collection time misrepresents deployed agent behaviour. We therefore evaluate reasoning strategies through an online, continuously updated arena over live Web data.
+
+Taken together, these properties place the work squarely in the \emph{Web Infrastructure and Agentic Systems} track: instead of treating the Web as a passive data source, we study how autonomous agents can reason over, and be verified by, the evolving Web.
 
 \subsection{The Paradigm Shift}
 
@@ -692,7 +700,7 @@ Patil, S., et al. (2023). Gorilla: Large language model connected with massive A
 
 PRONOIA is open-source under MIT license:
 \begin{itemize}
-    \item \textbf{Repository:} \texttt{github.com/vixuowis/Pronoia} (Python 3.10+, React 18)
+    \item \textbf{Repository:} anonymous copy available for review (Python 3.10+, React 18); public release upon acceptance
     \item \textbf{Training data:} 4,965 events (akshare/yfinance), structured ETP format
     \item \textbf{OOS data:} 1,034 events, labels.jsonl with all 30 indicator ground truths
     \item \textbf{Backtest data:} 33 events, 27 blue chips + 8 sector ETFs, CSI300 benchmark
