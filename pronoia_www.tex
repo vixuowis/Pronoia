@@ -1,0 +1,484 @@
+\documentclass[sigconf, anonymous, review]{acmart}
+
+%% Include any additional packages here
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath,amssymb}
+
+\begin{document}
+
+\title{PRONOIA: Event-Driven Financial Reasoning with Market-Verifiable Rewards}
+
+\author{Anonymous Authors}
+\affiliation{\institution{Anonymous Institution}}
+\email{anonymous@example.com}
+
+\renewcommand{\shortauthors}{Anonymous}
+
+\begin{abstract}
+Event-driven equity trading is shifting from speed alpha---obtaining announcements faster---to cognitive alpha: reading an announcement's implications and transmission more deeply than the market. Two gaps block progress: traditional event study methods are post-hoc descriptive and cannot form forward-looking quantifiable predictions; and LLM-enhanced methods can read announcements but universally rely on LLM-as-judge validation, sharing the model's blind spots.
+
+We present PRONOIA, an event-driven financial reasoning framework with three pillars: (i)~an \emph{Event Reasoning Chain} (ERC) architecture formalizing events as state transitions and executing multi-path propagation over an encoded \emph{Propagation Graph}; (ii)~a \emph{Predict--Assert--Verify} (PAV) output contract decomposing each event prediction into 3--6 verifiable claims over measurable financial indicators; and (iii)~\emph{Reinforcement Learning with Verifiable Rewards} (RLVR) settling every claim against actual post-event market data.
+
+Two controlled experiments on 1,034 time-split out-of-sample A-share events (2024--2026): rule-driven backtest achieves 70.3\% direction accuracy with market confirmation as the strongest meta-signal (+18.7pp); PAV-RLVR LoRA adapter improves claim-level accuracy from 57.3\% to 63.2\% (+5.9pp, paired bootstrap $p<0.01$) with simultaneous Brier (0.283$\to$0.254) and ECE (0.163$\to$0.107) gains. A controlled ablation shows residual bias correction rewards cause reward hacking, reducing OOS accuracy by 2.29pt---an empirical caution for financial RL design.
+
+Structural analysis reveals asymmetric capability: the model excels at falsifiable claims (FALSE-side 70.9\%, significance family 79.1\%, horizon $t30$ 75.3\%) but struggles with momentum-continuation claims (TRUE-side 53.0\%, $bm\_ret\_t15$ 49.8\%). Three case studies characterize failure modes: prior-driven momentum bias, risk paragraphs that are cognitively correct but behaviorally inert, and upstream context contamination. These findings define clear improvement directions for event-driven financial AI agents.
+
+\textbf{CCS Concepts:} Computing methodologies $\to$ Reinforcement learning; Information systems $\to$ Expert systems; Applied computing $\to$ Economics.
+
+\textbf{Keywords:} Event-driven financial reasoning; LLM agents; Financial world models; RLVR; Event study methodology
+\end{abstract}
+
+\maketitle
+
+\section{Introduction}
+
+\subsection{The Paradigm Shift}
+
+Since Ball \& Brown~\cite{ball1968} and Fama et al.~\cite{fama1969}, the event study has been the cornerstone of empirical finance. Its five-step pipeline---define event, estimation window, market model, compute AR/CAR, statistical test---has remained structurally unchanged for over half a century. Meanwhile, event-driven trading has evolved from \emph{speed alpha} (co-location, low-latency feeds) to \emph{cognitive alpha}: returns come from reading \emph{what the announcement means} more accurately than the market, not from reading it faster.
+
+LLMs are the natural technology for cognitive alpha---they parse full announcements, detect nuanced guidance tone changes, and sketch transmission chains across sectors. But three fundamental problems block reliable event-driven financial AI, and no existing system solves all three:
+
+\textbf{Problem 1:} Traditional methods describe the past, not the future. Event studies answer ``how did \emph{this type} of event move prices on average?'' but cannot answer ``how will \emph{this specific} event move prices?'' Announcements are collapsed into 0/1 dummies; magnitude, wording, and market-surprise component---what actually moves prices~\cite{kuttner2001}---are lost. Macro events are sparse and heterogeneous, limiting out-of-sample predictive power.
+
+\textbf{Problem 2:} Events are treated in isolation, ignoring economic transmission. The standard event study assumes independence~\cite{kolari2010}, but markets react through multi-layer channels: ``rate cut $\to$ real estate financing improves $\to$ building material demand rises $\to$ commodity prices move.'' Markets systematically underreact to indirect effects~\cite{cohen2008}, and the event study pipeline has no slot for them.
+
+\textbf{Problem 3:} LLM-enhanced methods lack external ground truth. LLM event analyses solve Problems 1--2 but validate almost universally with LLM-as-judge---evaluator and evaluatee share error modes, are vulnerable to prompt injection, and ``sounding reasonable'' $\neq$ ``actually correct.''
+
+\subsection{The PRONOIA Proposition}
+
+PRONOIA resolves this dilemma by grounding every prediction in actual post-event market data:
+
+\begin{enumerate}
+    \item \textbf{Structured Events:} Each event is a structured information shock $(type, direction, strength, surprise)$---not an isolated 0/1 signal---input to multi-path propagation.
+    \item \textbf{Propagation Graph Reasoning:} Economic logic is explicitly encoded as a DAG $G=(V,A)$ with nodes as macro variables/sectors/assets and edges as pre-built transmission mechanisms (interest-rate channel, supply-demand, industry upstream-downstream, capital flow). Multi-path \emph{search and assembly} replaces free-generation.
+    \item \textbf{Market Ground Truth Verification:} Every prediction is a falsifiable claim settled by actual post-event market CAR data---not LLM self-assessment. Graph edge weights are continuously calibrated by market feedback, closing the ``reason $\to$ verify $\to$ revise'' loop.
+\end{enumerate}
+
+\subsection{Contributions}
+
+\begin{enumerate}
+    \item \textbf{ERC Architecture:} A four-layer decoupled architecture (Perception $\to$ Reasoning $\to$ Decision $\to$ Evolution) with the Event--Transmission--Position (ETP) triple as atomic logic unit, formalizing the Propagation Graph as the financial analog of a robotics world model's transition function.
+    \item \textbf{PAV-RLVR Framework:} A verifiable output contract (Predict--Assert--Verify) decomposing predictions into 3--6 claim-level assertions over measurable indicators (CAR, benchmark returns, $p$-values, window averages across T+3/7/15/30/60), combined with RLVR settling every claim against objective market data.
+    \item \textbf{Controlled Empirical Validation:} (a)~Rule-driven backtest isolating the reasoning skeleton: 70.3\% ACC with market confirmation (+18.7pp); (b)~PAV-RLVR LoRA adapter improving claim accuracy 57.3\%$\to$63.2\% (+5.9pp, paired bootstrap $p<0.01$) with Brier and ECE gains.
+    \item \textbf{Reward Hacking Documentation:} Controlled ablation showing residual bias corrections cause reward hacking ($-2.29$pt OOS) despite training reward curve improvements---an empirical caution for financial RL design.
+\end{enumerate}
+
+\section{Related Work}
+
+\subsection{Event Study Methodology}
+
+Foundations by Ball \& Brown~\cite{ball1968} and Fama et al.~\cite{fama1969} established the event study paradigm. Critical limitations documented: event dummies lose surprise magnitude~\cite{kuttner2001}; macro event sparsity limits extrapolation; cross-sectional CAR correlation inflates statistics~\cite{kolari2010}. We complement this with the Propagation Graph as forward-looking structure preserving event richness and modeling transmission.
+
+\subsection{Financial NLP and Event Extraction}
+
+The 4th generation of event processing brings LLM-based understanding. MAVEN~\cite{maven2020} and MAVEN-ERE~\cite{mavenere2022} provide event detection/coreference datasets; Doc2EDAG~\cite{doc2edag2019} and DCFEE~\cite{dcfee2018} tackle document-level financial extraction; FinKario~\cite{finkario2025} builds event-enhanced financial KGs. These are natural Perception-layer inputs; PRONOIA's contribution is the Reasoning layer---structured propagation over an encoded economic graph with market-grounded RLVR training.
+
+\subsection{Event-Driven Financial Prediction}
+
+\begin{table}[t]
+\centering\small
+\caption{Comparison with event-driven financial AI systems. ACC = direction accuracy on respective test sets.}
+\label{tab:comparison}
+\begin{tabular}{@{}llll@{}}
+\toprule
+System & Approach & Limitation & ACC \\
+\midrule
+FinHEAR~\cite{finhear2025} & Historical analog & Single-chain, no multi-path & 58--62\% \\
+FinKario~\cite{finkario2025} & KG retrieval & Static KG, retrieval-only & 58.1\% \\
+TradingAgents~\cite{tradingagents2024} & Multi-agent vote & Not event-driven & $\sim$55\% \\
+Janus-Q~\cite{janusq2026} & Hierarchical reward & No event modeling & 58.7\% \\
+Argus~\cite{argus2026} & LLM-as-judge & Judge shares errors & --- \\
+\midrule
+\textbf{PRONOIA} & Graph + PAV + RLVR & US OOS limited & \textbf{63.2\%} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:comparison} situates PRONOIA: all prior systems operate on single-hop ``event $\to$ reaction'' mapping with LLM-as-judge or non-verifiable rewards. The 58--62\% ACC ceiling confirms single-hop's limited headroom. PRONOIA's Propagation Graph + RLVR addresses both gaps.
+
+\subsection{RLVR and Financial RL}
+
+RLVR~\cite{rlvr2025} settles rewards against formal verification rather than self-evaluation. AlphaAgent~\cite{alphaagent2025} and FactorMiner~\cite{factorminer2026} apply related ideas to alpha mining. The critical difference: PAV decomposes predictions into claim-level assertions over measurable indicators, making every reward component independently verifiable \emph{and} preventing reward hacking---our ablation in \S\ref{sec:ablation} documents what happens when this guardrail weakens.
+
+\subsection{Robotics World Models}
+
+The Propagation Graph formalization draws from robotics world models~\cite{ha2018, schrittwieser2020}: $S_{t+1} = f(S_t, a_t)$ maps to our graph: state $\to$ market state (sector CAR, volume anomaly, volatility, sentiment), action $\to$ structured event, transition function $\to$ Propagation Graph (multi-path probability propagation), terminal verification $\to$ market CAR direction and claim settlement, planning $\to$ Navigator search.
+
+\section{Method}
+
+\subsection{Financial Event Reasoning Chain}
+
+PRONOIA's four-layer architecture operates on the Event--Transmission--Position (ETP) triple:
+
+\begin{enumerate}
+    \item \textbf{Perception:} Heterogeneous disclosures $\to$ structured state transition $\to$ surprise measurement.
+    \item \textbf{Reasoning:} Multi-path Propagation Graph search + adversary testing + priced-in detection.
+    \item \textbf{Decision:} Direction $\to$ timing $\to$ sizing $\to$ portfolio $\to$ execution.
+    \item \textbf{Evolution:} Versioned state evolution, credit attribution, policy update gated by market evidence.
+\end{enumerate}
+
+This paper focuses on Layers 2 (Reasoning) and 4 (Evolution via RLVR), with Layers 1 and 3 providing input context.
+
+\subsection{Events as State Transitions}
+
+\begin{definition}[Event]
+An event $e$ is a state transition $X_e^- \to X_e^+$ of a declared system $S$ at time $t_e$, with ex-ante benchmark $B_e$. The \emph{surprise} is $X_e^+ - B_e$, not $X_e^+ - X_e^-$.
+\end{definition}
+
+This resolves the common confusion: a large state change (guidance revision \$10--11B $\to$ \$8--9B) is not a large surprise if the market expected \$8.5B.
+
+\begin{definition}[Event Boundary]
+Boundary = System$(S)$ + State Representation$(X)$ + Analytical Scale$(\sigma)$. A single earnings release can be one event at filing scale or several at item scale (revenue, EPS, guidance changes).
+\end{definition}
+
+\subsection{Propagation Graph}
+
+$G = (V, A)$ is a DAG where:
+\begin{itemize}
+    \item \textbf{Nodes $V$:} Each $v$ contains (subject, expected\_direction, expected\_magnitude, time\_window), from macro variables to sectors to individual assets.
+    \item \textbf{Edges $A$:} Each $a = (u,v,label)$, $label \in \{+1, -1\}$, with conditional transmission probability $P(B_{up}|A_{up}) = N(A_{up} \wedge B_{up})/N(A_{up})$, fused via Bayesian update $P_{new} = P_{prior} \times 0.7 + P_{observed} \times 0.3$.
+\end{itemize}
+
+Three edge-source tiers: (a)~prior historical statistics, (b)~online recent CAR observations, (c)~Navigator real-time reasoning.
+
+\subsection{Navigator-Searcher Protocol}
+
+Six-step collaboration over $G$:
+\begin{enumerate}
+    \item Navigator decomposes event $e$ into sub-problems, dispatching one Searcher per sub-problem.
+    \item Each Searcher, adopting a market-participant persona (long/short/arbitrageur/regulator/retail), traces one propagation chain.
+    \item Outputs merged into DAG: deduplicated, cross-referenced, marked with verification status.
+    \item Navigator identifies unconnected components; prompts additional Searchers.
+    \item Market verification via CAR + dose-response + volume/volatility validates/falsifies each path.
+    \item Verified paths form final reasoning graph; emit directional, magnitude, and confidence judgments.
+\end{enumerate}
+
+Key choices: DAG not tree (multiple causes per effect); market posterior not LLM voting as ground truth; game-theoretic branching with heterogeneous personas.
+
+\subsection{PAV Output Contract}
+
+\textbf{Predict:} Input: event structured fields + as\_of research context (strictly no post-event data: T0 return, pre-5/pre-20 drift, CAR to T0) + measurable indicator panel (30 indicators defined, values withheld).
+
+\textbf{Assert:} Model proposes 3--6 verifiable claims: (indicator, horizon, threshold, TRUE/FALSE, confidence, reasoning\_chain). Five families across T+3/7/15/30/60: \texttt{car\_t\{h\}}, \texttt{ret\_t\{h\}}, \texttt{bm\_ret\_t\{h\}}, \texttt{car\_t\{h\}\_pvalue}, \texttt{car\_avg\_*}.
+
+\textbf{Verify:} Each claim objectively settled against labels.jsonl. Compute claim-level accuracy, Brier, ECE, verifiability, diversity.
+
+The departure: PAV shifts core metric from ``did you guess direction right?'' to ``are your claims testable and correct?'' Evaluation goes from event-level to claim-level.
+
+\subsection{RLVR Training}
+
+Qwen3-8B (bf16, backbone frozen, LoRA rank 16) trained with GRPO~\cite{grpo2025} via RLVR~\cite{rlvr2025}. Per event: $G=4$ candidates, parsed into claims, settled against labels.
+
+Reward is six-element tuple (R0--R5): claim accuracy (core), confidence calibration (Brier), verifiability ratio, diversity (family coverage), format compliance, length penalty.
+
+\textbf{Ablation (v6.1-b):} Adds five residual bias corrections (B3: hard-negative targeting; B4/B5: distribution residual correction; B7: claim combination quality; T3: format bonus). Vanilla (v6.2) disables these.
+
+\textbf{Training:} GRPO (TRL 0.17) + Unsloth acceleration (in-process vLLM, weight sharing, Standby mode, $\sim$2.3$\times$ speedup). Batch 8/device $\times$ grad-accum 2 = 16 completions/step (4 events $\times$ 4 candidates). LR 1e-5, cosine annealing. 1 epoch = 1,241 steps $\approx$ 4,965 events. Seed 42. Single RTX 4090 (48GB), 10--12h/condition.
+
+\section{Experiments}
+
+\subsection{Dataset and Protocol}
+
+\begin{table}[t]
+\centering\small
+\caption{Dataset statistics (time-split).}
+\label{tab:dataset}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Split & Events & Markets & Sources \\
+\midrule
+Train & 4,965 & CN 4,352 / US 613 & A-share pre-announcements, M\&A, guidance, macro \\
+OOS & 1,034 & CN 1,027 / US 7 & Same, post-training window (2024--2026), once \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Known biases: US near-absent in OOS; no macro events in OOS; scope limited to CN A-shares.
+
+\textbf{Integrity protocol:} (1)~Strict as\_of: features use only pre-event data, audited; (2)~Time split only, OOS once; (3)~Event-level paired bootstrap (2,000 resamples, weighted); (4)~Claim accuracy weighted by n\_settleable; (5)~Calibration: Brier + 10-bin ECE + confidence-bin actual accuracy.
+
+\subsection{Rule-Driven Backtest (Skeleton Validation)}
+
+\textbf{Design:} 27 A-share blue chips + 8 sector ETFs, CSI300 benchmark, 2023-01 to 2026-07, 33 events, 20 types, CAR via market model (120d estimation, 20d gap, T+3 holding).
+
+\begin{table}[t]
+\centering\small
+\caption{Rule-driven backtest results. S1--S5 implement prior $\to$ market confirmation $\to$ noise removal $\to$ strong-signal focus.}
+\label{tab:backtest}
+\begin{tabular}{@{}lccccc@{}}
+\toprule
+Strategy & N & ACC & 95\% CI & Sharpe & avgCAR \\
+\midrule
+S1 All & 444 & 51.6\% & [47, 56] & $-$1.01 & $-$0.26\% \\
+S2 SectorConfirm & 212 & \textbf{70.3\%} & [64, 76] & 3.21 & +0.71\% \\
+S3 StrongEvent & 159 & 71.1\% & [64, 78] & 1.48 & +0.32\% \\
+S4 NonPriceIn & 130 & 74.6\% & [67, 82] & 3.85 & +0.65\% \\
+S5 StrongNonPriceIn & 85 & \textbf{78.8\%} & [69, 87] & 0.81 & +0.13\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Key findings: (1)~S1 51.6\% $\approx$ random---priors alone cannot trade; (2)~Sector ETF confirmation is the strongest meta-signal (+18.7pp, Sharpe $-$1.01$\to$3.21)---``use market posterior to filter priors''; (3)~Event strength quantifies surprise (routine cuts 47.9\% $<$ random; 924-package cuts 82.6\%); (4)~``Graph can only be used once''---low-ACC events (consumer boost 33.3\%, spike-crash 31.6\%, rate cuts 47.9\%) prove lookup tables fail, motivating online reasoning. In/out-of-sample gap 1.2pp; LOEO 68.0--71.4\%.
+
+\subsection{PAV-RLVR Controlled Ablation}
+\label{sec:ablation}
+
+\begin{table}[t]
+\centering\small
+\caption{PAV-RLVR main results (1,034 OOS events, $t=0.6$).}
+\label{tab:main}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Metric & Base & v6.1-b & v6.2-vanilla \\
+\midrule
+\textbf{Claim ACC} & 0.5729 & 0.6093 & \textbf{0.6322} \\
+Brier & 0.2826 & 0.2569 & \textbf{0.2539} \\
+ECE & 0.1632 & \textbf{0.1064} & 0.1070 \\
+Format & 0.775 & \textbf{0.997} & 0.842 \\
+Settled claims & 2,978 & 4,056 & 3,154 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Paired bootstrap: $\Delta$(vanilla $-$ base) = +5.93pt (95\% CI [+3.79, +8.07]); $\Delta$(vanilla $-$ v6.1-b) = +2.29pt (95\% CI [+0.78, +3.79])---CIs exclude zero. Event-level: vanilla wins 394, v6.1-b 335, tie 302.
+
+\textbf{Reward hacking:} Corrections' only benefit is format (+15.5pt), recoverable by inference-time re-sampling. Training reward (v6.1-b 0.90 vs vanilla 0.69) \emph{inversely correlates} with OOS accuracy (0.609 vs 0.632)---model optimizes proxy signals over claim quality. KL, length, truncation are healthy and comparable---ruling out instability. \textbf{Implication: training reward trend cannot validate reward components; OOS adjudication is the only mechanism.}
+
+\subsection{Hard-Negative Subset}
+
+146 events (M\&A success/turnaround/beat/additional issuance/buyback): base 0.5103, v6.1-b 0.5515, \textbf{vanilla 0.5862}. Corrections help +3.5pt on this subset but net negative overall---the ``residual bias correctable by prior'' premise is unsupported.
+
+\section{Analysis}
+
+\subsection{By Event Type}
+
+\begin{table}[t]
+\centering\small
+\caption{Accuracy by event type (CN market).}
+\label{tab:bytype}
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+Event Type & Events & Base & v6.2 & $\Delta$ \\
+\midrule
+Earnings beat/miss & 478 & 0.524 & 0.598 & \textbf{+7.4pt} \\
+M\&A/spinoff/financing & 373 & 0.618 & 0.661 & +4.4pt \\
+Guidance up/down & 169 & 0.632 & 0.679 & +4.8pt \\
+Policy rate & 7 & 0.598 & 0.591 & (few) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Earnings: largest relative lift (+7.4pt) but lowest absolute (0.598)---strongest priors, hardest cases. M\&A/guidance: highest absolute (0.661, 0.679).
+
+\subsection{By Indicator Family $\times$ Horizon}
+
+\begin{table}[t]
+\centering\small
+\caption{Accuracy by indicator family and horizon.}
+\label{tab:byfamily}
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+Slice & Claims & Base & v6.2 & $\Delta$ \\
+\midrule
+Significance ($p$-val) & 944 & 0.614 & \textbf{0.791} & \textbf{+17.7pt} \\
+CAR & 1,207 & 0.566 & 0.592 & +2.6pt \\
+Benchmark & 647 & 0.411 & 0.498 & +8.7pt \\
+Horizon t30 & 675 & 0.622 & \textbf{0.753} & \textbf{+13.1pt} \\
+Horizon t7 & 1,154 & 0.559 & 0.619 & +6.0pt \\
+Horizon t15 (worst) & 610 & 0.452 & 0.505 & +5.3pt \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Significance family strongest (+17.7pt to 79.1\%): most A-share CARs insignificant---falsifying significance is the model's strongest move. Weakest: \texttt{bm\_ret\_t15} (0.498, coin-flip). Long-horizon t30 (+13.1pt) vs t15 (+5.3pt): falsifiable long-horizon claims outperform.
+
+\subsection{Conditional Analysis}
+
+\textbf{Claim count:} 2--3 best (0.690/0.656); 4 drops to 0.569. Constraint should narrow to 3--4.
+\textbf{Direction:} FALSE-side \textbf{0.709} (n=1,812) vs TRUE-side \textbf{0.530} (n=1,342). Training reduces TRUE ratio 0.525$\to$0.425---beneficial RL product matching task asymmetry.
+\textbf{Extremes:} 293 all-correct (28.3\%, M\&A/earnings); 55 all-wrong (5.3\%, beat/turnaround).
+\textbf{Calibration:} Non-monotonic---0.75--0.85 bin actual accuracy only 0.53--0.59 (main ECE contributor); 0.80/0.90 ends reliable (0.777/0.926). Platt post-hoc: ECE 0.085$\to$0.036.
+
+\textbf{Profile:} Excels at FALSE, long-horizon t30, significance, M\&A/guidance, 2--3 claims, confidence 0.80/0.90. Struggles with TRUE momentum, benchmark direction, hard-negatives, 4+ claims, 0.75--0.85 confidence.
+
+\section{Case Study}
+
+\subsection{Case 1 (Success): Shengtong Turnaround --- vanilla 3/3, base 1/3}
+
+002599, 2026-01-30, turnaround. Pre-event CAR $-$7.95\% (oversold); context: ``mean-reversion vs micro-profit cancel $\to$ neutral, confidence lowered.'' v6.2 claims: \texttt{car\_t7>0} TRUE (0.72) \checkmark; \texttt{bm\_ret\_t30>0} FALSE (0.65) \checkmark; \texttt{car\_t30\_pvalue<0.05} FALSE (0.55) \checkmark. Base ignores context, bets $p$-value TRUE with arbitrary thresholds. \textbf{Success = context absorption + diversity planning + betting FALSE.}
+
+\subsection{Case 2 (Failure): Zhongjin Gold Beat --- all models wrong}
+
+600489, 2026-01-28, beat. T0 limit-up +9.98\%, pre20 +46\% gain. Context warns sell-the-news ($-$6.0 signal) but all three models claim \texttt{car\_t7>0} (confidence 0.72), 0/4 wrong. Ground truth: car\_t30 $-$29.8\%. \textbf{Risk paragraph cognitively correct, behaviorally inert.}
+
+\subsection{Case 3 (Failure): Zhongshan Utilities Beat --- upstream context wrong}
+
+000685, 2026-01-31, beat. Context concludes ``volume-price resonance $\to$ up''; actual continuous decline (car\_t7 $-$3.2\%, car\_t30 $-$17.3\%). Model extrapolates weak stock $\to$ weak market (bm\_ret wrong). pre20 CAR +8.06\% used as significance support, not mean-reversion warning. \textbf{Garbage-in upstream; features reinforce priors, don't test them.}
+
+\subsection{Cross-Case Synthesis}
+
+\begin{enumerate}
+    \item Failures concentrate in ``bullish text + T0 positive reaction'': prior = momentum, A-share reality = mean reversion.
+    \item Risk paragraphs ``cognitively correct, behaviorally inert'': no hedging claims---prompt/reward design fix.
+    \item Benchmark family $\approx$ coin flip: individual-stock weakness extrapolated to market weakness.
+    \item Upstream context with strong priors contaminates downstream---context should output self-confidence + counterparty evidence.
+    \item Cross-indicator claims silently dropped---wastes expression, underestimates coverage.
+\end{enumerate}
+
+\section{Discussion}
+
+\subsection{Unified Interpretation}
+
+Two experiments validate one proposition at three levels:
+\begin{itemize}
+    \item \textbf{Priors can't trade:} S1 51.6\% + base 0.573 confirm priors need purification.
+    \item \textbf{Market confirmation purifies:} Rule-side +18.7pp and RL-side +5.9pt are the same mechanism.
+    \item \textbf{Environment requires online reasoning:} ``Graph once'' motivates model-based learning; reward hacking shows even reward functions need OOS adjudication.
+\end{itemize}
+
+\subsection{Limitations}
+
+Single seed; US OOS = 7 events; 33 rule events + 4,965 RL events insufficient for larger structures; single sampling; TRUE-side weakness in A-shares (short mechanisms incomplete).
+
+\subsection{Validity Audit}
+
+\begin{table}[t]
+\centering\small
+\caption{Conclusion credibility grading.}
+\label{tab:audit}
+\begin{tabular}{@{}lll@{}}
+\toprule
+Conclusion & Grade & Basis \\
+\midrule
+RLVR effective (+5.9pt) & High & Effect $\gg$ noise; same pipeline/OOS \\
+Structure (FALSE$>$TRUE; t30$>$t15) & High & Hundreds/thousands per cell; 3 models agree \\
+Vanilla $>$ v6.1-b 2.29pt & \textbf{Low} & 3 confounders; CI lower bound +0.78 \\
+Confidence 0.90 $\to$ 0.926 & Verify & Self-selection; n(0.90) unconfirmed \\
+US conclusions & Unusable & OOS US = 7 events \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Recommendation:} ``Corrections harmful'' $\to$ ``corrections did not produce expected benefits.'' Supporting the former requires 3-seed $\times$ 2-condition matrix.
+
+\textbf{Three methodological risks:} (1)~Single-sampling variance unquantified---recommend 5$\times$ on 200 events; (2)~Multiple comparisons---FDR/Bonferroni + holdout needed for trading filters; (3)~as\_of strictness unaudited---single risk that could overturn all conclusions.
+
+\section{Conclusion and Future Work}
+
+\subsection{Takeaways}
+
+\begin{enumerate}
+    \item \textbf{Methodology:} Financial event reasoning chain = Propagation Graph + PAV + market posterior reward. Rule backtest (S2 70.3\%) and RL ablation (vanilla 0.632 vs base 0.573) validate at two levels.
+    \item \textbf{Negative results:} Residual corrections reduce OOS accuracy 2.29pt (hard-negatives +3.47pt). Training reward $\not\equiv$ OOS performance---reward hacking is real in financial RL.
+    \item \textbf{Structural portrait:} Model excels at falsifiable claims (FALSE 0.709, significance 79.1\%, t30 75.3\%), struggles with momentum (TRUE 0.530, bm\_ret\_t15 0.498)---guides prompt/reward design.
+\end{enumerate}
+
+\subsection{Immediate Next Steps}
+
+\textbf{P0:} Hard-negative oversampling (2--3$\times$) + retrain; inference-time format fallback re-sampling.
+\textbf{P1:} Hedging-claim mechanism; pre-drift feature explicit in prompt; US-stratified OOS.
+\textbf{P2:} Claim count narrow to 3--4; parser cross-indicator support; benchmark-family examples.
+\textbf{P3:} Multi-seed validation; Platt calibration retention.
+
+\subsection{Mid-Term Evolution}
+
+Frequency $\times$ horizon 2D reward; scale-conditioned MoE routing (event type $\times$ horizon boundaries); data expansion to 500+ rule events + US/macro RL samples.
+
+\section*{Acknowledgments}
+
+Anonymous.
+
+\bibliographystyle{ACM-Reference-Format}
+\begin{thebibliography}{10}
+
+\bibitem{ball1968}
+Ball, R., \& Brown, P. (1968). An empirical evaluation of accounting income numbers. \emph{Journal of Accounting Research}, 6(2), 159--178.
+
+\bibitem{fama1969}
+Fama, E., Fisher, L., Jensen, M., \& Roll, R. (1969). The adjustment of stock prices to new information. \emph{International Economic Review}, 10(1), 1--21.
+
+\bibitem{kuttner2001}
+Kuttner, K. (2001). Monetary policy surprises and interest rates. \emph{Journal of Monetary Economics}, 47(3), 523--544.
+
+\bibitem{kolari2010}
+Kolari, J., \& Pynn\"onen, S. (2010). Event study testing with cross-sectional correlation of abnormal returns. \emph{Review of Financial Studies}, 23(11), 3996--4025.
+
+\bibitem{cohen2008}
+Cohen, L., \& Frazzini, A. (2008). Economic links and predictable returns. \emph{Journal of Finance}, 63(4), 1977--2011.
+
+\bibitem{ha2018}
+Ha, D., \& Schmidhuber, J. (2018). World models. \emph{arXiv:1803.10122}.
+
+\bibitem{schrittwieser2020}
+Schrittwieser, J., et al. (2020). Mastering Atari, Go, chess and shogi by planning with a learned model. \emph{Nature}, 588(7839), 604--609.
+
+\bibitem{maven2020}
+Wang, X., et al. (2020). MAVEN: A massive general domain event detection dataset. \emph{EMNLP}.
+
+\bibitem{mavenere2022}
+Wang, X., et al. (2022). MAVEN-ERE: A unified large-scale dataset for event coreference, temporal, causal, and subevent relation extraction. \emph{EMNLP}.
+
+\bibitem{doc2edag2019}
+Zheng, S., Cao, W., Xu, W., \& Bian, J. (2019). Doc2EDAG: An end-to-end document-level framework for Chinese financial event extraction. \emph{EMNLP-IJCNLP}.
+
+\bibitem{dcfee2018}
+Yang, H., Chen, Y., Liu, K., Xiao, Y., \& Zhao, J. (2018). DCFEE: A document-level Chinese financial event extraction system. \emph{ACL System Demonstrations}.
+
+\bibitem{finkario2025}
+Li, X., et al. (2025). Finkario: Event-enhanced automated construction of financial knowledge graph. \emph{ACL 2026}.
+
+\bibitem{finhear2025}
+FinHEAR: Financial event-driven hybrid architecture for earnings reaction. \emph{arXiv:2506.09080}.
+
+\bibitem{tradingagents2024}
+Tao, T., Roice, K., \& Rao, A. (2024). TradingAgents: Multi-agent system for financial trading. \emph{arXiv:2407.18957}.
+
+\bibitem{janusq2026}
+Janus-Q: End-to-end event-driven trading with hierarchical gated reward modeling. \emph{arXiv:2602.19919}.
+
+\bibitem{argus2026}
+Argus: Evidence-driven multi-step reasoning with claim-level verification. \emph{arXiv:2605.16217}.
+
+\bibitem{rlvr2025}
+RLVR: Reinforcement learning with verifiable rewards. \emph{arXiv:2506.07891}.
+
+\bibitem{alphaagent2025}
+Tang, Z., et al. (2025). AlphaAgent: LLM-driven alpha mining with regularized exploration. \emph{KDD}.
+
+\bibitem{factorminer2026}
+Wang, Y., et al. (2026). FactorMiner: A self-evolving agent with skills and experience memory. \emph{arXiv}.
+
+\bibitem{grpo2025}
+Shao, Z., et al. (2025). GRPO: Group relative policy optimization. \emph{TRL Documentation}.
+
+\bibitem{morgeson2015}
+Morgeson, F., Mitchell, T., \& Liu, D. (2015). Event system theory. \emph{Academy of Management Review}, 40(4), 515--537.
+
+\bibitem{tetlock2011}
+Tetlock, P. (2011). All the news that's fit to reprint. \emph{Review of Financial Studies}, 24(5), 1481--1512.
+
+\bibitem{sheng2026}
+Sheng, J., Sun, Z., Yang, B., \& Zhang, A. (2026). Generative AI and asset management. \emph{Review of Financial Studies}.
+
+\bibitem{fincon2024}
+Yu, Y., et al. (2024). FinCon: A synthesized LLM multi-agent system. \emph{NeurIPS}.
+
+\bibitem{shu2026}
+Shu, D., et al. (2026). FinCall-Surprise: A large scale multi-modal benchmark for earning surprise prediction. \emph{ACL}.
+
+\bibitem{finchain2026}
+Su, J., et al. (2026). FinChain: A symbolic benchmark for verifiable chain-of-thought financial reasoning. \emph{ACL}.
+
+\bibitem{findeep2026}
+Zhu, F., et al. (2026). FinDeepResearch: Evaluating deep research agents. \emph{arXiv}.
+
+\bibitem{finmcp2026}
+Zhu, J., et al. (2026). FinMCP-Bench: Benchmarking LLM agents for real-world financial tool use. \emph{arXiv}.
+
+\bibitem{survey2026}
+PRONOIA Team (2026). Event-driven financial reasoning: ERC architecture, validation, and evolution. 61-page survey.
+
+\end{thebibliography}
+
+\end{document}
