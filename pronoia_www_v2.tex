@@ -10,6 +10,7 @@
 \usetikzlibrary{shapes.geometric, arrows.meta, positioning, fit, backgrounds, calc}
 \usepackage{multirow}
 \usepackage{xcolor}
+\emergencystretch=1.5em
 
 \begin{document}
 
@@ -26,15 +27,18 @@ Event-driven equity trading is shifting from speed alpha to cognitive alpha: rea
 
 We present PRONOIA, an event-driven financial reasoning agent deployed as an open-source Web platform, built on three pillars: (i)~an \emph{Event Reasoning Chain} (ERC) architecture formalizing events as state transitions propagated over an economic graph; (ii)~a \emph{Predict--Assert--Verify} (PAV) contract decomposing each prediction into 3--6 falsifiable claims over measurable indicators; and (iii)~\emph{Reinforcement Learning with Verifiable Rewards} (RLVR) settling every claim against post-event market data. On 1,034 time-split out-of-sample A-share events (2024--2026), a rule-driven backtest attains 70.3\% direction accuracy with market confirmation the strongest meta-signal (+18.7pp); PAV-RLVR LoRA improves claim accuracy 57.3\%$\to$63.2\% (+5.9pp, paired bootstrap $p<0.01$) with joint Brier (0.283$\to$0.254) and ECE (0.163$\to$0.107) gains. The model excels at falsifiable claims (significance family 79.1\%, FALSE-side 70.9\%) but lags on momentum claims (TRUE-side 53.0\%); a controlled ablation shows residual-bias rewards induce reward hacking ($-2.29$pt OOS), an empirical caution for financial RL design.
 
-\textbf{CCS Concepts:} Computing methodologies $\to$ Reinforcement learning; Information systems $\to$ Expert systems; Applied computing $\to$ Economics.
-
-\textbf{Keywords:} Event-driven financial reasoning; LLM agents; Financial world models; RLVR; Event study methodology; Web-based AI agents
 \end{abstract}
+
+\ccsdesc[500]{Computing methodologies~Reinforcement learning}
+\ccsdesc[300]{Information systems~Expert systems}
+\ccsdesc[300]{Applied computing~Economics}
+
+\keywords{Event-driven financial reasoning, LLM agents, financial world models, RLVR, event study methodology, Web-based AI agents}
 
 \begin{teaserfigure}
 \centering
 \begin{tikzpicture}[
-    eb/.style={draw, rounded corners=1pt, minimum width=4.9cm, minimum height=0.58cm, align=center, font=\scriptsize, inner sep=2pt},
+    eb/.style={draw, rounded corners=1pt, minimum width=4.6cm, minimum height=0.58cm, align=center, font=\scriptsize, inner sep=2pt},
     earr/.style={-{Stealth[length=1.4mm]}, semithick, black!60},
     ttl/.style={font=\footnotesize\bfseries, align=center},
     neg/.style={font=\scriptsize, text=red!65!black, align=center},
@@ -52,33 +56,33 @@ We present PRONOIA, an event-driven financial reasoning agent deployed as an ope
     \node[ttl] at (0,0.68) {(a)~Event study (1968--)};
     \coordinate (abot) at (0,-4.55);
     % ===== Panel (b): LLM-as-judge =====
-    \node[eb, fill=black!6] (b1) at (6.15,0) {announcement text};
-    \node[eb, fill=black!6] (b2) at (6.15,-0.85) {LLM free-form reasoning};
-    \node[eb, fill=black!6] (b3) at (6.15,-1.7) {narrative report};
-    \node[eb, fill=black!6] (b4) at (6.15,-2.55) {LLM-as-judge: ``sounds right?''};
-    \node[neg] (b5) at (6.15,-3.42) {$\times$~judge shares model blind spots\\$\times$~plausible $\neq$ correct};
+    \node[eb, fill=black!6] (b1) at (5.9,0) {announcement text};
+    \node[eb, fill=black!6] (b2) at (5.9,-0.85) {LLM free-form reasoning};
+    \node[eb, fill=black!6] (b3) at (5.9,-1.7) {narrative report};
+    \node[eb, fill=black!6] (b4) at (5.9,-2.55) {LLM-as-judge: ``sounds right?''};
+    \node[neg] (b5) at (5.9,-3.42) {$\times$~judge shares model blind spots\\$\times$~plausible $\neq$ correct};
     \draw[earr] (b1) -- (b2);
     \draw[earr] (b2) -- (b3);
     \draw[earr] (b3) -- (b4);
-    \node[ttl] at (6.15,0.68) {(b)~LLM-as-judge (2023--)};
-    \coordinate (bbot) at (6.15,-4.55);
+    \node[ttl] at (5.9,0.68) {(b)~LLM-as-judge (2023--)};
+    \coordinate (bbot) at (5.9,-4.55);
     % ===== Panel (c): PRONOIA =====
-    \node[eb, fill=blue!8] (c1) at (12.3,0) {structured event $(\tau,d,s,\mathit{surprise})$\\from heterogeneous Web sources};
-    \node[eb, fill=blue!8] (c2) at (12.3,-1.05) {multi-path propagation graph};
-    \node[eb, fill=blue!8] (c3) at (12.3,-1.95) {PAV: 3--6 falsifiable claims};
-    \node[eb, fill=blue!8] (c4) at (12.3,-2.85) {market settles each claim (CAR T+3..60)};
-    \node[eb, fill=blue!8] (c5) at (12.3,-3.75) {RLVR updates policy \& graph edges};
-    \node[good] (c6) at (12.3,-4.5) {$\surd$~verifiable reason--verify--revise loop};
+    \node[eb, fill=blue!8] (c1) at (11.8,0) {structured event $(\tau,d,s,\mathit{surprise})$\\from heterogeneous Web sources};
+    \node[eb, fill=blue!8] (c2) at (11.8,-1.05) {multi-path propagation graph};
+    \node[eb, fill=blue!8] (c3) at (11.8,-1.95) {PAV: 3--6 falsifiable claims};
+    \node[eb, fill=blue!8] (c4) at (11.8,-2.85) {market settles each claim (CAR T+3..60)};
+    \node[eb, fill=blue!8] (c5) at (11.8,-3.75) {RLVR updates policy \& graph edges};
+    \node[good] (c6) at (11.8,-4.5) {$\surd$~verifiable reason--verify--revise loop};
     \draw[earr] (c1) -- (c2);
     \draw[earr] (c2) -- (c3);
     \draw[earr] (c3) -- (c4);
     \draw[earr] (c4) -- (c5);
-    \draw[earr, dashed, gray] (c5.east) .. controls (15.7,-3.3) and (15.7,-1.5) .. (c2.east);
-    \node[ttl] at (12.3,0.68) {(c)~PRONOIA (ours)};
-    \coordinate (cbot) at (12.3,-4.55);
+    \draw[earr, dashed, gray] (c5.east) .. controls (14.55,-3.3) and (14.55,-1.5) .. (c2.east);
+    \node[ttl] at (11.8,0.68) {(c)~PRONOIA (ours)};
+    \coordinate (cbot) at (11.8,-4.55);
     % ===== Evolution arrows between panels =====
-    \draw[evo] (2.95,-1.7) -- (3.4,-1.7);
-    \draw[evo] (9.1,-1.7) -- (9.55,-1.7);
+    \draw[evo] (2.55,-1.7) -- (3.05,-1.7);
+    \draw[evo] (8.45,-1.7) -- (8.95,-1.7);
     % ===== Panel frames =====
     \begin{scope}[on background layer]
         \node[pnl, fit=(a1)(a4)(abot)] {};
@@ -146,16 +150,17 @@ The event study of Ball \& Brown~\cite{ball1968} and Fama et al.~\cite{fama1969}
 A recent wave of LLM systems targets event-driven prediction directly (Table~\ref{tab:comparison}).
 
 \begin{table}[t]
-\centering\small
+\centering\footnotesize
 \caption{Comparison with event-driven financial AI systems. ACC = direction accuracy on respective test sets.}
 \label{tab:comparison}
-\begin{tabular}{@{}llll@{}}
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}p{1.75cm}p{1.75cm}p{3.15cm}c@{}}
 \toprule
 System & Approach & Limitation & ACC \\
 \midrule
 FinHEAR~\cite{finhear2025} & Historical analog & Single-chain, no multi-path & 58--62\% \\
 FinKario~\cite{finkario2025} & KG retrieval & Static KG, retrieval-only & 58.1\% \\
-TradingAgents~\cite{tradingagents2024} & Multi-agent vote & Not event-driven & $\sim$55\% \\
+Trading\-Agents~\cite{tradingagents2024} & Multi-agent vote & Not event-driven & $\sim$55\% \\
 Janus-Q~\cite{janusq2026} & Gated PnL reward & Episode-level, no per-claim check & 58.7\% \\
 Argus~\cite{argus2026} & LLM-as-judge & Judge shares errors & --- \\
 \midrule
@@ -180,8 +185,8 @@ PRONOIA is deployed as an open-source Web application (Python 3.10+ backend, Rea
 
 \begin{itemize}
     \item \textbf{Conversational Research Workbench:} Researchers interact through a chat interface; cases are persisted in SQLite with full history, enabling refresh-resistant research sessions and follow-up questioning.
-    \item \textbf{85+ Real Data Skills:} Market data (akshare/yfinance), news, announcements, financials, macro indicators, and event study methods (AR/CAR computation)---zero mock data.
-    \item \textbf{Research Team Mode:} Planner decomposes deep questions $\to$ multiple expert agents parallel execution $\to$ synthesis $\to$ reviewer cross-checks ``data facts vs. model inference.''
+    \item \textbf{85+ Real Data Skills:} Market data (akshare, yfinance), news, announcements, financials, macro indicators, and event study methods (AR/CAR computation)---zero mock data.
+    \item \textbf{Research Team Mode:} Planner decomposes deep questions $\to$ multiple expert agents execute in parallel $\to$ synthesis $\to$ reviewer cross-checks data facts vs.\ model inference.
     \item \textbf{Artifact System:} Tool results auto-generate charts, data tables, evidence cards, and one-click research reports.
     \item \textbf{Event-Driven Backtesting Platform:} Real events + Oracle T+3$\sim$T+60 CAR labels, Strict/Lenient dual-metric ACC, Wilson CI.
     \item \textbf{Arena Horizontal Evaluation:} Multi-run comparison on same dataset---ranking, radar charts, significance tests, head-to-head analysis, cost-effectiveness Pareto frontier.
@@ -197,7 +202,7 @@ The Arena system enables rigorous horizontal comparison of reasoning strategies 
 \begin{itemize}
     \item \textbf{Multi-Run Comparison:} Same dataset, multiple runs---ranking, radar charts, significance tests, event-level head-to-head analysis.
     \item \textbf{Cost-Effectiveness Analysis:} Two-dimensional scatter plots with Pareto frontier (non-dominated sorting + L-shaped reference line), X/Y axis switchable.
-    \item \textbf{Pluggable Metrics:} 18+ metrics organized in core/extended/breakdown three-tier system, dynamic column switching on list pages.
+    \item \textbf{Pluggable Metrics:} 18+ metrics in three tiers (core, extended, breakdown), with dynamic column switching on list pages.
     \item \textbf{Statistical Rigor:} Wilson confidence intervals, paired bootstrap tests, FDR correction for multiple comparisons.
 \end{itemize}
 
@@ -208,42 +213,42 @@ This addresses a critical gap in LLM evaluation: most systems report single-run 
 \begin{figure}[t]
 \centering
 \begin{tikzpicture}[
-    box/.style={draw, rounded corners, minimum width=2.2cm, minimum height=0.9cm, align=center, font=\footnotesize},
-    arrow/.style={-{Stealth[length=1.5mm]}, thick},
-    stage/.style={font=\footnotesize\bfseries, above=0.05cm}
+    box/.style={draw, rounded corners, minimum width=2.3cm, minimum height=0.78cm, align=center, font=\footnotesize},
+    arrow/.style={-{Stealth[length=1.5mm]}, thick}
 ]
-    % Input sources
+    % Row 1: input sources
     \node[box, fill=blue!10] (ak) at (0,0) {akshare\\A-share data};
-    \node[box, fill=blue!10] (yf) at (0,-1.2) {yfinance\\US data};
-    \node[box, fill=blue!10] (news) at (0,-2.4) {News/Announcements\\Web sources};
-    
-    % Processing
-    \node[box, fill=orange!15, minimum width=2.8cm] (extract) at (3.2,-0.6) {Event Extraction\\\& Structuring};
-    \node[box, fill=orange!15, minimum width=2.8cm] (label) at (3.2,-1.8) {CAR Labeling\\(T+3/7/15/30/60)};
-    
-    % Storage
-    \node[box, fill=green!10] (sqlite) at (6.4,-0.6) {SQLite\\Case Store};
-    \node[box, fill=green!10] (jsonl) at (6.4,-1.8) {labels.jsonl\\Ground Truth};
-    
-    % Output
-    \node[box, fill=red!10, minimum width=2.5cm] (train) at (9.6,-0.6) {Training Set\\4,965 events};
-    \node[box, fill=red!10, minimum width=2.5cm] (oos) at (9.6,-1.8) {OOS Set\\1,034 events};
-    
+    \node[box, fill=blue!10] (yf) at (2.75,0) {yfinance\\US data};
+    \node[box, fill=blue!10] (news) at (5.5,0) {News / Ann.\\Web sources};
+
+    % Row 2: processing
+    \node[box, fill=orange!15, minimum width=2.9cm] (extract) at (1.35,-1.5) {Event Extraction\\\& Structuring};
+    \node[box, fill=orange!15, minimum width=2.9cm] (label) at (4.55,-1.5) {CAR Labeling\\(T+3/7/15/30/60)};
+
+    % Row 3: storage
+    \node[box, fill=green!10] (sqlite) at (1.35,-3.0) {SQLite\\Case Store};
+    \node[box, fill=green!10] (jsonl) at (4.55,-3.0) {labels.jsonl\\Ground Truth};
+
+    % Row 4: output
+    \node[box, fill=red!10] (train) at (1.35,-4.6) {Training Set\\4,965 events};
+    \node[box, fill=red!10] (oos) at (4.55,-4.6) {OOS Set\\1,034 events};
+
     % Arrows
-    \draw[arrow] (ak) -- (extract);
-    \draw[arrow] (yf) -- (extract);
-    \draw[arrow] (news) -- (extract);
+    \draw[arrow] (ak.south) -- (extract.130);
+    \draw[arrow] (yf.south) -- (extract.70);
+    \draw[arrow] (yf.south) -- (label.110);
+    \draw[arrow] (news.south) -- (label.50);
     \draw[arrow] (extract) -- (label);
     \draw[arrow] (extract) -- (sqlite);
     \draw[arrow] (label) -- (jsonl);
-    \draw[arrow] (sqlite) -- (train);
-    \draw[arrow] (jsonl) -- (train);
-    \draw[arrow] (sqlite) -- (oos);
-    \draw[arrow] (jsonl) -- (oos);
-    
+    \draw[arrow] (sqlite.south) -- (train.north);
+    \draw[arrow] (jsonl.south) -- (oos.north);
+    \draw[arrow] (sqlite.south) -- (oos.130);
+    \draw[arrow] (jsonl.south) -- (train.50);
+
     % Time split
-    \draw[dashed, thick, gray] (8.0,0.2) -- (8.0,-2.6);
-    \node[font=\footnotesize, text=gray] at (8.0,0.5) {Time split 2024-01};
+    \draw[dashed, thick, gray] (-1.3,-3.8) -- (6.8,-3.8);
+    \node[font=\scriptsize, text=gray, anchor=west] at (-1.3,-3.62) {time split 2024-01};
 \end{tikzpicture}
 \caption{PRONOIA data pipeline: Web data sources $\to$ event extraction and CAR labeling $\to$ time-split storage for training and evaluation.}
 \label{fig:pipeline}
@@ -258,15 +263,15 @@ Figure~\ref{fig:pipeline} shows the data pipeline. Events are extracted from Web
 \begin{figure}[t]
 \centering
 \begin{tikzpicture}[
-    layer/.style={draw, rounded corners, minimum width=7.5cm, minimum height=1.1cm, align=center, font=\small},
+    layer/.style={draw, rounded corners, minimum width=6.5cm, minimum height=1.05cm, align=center, font=\footnotesize},
     arrow/.style={-{Stealth[length=2mm]}, thick},
-    label/.style={font=\footnotesize\itshape, text=gray}
+    sidelabel/.style={font=\scriptsize\itshape, text=gray}
 ]
     % Layers
     \node[layer, fill=blue!8] (l4) at (0,0) {\textbf{Evolution Layer}\\Versioned state evolution, credit attribution,\\policy update gated by market evidence};
-    \node[layer, fill=green!8] (l3) at (0,-1.6) {\textbf{Decision Layer}\\Direction $\to$ timing $\to$ sizing $\to$ portfolio $\to$ execution};
-    \node[layer, fill=orange!10] (l2) at (0,-3.2) {\textbf{Reasoning Layer}\\Multi-path Propagation Graph search + adversary testing\\+ priced-in detection};
-    \node[layer, fill=red!8] (l1) at (0,-4.8) {\textbf{Perception Layer}\\Heterogeneous disclosures $\to$ structured state transition\\$\to$ surprise measurement};
+    \node[layer, fill=green!8] (l3) at (0,-1.5) {\textbf{Decision Layer}\\Direction $\to$ timing $\to$ sizing $\to$ portfolio $\to$ execution};
+    \node[layer, fill=orange!10] (l2) at (0,-3.0) {\textbf{Reasoning Layer}\\Multi-path propagation graph search\\+ adversary testing + priced-in detection};
+    \node[layer, fill=red!8] (l1) at (0,-4.5) {\textbf{Perception Layer}\\Heterogeneous disclosures $\to$ structured state\\transition $\to$ surprise measurement};
 
     % Arrows
     \draw[arrow] (l1) -- (l2);
@@ -274,11 +279,11 @@ Figure~\ref{fig:pipeline} shows the data pipeline. Events are extracted from Web
     \draw[arrow] (l3) -- (l4);
 
     % Side labels
-    \node[label, rotate=90] at (-4.2,-2.4) {Event--Transmission--Position (ETP) triple};
+    \node[sidelabel, rotate=90] at (-3.6,-2.25) {Event--Transmission--Position (ETP) triple};
 
     % Feedback loop
-    \draw[arrow, dashed, gray] (l4.east) .. controls (3.5,-0.8) and (3.5,-4.0) .. (l2.east)
-        node[midway, right, font=\footnotesize, text=gray, align=left] {Market feedback\\(CAR settlement)};
+    \draw[arrow, dashed, gray] (l4.east) .. controls (3.75,-0.7) and (3.75,-2.3) .. (l2.east);
+    \node[sidelabel, rotate=90] at (3.98,-1.5) {Market feedback (CAR settlement)};
 \end{tikzpicture}
 \caption{PRONOIA's four-layer Event Reasoning Chain (ERC) architecture. The system operates on the Event--Transmission--Position (ETP) triple as atomic logic unit, with market feedback closing the evolution loop.}
 \label{fig:erc}
@@ -311,14 +316,17 @@ Boundary = System$(S)$ + State Representation$(X)$ + Analytical Scale$(\sigma)$.
 
 $G = (V, A)$ is a DAG where:
 \begin{itemize}
-    \item \textbf{Nodes $V$:} Each $v$ contains (subject, expected\_direction, expected\_magnitude, time\_window), from macro variables to sectors to individual assets.
-    \item \textbf{Edges $A$:} Each $a = (u,v,label)$, $label \in \{+1, -1\}$, with conditional transmission probability $P(B_{up}|A_{up}) = N(A_{up} \wedge B_{up})/N(A_{up})$, fused via Bayesian update $P_{new} = P_{prior} \times 0.7 + P_{observed} \times 0.3$.
+    \item \textbf{Nodes $V$:} Each $v$ contains (subject, expected direction and magnitude, time window), from macro variables to sectors to individual assets.
+    \item \textbf{Edges $A$:} Each $a = (u,v,label)$, $label \in \{+1, -1\}$, carrying a conditional transmission probability
+    \[ P(B_{up}|A_{up}) = N(A_{up} \wedge B_{up})\,/\,N(A_{up}), \]
+    fused via Bayesian update $P_{\mathrm{new}} = 0.7\,P_{\mathrm{prior}} + 0.3\,P_{\mathrm{observed}}$.
 \end{itemize}
 
 Three edge-source tiers: (a)~prior historical statistics, (b)~online recent CAR observations, (c)~Navigator real-time reasoning.
 
 \begin{figure}[t]
 \centering
+\resizebox{\columnwidth}{!}{%
 \begin{tikzpicture}[
     node/.style={draw, rounded corners, minimum width=2cm, minimum height=0.7cm, align=center, font=\footnotesize},
     edge/.style={-{Stealth[length=1.5mm]}, thick},
@@ -343,7 +351,7 @@ Three edge-source tiers: (a)~prior historical statistics, (b)~online recent CAR 
     
     % Verification
     \node[draw, dashed, rounded corners, fit=(stock1) (stock2), inner sep=0.2cm, label={[font=\footnotesize]below:Market verification (CAR)}] (verify) {};
-\end{tikzpicture}
+\end{tikzpicture}}
 \caption{Example Propagation Graph for a rate cut event. Nodes represent sectors/assets with expected direction and magnitude; edges represent transmission mechanisms with conditional probabilities. Dashed red edge shows a competing negative path (margin compression). The final positions are verified against actual post-event CAR data.}
 \label{fig:propagation}
 \end{figure}
@@ -358,7 +366,7 @@ Six-step collaboration over $G$:
     \item Each Searcher, adopting a market-participant persona (long/short/arbitrageur/regulator/retail), traces one propagation chain.
     \item Outputs merged into DAG: deduplicated, cross-referenced, marked with verification status.
     \item Navigator identifies unconnected components; prompts additional Searchers.
-    \item Market verification via CAR + dose-response + volume/volatility validates/falsifies each path.
+    \item Market verification via CAR + dose-response + volume/volatility validates or falsifies each path.
     \item Verified paths form final reasoning graph; emit directional, magnitude, and confidence judgments.
 \end{enumerate}
 
@@ -389,15 +397,16 @@ Reward is six-element tuple (R0--R5): claim accuracy (core), confidence calibrat
 \subsection{Dataset and Protocol}
 
 \begin{table}[t]
-\centering\small
+\centering\footnotesize
 \caption{Dataset statistics (time-split).}
 \label{tab:dataset}
-\begin{tabular}{@{}lccc@{}}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}lccp{2.9cm}@{}}
 \toprule
 Split & Events & Markets & Sources \\
 \midrule
-Train & 4,965 & CN 4,352 / US 613 & A-share pre-announcements, M\&A, guidance, macro \\
-OOS & 1,034 & CN 1,027 / US 7 & Same, post-training window (2024--2026), once \\
+Train & 4,965 & CN 4,352 / US 613 & Pre-announcements, M\&A, guidance, macro \\
+OOS & 1,034 & CN 1,027 / US 7 & Same, post-2024-01, evaluated once \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -411,9 +420,10 @@ Known biases: US near-absent in OOS; no macro events in OOS; scope limited to CN
 \textbf{Design:} 27 A-share blue chips + 8 sector ETFs, CSI300 benchmark, 2023-01 to 2026-07, 33 events, 20 types, CAR via market model (120d estimation, 20d gap, T+3 holding).
 
 \begin{table}[t]
-\centering\small
+\centering\footnotesize
 \caption{Rule-driven backtest results. S1--S5 implement prior $\to$ market confirmation $\to$ noise removal $\to$ strong-signal focus.}
 \label{tab:backtest}
+\setlength{\tabcolsep}{4pt}
 \begin{tabular}{@{}lccccc@{}}
 \toprule
 Strategy & N & ACC & 95\% CI & Sharpe & avgCAR \\
@@ -540,7 +550,7 @@ Significance family strongest (+17.7pt to 79.1\%): most A-share CARs insignifica
 
 \subsection{Case 1 (Success): Shengtong Turnaround --- vanilla 3/3, base 1/3}
 
-002599, 2026-01-30, turnaround. Pre-event CAR $-$7.95\% (oversold); context: ``mean-reversion vs micro-profit cancel $\to$ neutral, confidence lowered.'' v6.2 claims: \texttt{car\_t7>0} TRUE (0.72) \checkmark; \texttt{bm\_ret\_t30>0} FALSE (0.65) \checkmark; \texttt{car\_t30\_pvalue<0.05} FALSE (0.55) \checkmark. Base ignores context, bets $p$-value TRUE with arbitrary thresholds. \textbf{Success = context absorption + diversity planning + betting FALSE.}
+002599, 2026-01-30, turnaround. Pre-event CAR $-$7.95\% (oversold); context: ``mean-reversion vs micro-profit cancel $\to$ neutral, confidence lowered.'' All three v6.2 claims settle correct: \texttt{car\_t7>0} TRUE (0.72); \texttt{bm\_ret\_t30>0} FALSE (0.65); \texttt{car\_t30\_pvalue<0.05} FALSE (0.55). Base ignores context, bets $p$-value TRUE with arbitrary thresholds. \textbf{Success = context absorption + diversity planning + betting FALSE.}
 
 \subsection{Case 2 (Failure): Zhongjin Gold Beat --- all models wrong}
 
@@ -578,10 +588,11 @@ Single seed; US OOS = 7 events; 33 rule events + 4,965 RL events insufficient fo
 \subsection{Validity Audit}
 
 \begin{table}[t]
-\centering\small
+\centering\footnotesize
 \caption{Conclusion credibility grading.}
 \label{tab:audit}
-\begin{tabular}{@{}lll@{}}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}p{3.15cm}lp{3.35cm}@{}}
 \toprule
 Conclusion & Grade & Basis \\
 \midrule
@@ -775,7 +786,7 @@ Seed & 42 \\
     \item \textbf{Time-split:} Train on events before 2024-01, evaluate on events after (no shuffling).
     \item \textbf{Single OOS run:} Each model evaluated exactly once on OOS set (no cherry-picking).
     \item \textbf{As-of audit:} All features use only pre-event data; audited for lookahead bias.
-    \item \textbf{Paired bootstrap:} 2,000 event-level resamples, weighted by n\_settleable.
+    \item \textbf{Paired bootstrap:} 2,000 event-level resamples, weighted by settled-claim count.
     \item \textbf{Calibration:} Brier score + 10-bin ECE + confidence-bin actual accuracy.
 \end{enumerate}
 
