@@ -417,7 +417,7 @@ Known biases: US near-absent in OOS; no macro events in OOS; scope limited to CN
 
 \subsection{Rule-Driven Backtest (Skeleton Validation)}
 
-\textbf{Design:} 27 A-share blue chips + 8 sector ETFs, CSI300 benchmark, 2023-01 to 2026-07, 33 events, 20 types, CAR via market model (120d estimation, 20d gap, T+3 holding).
+\textbf{Design:} 27 A-share blue chips + 8 sector ETFs, CSI300 benchmark, 2023-01 to 2026-07, 33 events, 20 types, CAR via market model (120d estimation, 20d gap, T+3 holding). We do not claim tradability: transaction costs, slippage, and capacity are deliberately excluded---the backtest serves solely as an \emph{economic-materiality lens} verifying that claim-level directional judgments carry exploitable signal, not as a deployable trading system.
 
 \begin{table}[t]
 \centering\footnotesize
