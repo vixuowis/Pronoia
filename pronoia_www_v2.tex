@@ -122,6 +122,13 @@ Two gaps separate the current state from paradigm~(c).
 
 \textbf{Ch2: LLM reasoning has no external ground truth.} LLM analyses address Ch1 but validate with LLM-as-judge: evaluator and evaluatee share error modes, plausible wording games the judge, and ``sounds reasonable'' $\neq$ ``is correct.'' Without an objective settlement signal, reasoning quality can be neither measured nor improved by training.
 
+These gaps motivate three research questions, answered in \S\ref{sec:experiments}:
+\begin{itemize}
+    \item \textbf{RQ1 (Signal):} do structured events, combined with market confirmation, carry more verifiable price signal than type-level priors alone?
+    \item \textbf{RQ2 (Learning):} can RLVR on market-settled claims improve out-of-sample reasoning---uniformly, or only under favorable conditions?
+    \item \textbf{RQ3 (Failure):} what failure modes do reward design and event reasoning expose under controlled comparison?
+\end{itemize}
+
 \subsection{The PRONOIA Approach}
 
 We present PRONOIA, an event-driven financial reasoning agent built on three pillars (Figure~\ref{fig:paradigm}c):
@@ -393,8 +400,9 @@ Reward is six-element tuple (R0--R5): claim accuracy (core), confidence calibrat
 \textbf{Training:} GRPO (TRL 0.17) + Unsloth acceleration (in-process vLLM, weight sharing, Standby mode, $\sim$2.3$\times$ speedup). Batch 8/device $\times$ grad-accum 2 = 16 completions/step (4 events $\times$ 4 candidates). LR 1e-5, cosine annealing. 1 epoch = 1,241 steps $\approx$ 4,965 events. Seed 42. Single RTX 4090 (48GB), 10--12h/condition.
 
 \section{Experiments}
+\label{sec:experiments}
 
-The evaluation answers three questions in sequence. \textbf{Q1 (Signal):} do structured events combined with market confirmation carry more verifiable price signal than type-level priors alone (\S\ref{sec:backtest}, Table~\ref{tab:backtest})? \textbf{Q2 (Learning):} does training on market-settled claims improve out-of-sample reasoning---uniformly or only under favorable conditions (\S\ref{sec:ablation}--\S\ref{sec:conditional}, Tables~\ref{tab:main}--\ref{tab:byfamily})? \textbf{Q3 (Failure):} what failure modes do reward design and event reasoning expose under controlled comparison (\S\ref{sec:ablation} reward hacking, \S\ref{sec:cases} case studies)? Each experiment uses the same time-split protocol and settlement machinery described next.
+This section answers RQ1--RQ3 in sequence. \textbf{RQ1} is tested by a rule-driven backtest isolating the marginal value of structured events and market confirmation over type-level priors (\S\ref{sec:backtest}, Table~\ref{tab:backtest}). \textbf{RQ2} is tested by the PAV-RLVR controlled ablation on 1,034 time-split out-of-sample events and its condition slices (\S\ref{sec:ablation}--\S\ref{sec:conditional}, Tables~\ref{tab:main}--\ref{tab:byfamily}). \textbf{RQ3} is addressed by the reward-hacking record within the ablation and three case studies (\S\ref{sec:ablation}, \S\ref{sec:cases}). Each experiment uses the same time-split protocol and settlement machinery described next.
 
 \subsection{Dataset and Protocol}
 
@@ -619,9 +627,9 @@ US conclusions & Unusable & OOS US = 7 events \\
 \subsection{Takeaways}
 
 \begin{enumerate}
-    \item \textbf{Methodology:} Financial event reasoning chain = Propagation Graph + PAV + market posterior reward. Rule backtest (S2 70.3\%) and RL ablation (vanilla 0.632 vs base 0.573) validate at two levels.
-    \item \textbf{Negative results:} Residual corrections reduce OOS accuracy 2.29pt (hard-negatives +3.47pt). Training reward $\not\equiv$ OOS performance---reward hacking is real in financial RL.
-    \item \textbf{Structural portrait:} Model excels at falsifiable claims (FALSE 0.709, significance 79.1\%, t30 75.3\%), struggles with momentum (TRUE 0.530, bm\_ret\_t15 0.498)---guides prompt/reward design.
+    \item \textbf{RQ1:} Structured events plus market confirmation carry real signal---S1 priors alone are random (51.6\%), sector-confirmed S2 reaches 70.3\% (+18.7pp, Sharpe $-$1.01$\to$3.21).
+    \item \textbf{RQ2:} RLVR on market-settled claims improves OOS reasoning (+5.9pp claim ACC, $p<0.01$), conditionally---strongest on falsifiable slices (FALSE 0.709, significance 79.1\%, t30 75.3\%), weakest on momentum (TRUE 0.530, bm\_ret\_t15 0.498).
+    \item \textbf{RQ3:} Reward hacking is real in financial RL: residual corrections raise training reward (0.90 vs 0.69) yet reduce OOS accuracy by 2.29pt---training reward trend cannot validate reward components; OOS adjudication is the only mechanism.
 \end{enumerate}
 
 \subsection{Immediate Next Steps}
