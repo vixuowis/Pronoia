@@ -123,11 +123,12 @@ Two gaps separate the current state from paradigm~(c).
 
 \textbf{Ch2: LLM reasoning has no external ground truth.} LLM analyses address Ch1 but validate with LLM-as-judge: evaluator and evaluatee share error modes, plausible wording games the judge, and ``sounds reasonable'' $\neq$ ``is correct.'' Without an objective settlement signal, reasoning quality can be neither measured nor improved by training.
 
-These gaps motivate three research questions, answered in \S\ref{sec:experiments}:
+These gaps motivate four research questions, answered in \S\ref{sec:experiments}:
 \begin{itemize}
     \item \textbf{RQ1 (Signal):} do structured events, combined with market confirmation, carry more verifiable price signal than type-level priors alone?
-    \item \textbf{RQ2 (Learning):} can RLVR on market-settled claims improve out-of-sample reasoning---uniformly, or only under favorable conditions?
-    \item \textbf{RQ3 (Failure):} what failure modes do reward design and event reasoning expose under controlled comparison?
+    \item \textbf{RQ2 (Learning):} can RLVR on market-settled claims improve out-of-sample reasoning over the untrained base?
+    \item \textbf{RQ3 (Conditions):} under which event types, claim families, and confidence regimes do the gains concentrate---or reverse?
+    \item \textbf{RQ4 (Failure):} what failure modes do reward design and event reasoning expose under controlled comparison?
 \end{itemize}
 
 Table~\ref{tab:comparison} situates PRONOIA among event-driven financial AI systems: reported direction accuracy saturates at 55--62\%, consistent with the limited headroom of single-hop ``event $\to$ reaction'' mappings scored by non-verifiable signals.
@@ -404,7 +405,7 @@ Reward is six-element tuple (R0--R5): claim accuracy (core), confidence calibrat
 \section{Experiments}
 \label{sec:experiments}
 
-This section answers RQ1--RQ3 in sequence. \textbf{RQ1} is tested by a rule-driven backtest isolating the marginal value of structured events and market confirmation over type-level priors (\S\ref{sec:backtest}, Table~\ref{tab:backtest}). \textbf{RQ2} is tested by the PAV-RLVR controlled ablation on 1,034 time-split out-of-sample events (\S\ref{sec:ablation}, Table~\ref{tab:main}), then localized by condition slices---hard negatives, event types, indicator families, and calibration---in \S\ref{sec:analysis}. \textbf{RQ3} is answered by the reward-hacking record within the ablation (\S\ref{sec:ablation}) and three claim-level case studies (\S\ref{sec:cases}). Each experiment uses the same time-split protocol and settlement machinery described next.
+This section answers RQ1 and RQ2 in sequence. \textbf{RQ1} is tested by a rule-driven backtest isolating the marginal value of structured events and market confirmation over type-level priors (\S\ref{sec:backtest}, Table~\ref{tab:backtest}). \textbf{RQ2} is tested by the PAV-RLVR controlled ablation on 1,034 time-split out-of-sample events (\S\ref{sec:ablation}, Table~\ref{tab:main}). \textbf{RQ3} localizes the gains by condition slices---hard negatives, event types, indicator families, and calibration---in \S\ref{sec:analysis}. \textbf{RQ4} is answered by the reward-hacking record within the ablation (\S\ref{sec:ablation}) and three claim-level case studies (\S\ref{sec:cases}). Each experiment uses the same time-split protocol and settlement machinery described next.
 
 \subsection{Dataset and Protocol}
 
@@ -478,7 +479,7 @@ Paired bootstrap: $\Delta$(PAVR $-$ base) = +5.93pt (95\% CI [+3.79, +8.07])---C
 
 \textbf{Reward hacking:} Corrections' format benefit (+15.5pt) is recoverable by inference-time re-sampling. Training reward (PAVR-C 0.90 vs PAVR 0.69) \emph{inversely correlates} with OOS accuracy (0.609 vs 0.632)---model optimizes proxy signals over claim quality. KL, length, truncation are healthy and comparable---ruling out instability. \textbf{Implication: training reward trend cannot validate reward components; OOS adjudication is the only mechanism.}
 
-\section{RQ2 (Continued): Where Do Gains Concentrate?}
+\section{RQ3: Where Do the Gains Concentrate?}
 \label{sec:analysis}
 
 \subsection{Hard-Negative Subset}
@@ -563,10 +564,10 @@ Significance family strongest (+17.7pt to 79.1\%): most A-share CARs insignifica
 
 \textbf{Profile:} Excels at FALSE, long-horizon t30, significance, M\&A/guidance, 2--3 claims, confidence 0.80/0.90. Struggles with TRUE momentum, benchmark direction, hard-negatives, 4+ claims, 0.75--0.85 confidence.
 
-\section{RQ3: Failure Modes in Practice}
+\section{RQ4: Failure Modes in Practice}
 \label{sec:cases}
 
-RQ3 asks what failure modes reward design and event reasoning expose. The reward-design failure is already documented in \S\ref{sec:ablation} (reward hacking: training reward inversely correlates with OOS accuracy). This section completes the picture at the reasoning level: three case studies---one success and two failures---traced claim by claim against market settlements.
+RQ4 asks what failure modes reward design and event reasoning expose. The reward-design failure is already documented in \S\ref{sec:ablation} (reward hacking: training reward inversely correlates with OOS accuracy). This section completes the picture at the reasoning level: three case studies---one success and two failures---traced claim by claim against market settlements.
 
 \subsection{Case 1 (Success): Shengtong Turnaround --- PAVR 3/3, base 1/3}
 
@@ -635,8 +636,9 @@ US conclusions & Unusable & OOS US = 7 events \\
 
 \begin{enumerate}
     \item \textbf{RQ1:} Structured events plus market confirmation carry real signal---S1 priors alone are random (51.6\%), sector-confirmed S2 reaches 70.3\% (+18.7pp, Sharpe $-$1.01$\to$3.21).
-    \item \textbf{RQ2:} RLVR on market-settled claims improves OOS reasoning (+5.9pp claim ACC, $p<0.01$), conditionally---strongest on falsifiable slices (FALSE 0.709, significance 79.1\%, t30 75.3\%), weakest on momentum (TRUE 0.530, bm\_ret\_t15 0.498).
-    \item \textbf{RQ3:} Reward hacking is real in financial RL: residual corrections raise training reward (0.90 vs 0.69) yet reduce OOS accuracy by 2.29pt---training reward trend cannot validate reward components; OOS adjudication is the only mechanism.
+    \item \textbf{RQ2:} RLVR on market-settled claims improves OOS reasoning: +5.9pp claim ACC ($p<0.01$) with joint Brier and ECE gains over the untrained base.
+    \item \textbf{RQ3:} Gains are strongly condition-dependent---strongest on falsifiable slices (FALSE 0.709, significance 79.1\%, t30 75.3\%, hard negatives +7.6pt), weakest on momentum (TRUE 0.530, bm\_ret\_t15 0.498)---and calibration is non-monotonic in the 0.75--0.85 confidence band.
+    \item \textbf{RQ4:} Reward hacking is real in financial RL: residual corrections raise training reward (0.90 vs 0.69) yet reduce OOS accuracy by 2.29pt---training reward trend cannot validate reward components; OOS adjudication is the only mechanism.
 \end{enumerate}
 
 \subsection{Immediate Next Steps}
