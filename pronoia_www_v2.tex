@@ -186,9 +186,9 @@ Web agents navigate realistic Web tasks~\cite{webarena2023, workarena2024, visua
 
 RLVR~\cite{rlvr2025} replaces self-evaluation with externally checkable rewards; in finance, AlphaAgent~\cite{alphaagent2025} and FactorMiner~\cite{factorminer2026} apply related ideas to alpha mining. PAV pushes verification from episode level (did the strategy profit?) to claim level (did \emph{each} assertion hold?), which both localizes error and---as \S\ref{sec:ablation} shows---is the guardrail between RLVR and reward hacking. Finally, the propagation graph borrows the world-model view from robotics~\cite{ha2018, schrittwieser2020}: market state plus a structured-event action transitions through the graph and terminates in market verification, with Navigator search as planning.
 
-\section{System Description}
+\section{PRONOIA}
 
-\subsection{Deployed Platform}
+\subsection{System Overview}
 
 PRONOIA is deployed as an open-source Web application (Python 3.10+ backend, React 18 frontend) with the following production components:
 
@@ -202,20 +202,7 @@ PRONOIA is deployed as an open-source Web application (Python 3.10+ backend, Rea
     \item \textbf{Security:} LLM keys stored only in backend \texttt{.env}, never transmitted to browser.
 \end{itemize}
 
-The platform has been iteratively developed through 13 versions (v3.0--v3.13) over 6 months, with the Arena evaluation system and multi-horizon CAR labeling added in recent versions based on experimental feedback.
-
-\subsection{Arena Evaluation System}
-
-The Arena system enables rigorous horizontal comparison of reasoning strategies on identical datasets:
-
-\begin{itemize}
-    \item \textbf{Multi-Run Comparison:} Same dataset, multiple runs---ranking, radar charts, significance tests, event-level head-to-head analysis.
-    \item \textbf{Cost-Effectiveness Analysis:} Two-dimensional scatter plots with Pareto frontier (non-dominated sorting + L-shaped reference line), X/Y axis switchable.
-    \item \textbf{Pluggable Metrics:} 18+ metrics in three tiers (core, extended, breakdown), with dynamic column switching on list pages.
-    \item \textbf{Statistical Rigor:} Wilson confidence intervals, paired bootstrap tests, FDR correction for multiple comparisons.
-\end{itemize}
-
-This addresses a critical gap in LLM evaluation: most systems report single-run results without statistical validation. Arena makes it trivial to verify whether an improvement is significant or noise.
+The platform has been iteratively developed through 13 versions (v3.0--v3.13) over 6 months, with the Arena evaluation system and multi-horizon CAR labeling added in recent versions based on experimental feedback. The Arena subsystem deserves emphasis: it addresses a critical gap in LLM evaluation---most systems report single-run results without statistical validation. Arena combines 18+ pluggable metrics in three tiers with Wilson confidence intervals, paired bootstrap tests, and FDR correction for multiple comparisons, making it trivial to verify whether an improvement is significant or noise.
 
 \subsection{Data Pipeline}
 
@@ -265,9 +252,7 @@ This addresses a critical gap in LLM evaluation: most systems report single-run 
 
 Figure~\ref{fig:pipeline} shows the data pipeline. Events are extracted from Web sources, structured into the ETP format, and labeled with multi-horizon CAR ground truth. The time-split ensures no lookahead bias: training uses events before 2024-01, OOS evaluation uses events after.
 
-\section{Method}
-
-\subsection{Financial Event Reasoning Chain}
+\subsection{Event Reasoning Chain}
 
 \begin{figure}[t]
 \centering
@@ -308,8 +293,6 @@ PRONOIA's four-layer architecture (Figure~\ref{fig:erc}) operates on the Event--
 \end{enumerate}
 
 This paper focuses on Layers 2 (Reasoning) and 4 (Evolution via RLVR), with Layers 1 and 3 providing input context.
-
-\subsection{Events as State Transitions}
 
 \begin{definition}[Event]
 An event $e$ is a state transition $X_e^- \to X_e^+$ of a declared system $S$ at time $t_e$, with ex-ante benchmark $B_e$. The \emph{surprise} is $X_e^+ - B_e$, not $X_e^+ - X_e^-$.
@@ -405,7 +388,7 @@ Reward is six-element tuple (R0--R5): claim accuracy (core), confidence calibrat
 \section{Experiments}
 \label{sec:experiments}
 
-This section answers RQ1 and RQ2 in sequence. \textbf{RQ1} is tested by a rule-driven backtest isolating the marginal value of structured events and market confirmation over type-level priors (\S\ref{sec:backtest}, Table~\ref{tab:backtest}). \textbf{RQ2} is tested by the PAV-RLVR controlled ablation on 1,034 time-split out-of-sample events (\S\ref{sec:ablation}, Table~\ref{tab:main}). \textbf{RQ3} localizes the gains by condition slices---hard negatives, event types, indicator families, and calibration---in \S\ref{sec:analysis}. \textbf{RQ4} is answered by the reward-hacking record within the ablation (\S\ref{sec:ablation}) and three claim-level case studies (\S\ref{sec:cases}). Each experiment uses the same time-split protocol and settlement machinery described next.
+This section answers RQ1--RQ4 in sequence. \textbf{RQ1} is tested by a rule-driven backtest isolating the marginal value of structured events and market confirmation over type-level priors (\S\ref{sec:backtest}, Table~\ref{tab:backtest}). \textbf{RQ2} is tested by the PAV-RLVR controlled ablation on 1,034 time-split out-of-sample events (\S\ref{sec:ablation}, Table~\ref{tab:main}). \textbf{RQ3} localizes the gains by condition slices---hard negatives, event types, indicator families, and calibration (\S\ref{sec:analysis}). \textbf{RQ4} documents reward hacking and reasoning failures, with claim-level case detail in Appendix~\ref{app:cases}. Each experiment uses the same time-split protocol and settlement machinery described next.
 
 \subsection{Dataset and Protocol}
 
@@ -477,12 +460,10 @@ Paired bootstrap: $\Delta$(PAVR $-$ base) = +5.93pt (95\% CI [+3.79, +8.07])---C
 
 \textbf{Ablation (reward corrections):} Adding the five residual bias corrections of \S\ref{sec:rlvr-training} to the reward (variant PAVR-C) yields 0.6093 claim ACC---\emph{below} PAVR by 2.29pt (95\% CI [+0.78, +3.79]); event-level: PAVR wins 394, PAVR-C 335, tie 302. PAVR-C's only gains are format compliance (0.997 vs 0.842) and settled-claim volume (4,056 vs 3,154); calibration is equivalent (ECE 0.1064 vs 0.1070).
 
-\textbf{Reward hacking:} Corrections' format benefit (+15.5pt) is recoverable by inference-time re-sampling. Training reward (PAVR-C 0.90 vs PAVR 0.69) \emph{inversely correlates} with OOS accuracy (0.609 vs 0.632)---model optimizes proxy signals over claim quality. KL, length, truncation are healthy and comparable---ruling out instability. \textbf{Implication: training reward trend cannot validate reward components; OOS adjudication is the only mechanism.}
-
-\section{RQ3: Where Do the Gains Concentrate?}
+\subsection{RQ3: Where Do the Gains Concentrate?}
 \label{sec:analysis}
 
-\subsection{Hard-Negative Subset}
+\subsubsection{Hard-Negative Subset}
 
 146 events (M\&A success, turnaround, beat, additional issuance, buyback): base 0.5103, PAVR-C 0.5515, \textbf{PAVR 0.5862}. Corrections help +3.5pt on this subset but net negative overall---the ``residual bias correctable by prior'' premise is unsupported.
 
@@ -512,7 +493,7 @@ Paired bootstrap: $\Delta$(PAVR $-$ base) = +5.93pt (95\% CI [+3.79, +8.07])---C
 \label{fig:results}
 \end{figure}
 
-\subsection{By Event Type}
+\subsubsection{By Event Type}
 
 \begin{table}[t]
 \centering\small
@@ -532,7 +513,7 @@ Policy rate & 7 & 0.598 & 0.591 & (few) \\
 
 Earnings: largest relative lift (+7.4pt) but lowest absolute (0.598)---strongest priors, hardest cases. M\&A/guidance: highest absolute (0.661, 0.679).
 
-\subsection{By Indicator Family $\times$ Horizon}
+\subsubsection{By Indicator Family $\times$ Horizon}
 
 \begin{table}[t]
 \centering\small
@@ -554,7 +535,7 @@ Horizon t15 (worst) & 610 & 0.452 & 0.505 & +5.3pt \\
 
 Significance family strongest (+17.7pt to 79.1\%): most A-share CARs insignificant---falsifying significance is the model's strongest move. Weakest: \texttt{bm\_ret\_t15} (0.498, coin-flip). Long-horizon t30 (+13.1pt) vs t15 (+5.3pt): falsifiable long-horizon claims outperform.
 
-\subsection{Conditional Analysis}
+\subsubsection{Conditional Analysis}
 \label{sec:conditional}
 
 \textbf{Claim count:} 2--3 best (0.690/0.656); 4 drops to 0.569. Constraint should narrow to 3--4.
@@ -564,32 +545,14 @@ Significance family strongest (+17.7pt to 79.1\%): most A-share CARs insignifica
 
 \textbf{Profile:} Excels at FALSE, long-horizon t30, significance, M\&A/guidance, 2--3 claims, confidence 0.80/0.90. Struggles with TRUE momentum, benchmark direction, hard-negatives, 4+ claims, 0.75--0.85 confidence.
 
-\section{RQ4: Failure Modes in Practice}
+\subsection{RQ4: Reward Hacking and Failure Modes}
 \label{sec:cases}
 
-RQ4 asks what failure modes reward design and event reasoning expose. The reward-design failure is already documented in \S\ref{sec:ablation} (reward hacking: training reward inversely correlates with OOS accuracy). This section completes the picture at the reasoning level: three case studies---one success and two failures---traced claim by claim against market settlements.
+RQ4 asks what failure modes reward design and event reasoning expose. Two are documented.
 
-\subsection{Case 1 (Success): Shengtong Turnaround --- PAVR 3/3, base 1/3}
+\textbf{Reward hacking.} Corrections' format benefit (+15.5pt) is recoverable by inference-time re-sampling. Training reward (PAVR-C 0.90 vs PAVR 0.69) \emph{inversely correlates} with OOS accuracy (0.609 vs 0.632)---the model optimizes proxy signals over claim quality. KL, length, and truncation diagnostics are healthy and comparable, ruling out instability. \textbf{Implication: training reward trend cannot validate reward components; OOS adjudication is the only mechanism.}
 
-002599, 2026-01-30, turnaround. Pre-event CAR $-$7.95\% (oversold); context: ``mean-reversion vs micro-profit cancel $\to$ neutral, confidence lowered.'' All three PAVR claims settle correct: \texttt{car\_t7>0} TRUE (0.72); \texttt{bm\_ret\_t30>0} FALSE (0.65); \texttt{car\_t30\_pvalue<0.05} FALSE (0.55). Base ignores context, bets $p$-value TRUE with arbitrary thresholds. \textbf{Success = context absorption + diversity planning + betting FALSE.}
-
-\subsection{Case 2 (Failure): Zhongjin Gold Beat --- all models wrong}
-
-600489, 2026-01-28, beat. T0 limit-up +9.98\%, pre20 +46\% gain. Context warns sell-the-news ($-$6.0 signal) but all three models claim \texttt{car\_t7>0} (confidence 0.72), 0/4 wrong. Ground truth: car\_t30 $-$29.8\%. \textbf{Risk paragraph cognitively correct, behaviorally inert.}
-
-\subsection{Case 3 (Failure): Zhongshan Utilities Beat --- upstream context wrong}
-
-000685, 2026-01-31, beat. Context concludes ``volume-price resonance $\to$ up''; actual continuous decline (car\_t7 $-$3.2\%, car\_t30 $-$17.3\%). Model extrapolates weak stock $\to$ weak market (bm\_ret wrong). pre20 CAR +8.06\% used as significance support, not mean-reversion warning. \textbf{Garbage-in upstream; features reinforce priors, don't test them.}
-
-\subsection{Cross-Case Synthesis}
-
-\begin{enumerate}
-    \item Failures concentrate in ``bullish text + T0 positive reaction'': prior = momentum, A-share reality = mean reversion.
-    \item Risk paragraphs ``cognitively correct, behaviorally inert'': no hedging claims---prompt/reward design fix.
-    \item Benchmark family $\approx$ coin flip: individual-stock weakness extrapolated to market weakness.
-    \item Upstream context with strong priors contaminates downstream---context should output self-confidence + counterparty evidence.
-    \item Cross-indicator claims silently dropped---wastes expression, underestimates coverage.
-\end{enumerate}
+\textbf{Reasoning failures.} Claim-level tracing of OOS events (three representative cases in Appendix~\ref{app:cases}; full synthesis there) reveals two recurring patterns: (i)~failures concentrate in ``bullish text + T0 positive reaction'' configurations, where the model's prior is momentum but A-share reality is mean reversion---risk paragraphs are \emph{cognitively correct but behaviorally inert}, never converting into hedging claims; and (ii)~upstream context with strong priors contaminates downstream reasoning (individual-stock weakness extrapolated to benchmark direction, near coin-flip), while cross-indicator claims are silently dropped. The success case shows the complementary mechanism: context absorption, claim diversity, and willingness to bet FALSE.
 
 \section{Discussion}
 
@@ -767,6 +730,33 @@ Patil, S., et al. (2023). Gorilla: Large language model connected with massive A
 \end{thebibliography}
 
 \appendix
+
+\section{Case Studies}
+\label{app:cases}
+
+Three representative OOS events, traced claim by claim against market settlements. One success, two failures; \S\ref{sec:cases} summarizes the patterns.
+
+\subsection*{Case 1 (Success): Shengtong Turnaround --- PAVR 3/3, base 1/3}
+
+002599, 2026-01-30, turnaround. Pre-event CAR $-$7.95\% (oversold); context: ``mean-reversion vs micro-profit cancel $\to$ neutral, confidence lowered.'' All three PAVR claims settle correct: \texttt{car\_t7>0} TRUE (0.72); \texttt{bm\_ret\_t30>0} FALSE (0.65); \texttt{car\_t30\_pvalue<0.05} FALSE (0.55). Base ignores context, bets $p$-value TRUE with arbitrary thresholds. \textbf{Success = context absorption + diversity planning + betting FALSE.}
+
+\subsection*{Case 2 (Failure): Zhongjin Gold Beat --- all models wrong}
+
+600489, 2026-01-28, beat. T0 limit-up +9.98\%, pre20 +46\% gain. Context warns sell-the-news ($-$6.0 signal) but all three models claim \texttt{car\_t7>0} (confidence 0.72), 0/4 wrong. Ground truth: car\_t30 $-$29.8\%. \textbf{Risk paragraph cognitively correct, behaviorally inert.}
+
+\subsection*{Case 3 (Failure): Zhongshan Utilities Beat --- upstream context wrong}
+
+000685, 2026-01-31, beat. Context concludes ``volume-price resonance $\to$ up''; actual continuous decline (car\_t7 $-$3.2\%, car\_t30 $-$17.3\%). Model extrapolates weak stock $\to$ weak market (bm\_ret wrong). pre20 CAR +8.06\% used as significance support, not mean-reversion warning. \textbf{Garbage-in upstream; features reinforce priors, don't test them.}
+
+\subsection*{Cross-Case Synthesis}
+
+\begin{enumerate}
+    \item Failures concentrate in ``bullish text + T0 positive reaction'': prior = momentum, A-share reality = mean reversion.
+    \item Risk paragraphs ``cognitively correct, behaviorally inert'': no hedging claims---prompt/reward design fix.
+    \item Benchmark family $\approx$ coin flip: individual-stock weakness extrapolated to market weakness.
+    \item Upstream context with strong priors contaminates downstream---context should output self-confidence + counterparty evidence.
+    \item Cross-indicator claims silently dropped---wastes expression, underestimates coverage.
+\end{enumerate}
 
 \section{Reproducibility}
 
