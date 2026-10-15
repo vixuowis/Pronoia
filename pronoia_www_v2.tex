@@ -22,22 +22,81 @@
 \renewcommand{\shortauthors}{Anonymous}
 
 \begin{abstract}
-Event-driven equity trading is shifting from speed alpha to cognitive alpha: reading an announcement's implications more deeply than the market. Two gaps block progress: traditional event study methods are post-hoc descriptive and cannot form forward-looking quantifiable predictions; and LLM-enhanced methods can read announcements but universally rely on LLM-as-judge validation, sharing the model's blind spots.
+Event-driven equity trading is shifting from speed alpha to cognitive alpha: reading an announcement's implications more deeply than the market. Two gaps persist: classical event studies are post-hoc and discard event structure, while LLM-based analysis is validated almost universally by LLM-as-judge, whose blind spots mirror the evaluatee's.
 
-We present PRONOIA, an event-driven financial reasoning framework deployed as an open-source web platform with three pillars: (i)~an \emph{Event Reasoning Chain} (ERC) architecture formalizing events as state transitions and executing multi-path propagation over an encoded \emph{Propagation Graph}; (ii)~a \emph{Predict--Assert--Verify} (PAV) output contract decomposing each event prediction into 3--6 verifiable claims over measurable financial indicators; and (iii)~\emph{Reinforcement Learning with Verifiable Rewards} (RLVR) settling every claim against actual post-event market data.
-
-Two controlled experiments on 1,034 time-split out-of-sample A-share events (2024--2026): rule-driven backtest achieves 70.3\% direction accuracy with market confirmation as the strongest meta-signal (+18.7pp); PAV-RLVR LoRA adapter improves claim-level accuracy from 57.3\% to 63.2\% (+5.9pp, paired bootstrap $p<0.01$) with simultaneous Brier (0.283$\to$0.254) and ECE (0.163$\to$0.107) gains. A controlled ablation shows residual bias correction rewards cause reward hacking, reducing OOS accuracy by 2.29pt---an empirical caution for financial RL design.
-
-Structural analysis reveals asymmetric capability: the model excels at falsifiable claims (FALSE-side 70.9\%, significance family 79.1\%, horizon $t30$ 75.3\%) but struggles with momentum-continuation claims (TRUE-side 53.0\%, $bm\_ret\_t15$ 49.8\%). Three case studies characterize failure modes: prior-driven momentum bias, risk paragraphs that are cognitively correct but behaviorally inert, and upstream context contamination.
+We present PRONOIA, an event-driven financial reasoning agent deployed as an open-source Web platform, built on three pillars: (i)~an \emph{Event Reasoning Chain} (ERC) architecture formalizing events as state transitions propagated over an economic graph; (ii)~a \emph{Predict--Assert--Verify} (PAV) contract decomposing each prediction into 3--6 falsifiable claims over measurable indicators; and (iii)~\emph{Reinforcement Learning with Verifiable Rewards} (RLVR) settling every claim against post-event market data. On 1,034 time-split out-of-sample A-share events (2024--2026), a rule-driven backtest attains 70.3\% direction accuracy with market confirmation the strongest meta-signal (+18.7pp); PAV-RLVR LoRA improves claim accuracy 57.3\%$\to$63.2\% (+5.9pp, paired bootstrap $p<0.01$) with joint Brier (0.283$\to$0.254) and ECE (0.163$\to$0.107) gains. The model excels at falsifiable claims (significance family 79.1\%, FALSE-side 70.9\%) but lags on momentum claims (TRUE-side 53.0\%); a controlled ablation shows residual-bias rewards induce reward hacking ($-2.29$pt OOS), an empirical caution for financial RL design.
 
 \textbf{CCS Concepts:} Computing methodologies $\to$ Reinforcement learning; Information systems $\to$ Expert systems; Applied computing $\to$ Economics.
 
 \textbf{Keywords:} Event-driven financial reasoning; LLM agents; Financial world models; RLVR; Event study methodology; Web-based AI agents
 \end{abstract}
 
+\begin{teaserfigure}
+\centering
+\begin{tikzpicture}[
+    eb/.style={draw, rounded corners=1pt, minimum width=4.9cm, minimum height=0.58cm, align=center, font=\scriptsize, inner sep=2pt},
+    earr/.style={-{Stealth[length=1.4mm]}, semithick, black!60},
+    ttl/.style={font=\footnotesize\bfseries, align=center},
+    neg/.style={font=\scriptsize, text=red!65!black, align=center},
+    good/.style={font=\scriptsize, text=green!45!black, align=center},
+    pnl/.style={draw=black!25, rounded corners=3pt, inner sep=5pt},
+    evo/.style={-{Stealth[length=2mm]}, very thick, black!35}
+]
+    % ===== Panel (a): Event study =====
+    \node[eb, fill=black!6] (a1) at (0,0) {single-source announcement};
+    \node[eb, fill=black!6] (a2) at (0,-0.85) {collapse to 0/1 event dummy};
+    \node[eb, fill=black!6] (a3) at (0,-1.7) {CAR averaged over event \emph{type}};
+    \node[neg] (a4) at (0,-2.62) {$\times$~post-hoc, no forward prediction\\$\times$~magnitude \& surprise lost};
+    \draw[earr] (a1) -- (a2);
+    \draw[earr] (a2) -- (a3);
+    \node[ttl] at (0,0.68) {(a)~Event study (1968--)};
+    \coordinate (abot) at (0,-4.55);
+    % ===== Panel (b): LLM-as-judge =====
+    \node[eb, fill=black!6] (b1) at (6.15,0) {announcement text};
+    \node[eb, fill=black!6] (b2) at (6.15,-0.85) {LLM free-form reasoning};
+    \node[eb, fill=black!6] (b3) at (6.15,-1.7) {narrative report};
+    \node[eb, fill=black!6] (b4) at (6.15,-2.55) {LLM-as-judge: ``sounds right?''};
+    \node[neg] (b5) at (6.15,-3.42) {$\times$~judge shares model blind spots\\$\times$~plausible $\neq$ correct};
+    \draw[earr] (b1) -- (b2);
+    \draw[earr] (b2) -- (b3);
+    \draw[earr] (b3) -- (b4);
+    \node[ttl] at (6.15,0.68) {(b)~LLM-as-judge (2023--)};
+    \coordinate (bbot) at (6.15,-4.55);
+    % ===== Panel (c): PRONOIA =====
+    \node[eb, fill=blue!8] (c1) at (12.3,0) {structured event $(\tau,d,s,\mathit{surprise})$\\from heterogeneous Web sources};
+    \node[eb, fill=blue!8] (c2) at (12.3,-1.05) {multi-path propagation graph};
+    \node[eb, fill=blue!8] (c3) at (12.3,-1.95) {PAV: 3--6 falsifiable claims};
+    \node[eb, fill=blue!8] (c4) at (12.3,-2.85) {market settles each claim (CAR T+3..60)};
+    \node[eb, fill=blue!8] (c5) at (12.3,-3.75) {RLVR updates policy \& graph edges};
+    \node[good] (c6) at (12.3,-4.5) {$\surd$~verifiable reason--verify--revise loop};
+    \draw[earr] (c1) -- (c2);
+    \draw[earr] (c2) -- (c3);
+    \draw[earr] (c3) -- (c4);
+    \draw[earr] (c4) -- (c5);
+    \draw[earr, dashed, gray] (c5.east) .. controls (15.7,-3.3) and (15.7,-1.5) .. (c2.east);
+    \node[ttl] at (12.3,0.68) {(c)~PRONOIA (ours)};
+    \coordinate (cbot) at (12.3,-4.55);
+    % ===== Evolution arrows between panels =====
+    \draw[evo] (2.95,-1.7) -- (3.4,-1.7);
+    \draw[evo] (9.1,-1.7) -- (9.55,-1.7);
+    % ===== Panel frames =====
+    \begin{scope}[on background layer]
+        \node[pnl, fit=(a1)(a4)(abot)] {};
+        \node[pnl, fit=(b1)(b5)(bbot)] {};
+        \node[pnl, fill=blue!3, fit=(c1)(c6)(cbot)] {};
+    \end{scope}
+\end{tikzpicture}
+\caption{Three paradigms of event-driven financial analysis. (a)~Event studies average CAR by event type---rigorous but post-hoc. (b)~LLM analysis restores event richness but is validated by a judge sharing the evaluatee's blind spots. (c)~PRONOIA structures each event, propagates it over an economic graph, and lets post-event market data settle every claim---closing the reason--verify--revise loop.}
+\label{fig:paradigm}
+\end{teaserfigure}
+
 \maketitle
 
 \section{Introduction}
+
+Every trading day, hundreds of corporate disclosures hit the Web---earnings surprises, contract wins, guidance revisions, policy shifts---and each triggers the same race: who reads \emph{what the announcement means} most accurately. Event-driven trading has shifted from \emph{speed alpha}, won by co-location and low-latency feeds, to \emph{cognitive alpha}, won by reasoning more deeply about magnitude, wording, surprise, and cross-sector transmission. But depth does not scale: a skilled analyst can work through only a handful of events per day, and this coverage--depth trade-off is precisely where event-driven performance is capped.
+
+Large language models are the natural technology to break this trade-off---they parse full filings in seconds, detect nuanced tone changes, and sketch transmission chains no template anticipates. Figure~\ref{fig:paradigm} positions the field. The classical event study~(a) is rigorous but post-hoc: it averages over event \emph{types} and cannot say what \emph{this} event will do. LLM-based analysis~(b) restores event richness but is validated almost universally by an LLM judge that shares the evaluatee's blind spots. This paper realizes the missing paradigm~(c): an agent whose every prediction is \emph{settled by the market itself}.
 
 \subsection{Relevance to the Web}
 
@@ -51,85 +110,40 @@ The central scientific challenge in this work is \emph{created} by the Web, not 
 
 Taken together, these properties place the work squarely in the \emph{Web Infrastructure and Agentic Systems} track: instead of treating the Web as a passive data source, we study how autonomous agents can reason over, and be verified by, the evolving Web.
 
-\subsection{The Paradigm Shift}
+\subsection{Two Challenges}
 
-Since Ball \& Brown~\cite{ball1968} and Fama et al.~\cite{fama1969}, the event study has been the cornerstone of empirical finance. Its five-step pipeline---define event, estimation window, market model, compute AR/CAR, statistical test---has remained structurally unchanged for over half a century. Meanwhile, event-driven trading has evolved from \emph{speed alpha} (co-location, low-latency feeds) to \emph{cognitive alpha}: returns come from reading \emph{what the announcement means} more accurately than the market, not from reading it faster.
+Two gaps separate the current state from paradigm~(c).
 
-LLMs are the natural technology for cognitive alpha---they parse full announcements, detect nuanced guidance tone changes, and sketch transmission chains across sectors. But three fundamental problems block reliable event-driven financial AI, and no existing system solves all three:
+\textbf{Ch1: events are stripped of structure and studied in isolation.} The five-step event-study pipeline~\cite{fama1969}---define event, estimation window, market model, AR/CAR, significance test---has remained structurally unchanged for over half a century~\cite{ball1968}. It collapses announcements into 0/1 dummies, discarding magnitude, wording, and the market-surprise component that actually moves prices~\cite{kuttner2001}; and it treats events as independent~\cite{kolari2010}, although markets react through multi-layer channels (``rate cut $\to$ developer financing improves $\to$ building-material demand rises'') and systematically underreact to indirect effects~\cite{cohen2008}. The pipeline has no slot for either.
 
-\textbf{Problem 1:} Traditional methods describe the past, not the future. Event studies answer ``how did \emph{this type} of event move prices on average?'' but cannot answer ``how will \emph{this specific} event move prices?'' Announcements are collapsed into 0/1 dummies; magnitude, wording, and market-surprise component---what actually moves prices~\cite{kuttner2001}---are lost. Macro events are sparse and heterogeneous, limiting out-of-sample predictive power.
+\textbf{Ch2: LLM reasoning has no external ground truth.} LLM analyses address Ch1 but validate with LLM-as-judge: evaluator and evaluatee share error modes, plausible wording games the judge, and ``sounds reasonable'' $\neq$ ``is correct.'' Without an objective settlement signal, reasoning quality can be neither measured nor improved by training.
 
-\textbf{Problem 2:} Events are treated in isolation, ignoring economic transmission. The standard event study assumes independence~\cite{kolari2010}, but markets react through multi-layer channels: ``rate cut $\to$ real estate financing improves $\to$ building material demand rises $\to$ commodity prices move.'' Markets systematically underreact to indirect effects~\cite{cohen2008}, and the event study pipeline has no slot for them.
+\subsection{The PRONOIA Approach}
 
-\textbf{Problem 3:} LLM-enhanced methods lack external ground truth. LLM event analyses solve Problems 1--2 but validate almost universally with LLM-as-judge---evaluator and evaluatee share error modes, are vulnerable to prompt injection, and ``sounding reasonable'' $\neq$ ``actually correct.''
-
-\subsection{The PRONOIA Proposition}
-
-PRONOIA resolves this dilemma by grounding every prediction in actual post-event market data:
+We present PRONOIA, an event-driven financial reasoning agent built on three pillars (Figure~\ref{fig:paradigm}c):
 
 \begin{enumerate}
-    \item \textbf{Structured Events:} Each event is a structured information shock $(type, direction, strength, surprise)$---not an isolated 0/1 signal---input to multi-path propagation.
-    \item \textbf{Propagation Graph Reasoning:} Economic logic is explicitly encoded as a DAG $G=(V,A)$ with nodes as macro variables/sectors/assets and edges as pre-built transmission mechanisms (interest-rate channel, supply-demand, industry upstream-downstream, capital flow). Multi-path \emph{search and assembly} replaces free-generation.
-    \item \textbf{Market Ground Truth Verification:} Every prediction is a falsifiable claim settled by actual post-event market CAR data---not LLM self-assessment. Graph edge weights are continuously calibrated by market feedback, closing the ``reason $\to$ verify $\to$ revise'' loop.
+    \item \textbf{Structured events.} Each event is a structured information shock $(type, direction, strength, surprise)$ reconstructed from heterogeneous Web sources---not a 0/1 dummy---and serves as input to multi-path propagation.
+    \item \textbf{Propagation-graph reasoning.} Economic logic is encoded as a DAG whose nodes are macro variables, sectors, and assets and whose edges are pre-built transmission mechanisms (interest-rate, supply--demand, industry-chain, capital-flow). Multi-path \emph{search and assembly} replaces free-form generation.
+    \item \textbf{Market-verifiable claims.} Every prediction is decomposed into falsifiable claims settled by post-event CAR data---never by LLM self-assessment---and the settlements train the agent and recalibrate graph edges, closing the reason $\to$ verify $\to$ revise loop.
 \end{enumerate}
 
 \subsection{Contributions}
 
 \begin{enumerate}
-    \item \textbf{ERC Architecture:} A four-layer decoupled architecture (Perception $\to$ Reasoning $\to$ Decision $\to$ Evolution) with the Event--Transmission--Position (ETP) triple as atomic logic unit, formalizing the Propagation Graph as the financial analog of a robotics world model's transition function.
-    \item \textbf{PAV-RLVR Framework:} A verifiable output contract (Predict--Assert--Verify) decomposing predictions into 3--6 claim-level assertions over measurable indicators (CAR, benchmark returns, $p$-values, window averages across T+3/7/15/30/60), combined with RLVR settling every claim against objective market data.
-    \item \textbf{Controlled Empirical Validation:} (a)~Rule-driven backtest isolating the reasoning skeleton: 70.3\% ACC with market confirmation (+18.7pp); (b)~PAV-RLVR LoRA adapter improving claim accuracy 57.3\%$\to$63.2\% (+5.9pp, paired bootstrap $p<0.01$) with Brier and ECE gains.
-    \item \textbf{Reward Hacking Documentation:} Controlled ablation showing residual bias corrections cause reward hacking ($-2.29$pt OOS) despite training reward curve improvements---an empirical caution for financial RL design.
+    \item \textbf{ERC architecture:} a four-layer Event Reasoning Chain (Perception $\to$ Reasoning $\to$ Decision $\to$ Evolution) operating on the Event--Transmission--Position triple, formalizing the propagation graph as the financial analogue of a world model's transition function.
+    \item \textbf{PAV-RLVR framework:} a Predict--Assert--Verify contract decomposing each prediction into 3--6 claims over measurable indicators (CAR, benchmark returns, $p$-values across T+3/7/15/30/60), trained with RLVR against objective market settlements.
+    \item \textbf{Controlled validation} on 1,034 time-split out-of-sample A-share events (2024--2026): rule-driven backtest reaches 70.3\% direction accuracy with market confirmation the strongest meta-signal (+18.7pp); PAV-RLVR LoRA improves claim accuracy 57.3\%$\to$63.2\% (+5.9pp, paired bootstrap $p<0.01$) with joint Brier and ECE gains.
+    \item \textbf{Reward-hacking documentation:} a controlled ablation in which residual-bias correction rewards \emph{improve} training reward yet \emph{reduce} OOS accuracy by 2.29pt---an empirical caution for financial RL design.
 \end{enumerate}
-
-\begin{figure}[t]
-\centering
-\begin{tikzpicture}[
-    layer/.style={draw, rounded corners, minimum width=7.5cm, minimum height=1.1cm, align=center, font=\small},
-    arrow/.style={-{Stealth[length=2mm]}, thick},
-    label/.style={font=\footnotesize\itshape, text=gray}
-]
-    % Layers
-    \node[layer, fill=blue!8] (l4) at (0,0) {\textbf{Evolution Layer}\\Versioned state evolution, credit attribution,\\policy update gated by market evidence};
-    \node[layer, fill=green!8] (l3) at (0,-1.6) {\textbf{Decision Layer}\\Direction $\to$ timing $\to$ sizing $\to$ portfolio $\to$ execution};
-    \node[layer, fill=orange!10] (l2) at (0,-3.2) {\textbf{Reasoning Layer}\\Multi-path Propagation Graph search + adversary testing\\+ priced-in detection};
-    \node[layer, fill=red!8] (l1) at (0,-4.8) {\textbf{Perception Layer}\\Heterogeneous disclosures $\to$ structured state transition\\$\to$ surprise measurement};
-    
-    % Arrows
-    \draw[arrow] (l1) -- (l2);
-    \draw[arrow] (l2) -- (l3);
-    \draw[arrow] (l3) -- (l4);
-    
-    % Side labels
-    \node[label, rotate=90] at (-4.2,-2.4) {Event--Transmission--Position (ETP) triple};
-    
-    % Feedback loop
-    \draw[arrow, dashed, gray] (l4.east) .. controls (3.5,-0.8) and (3.5,-4.0) .. (l2.east)
-        node[midway, right, font=\footnotesize, text=gray, align=left] {Market feedback\\(CAR settlement)};
-\end{tikzpicture}
-\caption{PRONOIA's four-layer Event Reasoning Chain (ERC) architecture. The system operates on the Event--Transmission--Position (ETP) triple as atomic logic unit, with market feedback closing the evolution loop.}
-\label{fig:erc}
-\end{figure}
 
 \section{Related Work}
 
-\subsection{Event Study Methodology}
+\subsection{Event-Driven Financial Analysis}
 
-Foundations by Ball \& Brown~\cite{ball1968} and Fama et al.~\cite{fama1969} established the event study paradigm. Critical limitations documented: event dummies lose surprise magnitude~\cite{kuttner2001}; macro event sparsity limits extrapolation; cross-sectional CAR correlation inflates statistics~\cite{kolari2010}. We complement this with the Propagation Graph as forward-looking structure preserving event richness and modeling transmission.
+The event study of Ball \& Brown~\cite{ball1968} and Fama et al.~\cite{fama1969} remains the empirical cornerstone of event analysis, and its limitations are well documented: event dummies discard the surprise component that moves prices~\cite{kuttner2001}, cross-sectional CAR correlation inflates test statistics~\cite{kolari2010}, and the pipeline offers no slot for economic transmission. Financial NLP supplies richer event representations---detection and coreference (MAVEN~\cite{maven2020}, MAVEN-ERE~\cite{mavenere2022}), document-level extraction (Doc2EDAG~\cite{doc2edag2019}, DCFEE~\cite{dcfee2018}), and event-enhanced knowledge graphs (FinKario~\cite{finkario2025})---but stops at the \emph{perception} layer: structured events are produced without a reasoning layer that propagates them or a verification layer that settles predictions. PRONOIA's contribution is exactly these two missing layers.
 
-\subsection{Financial NLP and Event Extraction}
-
-The 4th generation of event processing brings LLM-based understanding. MAVEN~\cite{maven2020} and MAVEN-ERE~\cite{mavenere2022} provide event detection/coreference datasets; Doc2EDAG~\cite{doc2edag2019} and DCFEE~\cite{dcfee2018} tackle document-level financial extraction; FinKario~\cite{finkario2025} builds event-enhanced financial KGs. These are natural Perception-layer inputs; PRONOIA's contribution is the Reasoning layer---structured propagation over an encoded economic graph with market-grounded RLVR training.
-
-\subsection{Web Agents and Tool Use}
-
-Recent work on Web agents demonstrates LLMs' ability to navigate complex Web environments~\cite{webarena2023, workarena2024}. VisualWebArena~\cite{visualwebarena2024} extends this to multimodal understanding. However, these agents operate in simulated or static Web environments without real-world feedback loops. PRONOIA bridges this gap: the agent reasons over Web-scale financial data (akshare/yfinance APIs, 85+ real data skills) and receives \emph{actual market feedback} as reward signals, creating a live Web-based learning loop.
-
-Retrieval-augmented generation (RAG)~\cite{rag2020} grounds LLM outputs in retrieved documents. PRONOIA extends RAG in two directions: (i)~retrieval is structured---the Propagation Graph encodes economic mechanisms, not just document similarity; (ii)~generation is verifiable---every claim is settled against objective market data, not just grounded in retrieved text.
-
-Tool use benchmarks~\cite{toolbench2023, api2023} evaluate LLMs' ability to call external APIs. PRONOIA's 85+ data skills represent a production-scale tool use deployment, but with a critical difference: the system learns \emph{when} and \emph{how} to use tools through RLVR, not just \emph{whether} the tool call succeeds.
-
-\subsection{Event-Driven Financial Prediction}
+A recent wave of LLM systems targets event-driven prediction directly (Table~\ref{tab:comparison}).
 
 \begin{table}[t]
 \centering\small
@@ -142,7 +156,7 @@ System & Approach & Limitation & ACC \\
 FinHEAR~\cite{finhear2025} & Historical analog & Single-chain, no multi-path & 58--62\% \\
 FinKario~\cite{finkario2025} & KG retrieval & Static KG, retrieval-only & 58.1\% \\
 TradingAgents~\cite{tradingagents2024} & Multi-agent vote & Not event-driven & $\sim$55\% \\
-Janus-Q~\cite{janusq2026} & Hierarchical reward & No event modeling & 58.7\% \\
+Janus-Q~\cite{janusq2026} & Gated PnL reward & Episode-level, no per-claim check & 58.7\% \\
 Argus~\cite{argus2026} & LLM-as-judge & Judge shares errors & --- \\
 \midrule
 \textbf{PRONOIA} & Graph + PAV + RLVR & US OOS limited & \textbf{63.2\%} \\
@@ -150,15 +164,13 @@ Argus~\cite{argus2026} & LLM-as-judge & Judge shares errors & --- \\
 \end{tabular}
 \end{table}
 
-Table~\ref{tab:comparison} situates PRONOIA: all prior systems operate on single-hop ``event $\to$ reaction'' mapping with LLM-as-judge or non-verifiable rewards. The 58--62\% ACC ceiling confirms single-hop's limited headroom. PRONOIA's Propagation Graph + RLVR addresses both gaps.
+Table~\ref{tab:comparison} situates PRONOIA. FinHEAR~\cite{finhear2025} retrieves historical analogs along a single chain; FinKario~\cite{finkario2025} retrieves from a static knowledge graph; TradingAgents~\cite{tradingagents2024} aggregates multi-agent votes that are not event-conditioned; Argus~\cite{argus2026} validates with LLM-as-judge. Reported direction accuracy saturates at 55--62\%, consistent with the limited headroom of single-hop ``event $\to$ reaction'' mappings scored by non-verifiable signals. Closest to PRONOIA is the concurrent Janus-Q~\cite{janusq2026}, which likewise trains on event--CAR pairs with a gated trading reward. It differs in three ways: (i)~its prediction target is a trading action validated end-to-end by PnL, whereas PAV decomposes each prediction into 3--6 independently settled claims, exposing \emph{which} component fails; (ii)~it models no explicit multi-path transmission; and (iii)~it reports aggregate trading metrics, whereas we additionally analyze calibration and document a reward-hacking failure mode that aggregate metrics would mask (\S\ref{sec:ablation}).
 
-\subsection{RLVR and Financial RL}
+\subsection{LLM Agents with Verifiable Rewards}
 
-RLVR~\cite{rlvr2025} settles rewards against formal verification rather than self-evaluation. AlphaAgent~\cite{alphaagent2025} and FactorMiner~\cite{factorminer2026} apply related ideas to alpha mining. The critical difference: PAV decomposes predictions into claim-level assertions over measurable indicators, making every reward component independently verifiable \emph{and} preventing reward hacking---our ablation in \S\ref{sec:ablation} documents what happens when this guardrail weakens.
+Web agents navigate realistic Web tasks~\cite{webarena2023, workarena2024, visualwebarena2024}, but operate in simulated or static environments whose rewards are programmatic checkers. RAG~\cite{rag2020} grounds generation in retrieved documents, and tool-use benchmarks~\cite{toolbench2023, api2023} score whether API calls succeed. PRONOIA differs on the reward side: the agent reasons over live Web financial data (85+ data skills) and is rewarded by \emph{emergent market outcomes} published on the Web---a continuously updating ground truth that neither a static checker nor a cached snapshot can provide. Retrieval is likewise structured (graph mechanisms rather than document similarity) and generation is verifiable (settled claims rather than grounded text).
 
-\subsection{Robotics World Models}
-
-The Propagation Graph formalization draws from robotics world models~\cite{ha2018, schrittwieser2020}: $S_{t+1} = f(S_t, a_t)$ maps to our graph: state $\to$ market state (sector CAR, volume anomaly, volatility, sentiment), action $\to$ structured event, transition function $\to$ Propagation Graph (multi-path probability propagation), terminal verification $\to$ market CAR direction and claim settlement, planning $\to$ Navigator search.
+RLVR~\cite{rlvr2025} replaces self-evaluation with externally checkable rewards; in finance, AlphaAgent~\cite{alphaagent2025} and FactorMiner~\cite{factorminer2026} apply related ideas to alpha mining. PAV pushes verification from episode level (did the strategy profit?) to claim level (did \emph{each} assertion hold?), which both localizes error and---as \S\ref{sec:ablation} shows---is the guardrail between RLVR and reward hacking. Finally, the propagation graph borrows the world-model view from robotics~\cite{ha2018, schrittwieser2020}: market state plus a structured-event action transitions through the graph and terminates in market verification, with Navigator search as planning.
 
 \section{System Description}
 
@@ -242,6 +254,35 @@ Figure~\ref{fig:pipeline} shows the data pipeline. Events are extracted from Web
 \section{Method}
 
 \subsection{Financial Event Reasoning Chain}
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[
+    layer/.style={draw, rounded corners, minimum width=7.5cm, minimum height=1.1cm, align=center, font=\small},
+    arrow/.style={-{Stealth[length=2mm]}, thick},
+    label/.style={font=\footnotesize\itshape, text=gray}
+]
+    % Layers
+    \node[layer, fill=blue!8] (l4) at (0,0) {\textbf{Evolution Layer}\\Versioned state evolution, credit attribution,\\policy update gated by market evidence};
+    \node[layer, fill=green!8] (l3) at (0,-1.6) {\textbf{Decision Layer}\\Direction $\to$ timing $\to$ sizing $\to$ portfolio $\to$ execution};
+    \node[layer, fill=orange!10] (l2) at (0,-3.2) {\textbf{Reasoning Layer}\\Multi-path Propagation Graph search + adversary testing\\+ priced-in detection};
+    \node[layer, fill=red!8] (l1) at (0,-4.8) {\textbf{Perception Layer}\\Heterogeneous disclosures $\to$ structured state transition\\$\to$ surprise measurement};
+
+    % Arrows
+    \draw[arrow] (l1) -- (l2);
+    \draw[arrow] (l2) -- (l3);
+    \draw[arrow] (l3) -- (l4);
+
+    % Side labels
+    \node[label, rotate=90] at (-4.2,-2.4) {Event--Transmission--Position (ETP) triple};
+
+    % Feedback loop
+    \draw[arrow, dashed, gray] (l4.east) .. controls (3.5,-0.8) and (3.5,-4.0) .. (l2.east)
+        node[midway, right, font=\footnotesize, text=gray, align=left] {Market feedback\\(CAR settlement)};
+\end{tikzpicture}
+\caption{PRONOIA's four-layer Event Reasoning Chain (ERC) architecture. The system operates on the Event--Transmission--Position (ETP) triple as atomic logic unit, with market feedback closing the evolution loop.}
+\label{fig:erc}
+\end{figure}
 
 PRONOIA's four-layer architecture (Figure~\ref{fig:erc}) operates on the Event--Transmission--Position (ETP) triple:
 
