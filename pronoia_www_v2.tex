@@ -394,6 +394,8 @@ Reward is six-element tuple (R0--R5): claim accuracy (core), confidence calibrat
 
 \section{Experiments}
 
+The evaluation answers three questions in sequence. \textbf{Q1 (Signal):} do structured events combined with market confirmation carry more verifiable price signal than type-level priors alone (\S\ref{sec:backtest}, Table~\ref{tab:backtest})? \textbf{Q2 (Learning):} does training on market-settled claims improve out-of-sample reasoning---uniformly or only under favorable conditions (\S\ref{sec:ablation}--\S\ref{sec:conditional}, Tables~\ref{tab:main}--\ref{tab:byfamily})? \textbf{Q3 (Failure):} what failure modes do reward design and event reasoning expose under controlled comparison (\S\ref{sec:ablation} reward hacking, \S\ref{sec:cases} case studies)? Each experiment uses the same time-split protocol and settlement machinery described next.
+
 \subsection{Dataset and Protocol}
 
 \begin{table}[t]
@@ -416,6 +418,7 @@ Known biases: US near-absent in OOS; no macro events in OOS; scope limited to CN
 \textbf{Integrity protocol:} (1)~Strict as\_of: features use only pre-event data, audited; (2)~Time split only, OOS once; (3)~Event-level paired bootstrap (2,000 resamples, weighted); (4)~Claim accuracy weighted by n\_settleable; (5)~Calibration: Brier + 10-bin ECE + confidence-bin actual accuracy.
 
 \subsection{Rule-Driven Backtest (Skeleton Validation)}
+\label{sec:backtest}
 
 \textbf{Design:} 27 A-share blue chips + 8 sector ETFs, CSI300 benchmark, 2023-01 to 2026-07, 33 events, 20 types, CAR via market model (120d estimation, 20d gap, T+3 holding). We do not claim tradability: transaction costs, slippage, and capacity are deliberately excluded---the backtest serves solely as an \emph{economic-materiality lens} verifying that claim-level directional judgments carry exploitable signal, not as a deployable trading system.
 
@@ -465,7 +468,7 @@ Paired bootstrap: $\Delta$(vanilla $-$ base) = +5.93pt (95\% CI [+3.79, +8.07]);
 
 \subsection{Hard-Negative Subset}
 
-146 events (M\&A success/turnaround/beat/additional issuance/buyback): base 0.5103, v6.1-b 0.5515, \textbf{vanilla 0.5862}. Corrections help +3.5pt on this subset but net negative overall---the ``residual bias correctable by prior'' premise is unsupported.
+146 events (M\&A success, turnaround, beat, additional issuance, buyback): base 0.5103, v6.1-b 0.5515, \textbf{vanilla 0.5862}. Corrections help +3.5pt on this subset but net negative overall---the ``residual bias correctable by prior'' premise is unsupported.
 
 \begin{figure}[t]
 \centering
@@ -538,6 +541,7 @@ Horizon t15 (worst) & 610 & 0.452 & 0.505 & +5.3pt \\
 Significance family strongest (+17.7pt to 79.1\%): most A-share CARs insignificant---falsifying significance is the model's strongest move. Weakest: \texttt{bm\_ret\_t15} (0.498, coin-flip). Long-horizon t30 (+13.1pt) vs t15 (+5.3pt): falsifiable long-horizon claims outperform.
 
 \subsection{Conditional Analysis}
+\label{sec:conditional}
 
 \textbf{Claim count:} 2--3 best (0.690/0.656); 4 drops to 0.569. Constraint should narrow to 3--4.
 \textbf{Direction:} FALSE-side \textbf{0.709} (n=1,812) vs TRUE-side \textbf{0.530} (n=1,342). Training reduces TRUE ratio 0.525$\to$0.425---beneficial RL product matching task asymmetry.
@@ -547,6 +551,7 @@ Significance family strongest (+17.7pt to 79.1\%): most A-share CARs insignifica
 \textbf{Profile:} Excels at FALSE, long-horizon t30, significance, M\&A/guidance, 2--3 claims, confidence 0.80/0.90. Struggles with TRUE momentum, benchmark direction, hard-negatives, 4+ claims, 0.75--0.85 confidence.
 
 \section{Case Study}
+\label{sec:cases}
 
 \subsection{Case 1 (Success): Shengtong Turnaround --- vanilla 3/3, base 1/3}
 
@@ -797,7 +802,7 @@ All comparisons use paired bootstrap (event-level resampling) with 2,000 iterati
 \subsection{Ethics Statement}
 
 \begin{itemize}
-    \item All data from public sources (akshare, yfinance); anonymized stock market data.
+    \item All data from public sources (akshare, yfinance); market data anonymized.
     \item No live trading based on this research; all evaluation on historical data.
     \item Full transparency: reward hacking, overconfidence bias, systematic failure modes documented as negative results for research community, not hidden.
     \item US events comprise only 7 of 1,034 OOS events; all conclusions limited to A-share market.
