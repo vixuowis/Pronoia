@@ -687,26 +687,18 @@ US conclusions & Unusable & OOS US = 7 events \\
 \textbf{Three methodological risks:} (1)~Single-sampling variance unquantified---recommend 5$\times$ on 200 events; (2)~Multiple comparisons---FDR/Bonferroni + holdout needed for trading filters; (3)~as\_of strictness unaudited---single risk that could overturn all conclusions.
 
 \section{Conclusion and Future Work}
+\label{sec:conclusion}
 
-\subsection{Takeaways}
+This paper set out to close the reason--verify--revise loop for event-driven market analysis: making an LLM agent's financial claims answerable to the one referee that cannot be gamed---the post-event market itself. PRONOIA realizes this loop through three coupled components: an event-reasoning chain that recovers the event structure classical pipelines discard, a propagation graph that supplies indirect-effect context, and a PAV output contract settled by realized market data, which turns event reasoning into a verifiable-reward training target. Four findings summarize what we learned:
 
 \begin{enumerate}
     \item \textbf{RQ1:} Structured events plus market confirmation carry real signal---S1 priors alone are random (51.6\%), sector-confirmed S2 reaches 70.3\% (+18.7pp, Sharpe $-$1.01$\to$3.21).
-    \item \textbf{RQ2:} RLVR on market-settled claims improves OOS reasoning: +5.9pp claim ACC ($p<0.01$) with joint Brier and ECE gains over the untrained base.
+    \item \textbf{RQ2:} RLVR on market-settled claims improves OOS reasoning: +5.9pp claim ACC ($p<0.01$), reproduced across independent seeds (Table~\ref{tab:seeds}), with joint Brier and ECE gains over the untrained base.
     \item \textbf{RQ3:} Gains are strongly condition-dependent---strongest on falsifiable slices (FALSE 0.709, significance 79.1\%, t30 75.3\%, hard negatives +7.6pt), weakest on momentum (TRUE 0.530, bm\_ret\_t15 0.498)---and calibration is non-monotonic in the 0.75--0.85 confidence band.
     \item \textbf{RQ4:} Reward hacking is real in financial RL: residual corrections raise training reward (0.90 vs 0.69) yet reduce OOS accuracy by 2.29pt---training reward trend cannot validate reward components; OOS adjudication is the only mechanism.
 \end{enumerate}
 
-\subsection{Immediate Next Steps}
-
-\textbf{P0:} Hard-negative oversampling (2--3$\times$) + retrain; inference-time format fallback re-sampling.
-\textbf{P1:} Hedging-claim mechanism; pre-drift feature explicit in prompt; US-stratified OOS.
-\textbf{P2:} Claim count narrow to 3--4; parser cross-indicator support; benchmark-family examples.
-\textbf{P3:} Multi-seed validation; Platt calibration retention.
-
-\subsection{Mid-Term Evolution}
-
-Frequency $\times$ horizon 2D reward; scale-conditioned MoE routing (event type $\times$ horizon boundaries); data expansion to 500+ rule events + US/macro RL samples.
+The failure analysis dictates what comes next. On the data side, hard-negative oversampling (2--3$\times$) targets the FALSE-side weakness that caps headline accuracy, and a US/macro-stratified OOS split will make cross-market claims testable. On the contract side, a hedging-claim mechanism extends the PAV beyond directional binaries, while narrowing to 3--4 claims per event with cross-indicator parser support trims assertion noise, and an inference-time format fallback covers residual format failures. On the training side, a frequency$\times$horizon 2D reward replaces hand-tuned horizon weights, and the propagation component still needs an isolation ablation to quantify its own contribution. Mid-term directions include scale-conditioned routing across event-type$\times$horizon boundaries, calibration-aware training aimed at the 0.75--0.85 non-monotonic band, and data expansion to 500+ rule-covered events with US/macro RL samples.
 
 \section*{Acknowledgments}
 
