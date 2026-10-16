@@ -535,11 +535,12 @@ Seed robustness is summarized in Table~\ref{tab:seeds}. The two completed seeds 
 \centering
 \begin{tikzpicture}
 \begin{axis}[
-    ybar,
-    bar width=0.5cm,
+    ybar=3pt,
+    bar width=0.45cm,
     width=7.5cm,
     height=5cm,
     ymin=0, ymax=0.8,
+    enlarge x limits=0.18,
     ylabel={Claim Accuracy},
     symbolic x coords={Base, PAVR-C, PAVR},
     xtick=data,
