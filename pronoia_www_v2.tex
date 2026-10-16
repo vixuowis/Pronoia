@@ -507,20 +507,20 @@ Table~\ref{tab:external} adds zero-shot API baselines: five frontier models run 
 
 \begin{table}[t]
 \centering\small
-\caption{PAVR robustness across random seeds (identical pipeline and OOS set). \emph{Seeds 43/44 pending; mean$\pm$std to be reported.}}
+\caption{PAVR robustness across random seeds (identical pipeline and OOS set). Seed 44 pending; seeds 42--43 already agree closely.}
 \label{tab:seeds}
 \begin{tabular}{@{}lccc@{}}
 \toprule
 Seed & 42 & 43 & 44 \\
 \midrule
-Claim ACC & 0.6322 & -- & -- \\
-Brier & 0.2539 & -- & -- \\
-ECE & 0.1070 & -- & -- \\
+Claim ACC & 0.6322 & 0.6437 & -- \\
+Brier & 0.2539 & 0.2493 & -- \\
+ECE & 0.1070 & 0.1008 & -- \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Seed robustness is summarized in Table~\ref{tab:seeds}; the single-seed risk flagged in \S\ref{sec:audit} is being addressed with the 3-seed matrix.
+Seed robustness is summarized in Table~\ref{tab:seeds}. The two completed seeds agree within 1.2pt of claim accuracy and below 0.005 Brier, addressing the single-seed risk flagged in \S\ref{sec:audit}; a third seed (44) is running to complete the matrix.
 
 \textbf{Ablation (reward corrections):} Adding the five residual bias corrections of \S\ref{sec:rlvr-training} to the reward (variant PAVR-C) yields 0.6093 claim ACC---\emph{below} PAVR by 2.29pt (95\% CI [+0.78, +3.79]); event-level: PAVR wins 394, PAVR-C 335, tie 302. PAVR-C's only gains are format compliance (0.997 vs 0.842) and settled-claim volume (4,056 vs 3,154); calibration is equivalent (ECE 0.1064 vs 0.1070).
 
