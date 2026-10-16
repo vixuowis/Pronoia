@@ -484,7 +484,7 @@ Paired bootstrap: $\Delta$(PAVR $-$ base) = +5.93pt (95\% CI [+3.79, +8.07])---C
 
 \begin{table}[t]
 \centering\small
-\caption{Zero-shot API baselines on the same 1,034 OOS events, identical PAV prompt and settlement machinery (temperature 0.6). $\uparrow$/$\downarrow$: higher/lower is better. \emph{Data pending; populated upon completion of the evaluation runs.}}
+\caption{Zero-shot API baselines on the same 1,034 OOS events, identical PAV prompt and settlement machinery (temperature 0.6). $\uparrow$/$\downarrow$: higher/lower is better; bold marks the best value per column. GLM rows from completed runs; DeepSeek and Kimi rows pending.}
 \label{tab:external}
 \setlength{\tabcolsep}{5pt}
 \begin{tabular}{@{}lccccc@{}}
@@ -492,10 +492,10 @@ Paired bootstrap: $\Delta$(PAVR $-$ base) = +5.93pt (95\% CI [+3.79, +8.07])---C
 Model & Params & ACC $\uparrow$ & Brier $\downarrow$ & ECE $\downarrow$ & Format $\uparrow$ \\
 \midrule
 Base (Qwen3-8B) & 8B & 0.573 & 0.283 & 0.163 & 0.775 \\
-PAVR (ours) & 8B+LoRA & \textbf{0.632} & \textbf{0.254} & \textbf{0.107} & 0.842 \\
+PAVR (ours) & 8B+LoRA & 0.632 & 0.254 & 0.107 & 0.842 \\
 \midrule
-GLM-5.3 & -- & -- & -- & -- & -- \\
-GLM-5.3-Flash & -- & -- & -- & -- & -- \\
+GLM-5.3 & -- & \textbf{0.643} & \textbf{0.228} & 0.033 & 0.972 \\
+GLM-5.3-Flash & -- & 0.621 & 0.232 & \textbf{0.015} & \textbf{0.991} \\
 DeepSeek-V4-Pro & -- & -- & -- & -- & -- \\
 DeepSeek-V4-Flash & -- & -- & -- & -- & -- \\
 Kimi-K3 & -- & -- & -- & -- & -- \\
@@ -503,7 +503,27 @@ Kimi-K3 & -- & -- & -- & -- & -- \\
 \end{tabular}
 \end{table}
 
-Table~\ref{tab:external} adds zero-shot API baselines: five frontier models run the identical PAV contract on the same OOS events and are settled by the same machinery. This separates the contribution of market-settlement training from raw model scale---if untuned 60$\times$-larger API models do not exceed PAVR, the gain is attributable to RLVR on verifiable rewards rather than backbone capacity.
+Table~\ref{tab:external} adds zero-shot API baselines: five frontier models run the identical PAV contract on the same OOS events and are settled by the same machinery. This separates the contribution of market-settlement training from raw model scale. The strongest API baseline, GLM-5.3, edges PAVR on raw claim accuracy (0.643 vs.\ 0.632) and is better calibrated still, so RLVR on verifiable rewards lets an 8B open model close the capacity gap against a $\sim$60$\times$-larger frontier backbone rather than surpass it.
+
+\textbf{US extension panel.} We additionally assemble 44 independently labelled US events (H1~2026: inflation 6, FOMC 4, earnings 12, guidance 12, M\&A 10) and settle the same PAV contract against US data; Table~\ref{tab:usext} reports claim-level accuracy with Wilson 95\% intervals. The API models cluster in a 0.60--0.66 band (GLM-5.3 highest, 0.659), mirroring the main panel's far-from-saturation picture; our own Base and PAVR checkpoints are being generated on the same 44 events and will be added on completion.
+
+\begin{table}[t]
+\centering\footnotesize
+\caption{US extension panel (44 out-of-market H1-2026 events), same PAV prompt and settlement machinery; claim-level ACC with Wilson 95\% intervals ($n$ = settled claims). Bold: best per column.}
+\label{tab:usext}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}lccccc@{}}
+\toprule
+Model & Claims & ACC $\uparrow$ & 95\% CI & Brier $\downarrow$ & ECE $\downarrow$ \\
+\midrule
+GLM-5.3 & 220 & \textbf{0.659} & [0.594, 0.719] & \textbf{0.228} & 0.075 \\
+GLM-5.3-Flash & 231 & 0.623 & [0.559, 0.683] & 0.233 & \textbf{0.035} \\
+DeepSeek-V4-Pro & 201 & 0.602 & [0.533, 0.667] & 0.239 & 0.063 \\
+DeepSeek-V4-Flash & 187 & 0.610 & [0.538, 0.677] & 0.230 & 0.041 \\
+Kimi-K3 & 229 & 0.638 & [0.574, 0.697] & 0.232 & 0.060 \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \begin{table}[t]
 \centering\small
@@ -644,7 +664,7 @@ Table~\ref{tab:ablation} consolidates the ablation: the corrected reward wins ev
 
 The two experiments validate one proposition at three levels. First, priors cannot trade: the rule backtest's unconfirmed step S1 (51.6\%) and the untuned base model (0.573) agree that type-level priors carry no exploitable signal. Second, market confirmation purifies: the +18.7pp jump when sector confirmation enters the rule pipeline and the +5.9pt jump when market settlement enters training are the same mechanism---a verifiable filter that removes the reasoning steps the environment can refute---applied at two different sites. Third, the environment demands online reasoning: ``graph once'' cannot anticipate indirect effects, which is why we learn propagation rather than hard-code it, and reward hacking shows that even the reward function itself requires OOS adjudication.
 
-\textbf{Limitations.} The OOS split contains only seven US events, so all US-side conclusions are unusable; the 33 rule events and 4,965 RL events support the claim-level analyses reported but not larger structures, such as an isolated propagation-graph ablation. Each event is sampled once, leaving sampling variance unquantified. TRUE-side claims remain weak in A-shares, where incomplete short-selling mechanisms make bullish reasoning easier to verify than bearish hedging. Seed robustness rests on two concordant seeds at submission time, with the third completing.
+\textbf{Limitations.} The main OOS split contains only seven US events, so we report the separate 44-event US panel of Table~\ref{tab:usext} as an exploratory out-of-market probe; being small, it corroborates claim-level accuracy only and does not license headline US conclusions. The 33 rule events and 4,965 RL events support the claim-level analyses reported but not larger structures, such as an isolated propagation-graph ablation. Each event is sampled once, leaving sampling variance unquantified. TRUE-side claims remain weak in A-shares, where incomplete short-selling mechanisms make bullish reasoning easier to verify than bearish hedging. Seed robustness rests on two concordant seeds at submission time, with the third completing.
 
 \textbf{Validity audit.} Table~\ref{tab:audit} grades each headline conclusion by evidence strength---the RLVR gain and the structure findings are High, the confidence-band improvement is Verify-grade (self-selected at $n(0.90)$), and US conclusions are Unusable. The grading also disciplines how the PAVR-C result should be read: ``corrections are harmful'' overstates a single-seed comparison with three confounders (CI lower bound +0.78); ``corrections did not produce expected benefits'' is what the data license. Three methodological risks remain open: single-sampling variance (5$\times$ resampling on 200 events recommended), multiple comparisons across trading-filter slices (FDR/Bonferroni plus a holdout), and un-audited as\_of strictness---the one risk that, if violated, would overturn every conclusion.
 
@@ -803,24 +823,24 @@ Three representative OOS events, traced claim by claim against market settlement
 
 \subsection*{Case 1 (Success): Shengtong Turnaround --- PAVR 3/3, base 1/3}
 
-002599, 2026-01-30, turnaround. Pre-event CAR $-$7.95\% (oversold); context: ``mean-reversion vs micro-profit cancel $\to$ neutral, confidence lowered.'' All three PAVR claims settle correct: \texttt{car\_t7>0} TRUE (0.72); \texttt{bm\_ret\_t30>0} FALSE (0.65); \texttt{car\_t30\_pvalue<0.05} FALSE (0.55). Base ignores context, bets $p$-value TRUE with arbitrary thresholds. \textbf{Success = context absorption + diversity planning + betting FALSE.}
+002599, 2026-01-30, turnaround. Pre-event CAR $-$7.95\% (oversold); context lowers confidence (``mean-reversion vs micro-profit cancel $\to$ neutral''). All three PAVR claims settle correct (\texttt{car\_t7>0} TRUE 0.72; \texttt{bm\_ret\_t30>0} FALSE 0.65; \texttt{car\_t30\_pvalue<0.05} FALSE 0.55), while base bets $p$-value TRUE on arbitrary thresholds. \textbf{Success = context absorption + betting FALSE.}
 
 \subsection*{Case 2 (Failure): Zhongjin Gold Beat --- all models wrong}
 
-600489, 2026-01-28, beat. T0 limit-up +9.98\%, pre20 +46\% gain. Context warns sell-the-news ($-$6.0 signal) but all three models claim \texttt{car\_t7>0} (confidence 0.72), 0/4 wrong. Ground truth: car\_t30 $-$29.8\%. \textbf{Risk paragraph cognitively correct, behaviorally inert.}
+600489, 2026-01-28, beat. T0 limit-up +9.98\%, pre20 +46\%. Context warns sell-the-news ($-$6.0) but all three models claim \texttt{car\_t7>0} (0.72), 0/4 correct; truth car\_t30 $-$29.8\%. \textbf{Risk paragraph cognitively correct, behaviorally inert.}
 
 \subsection*{Case 3 (Failure): Zhongshan Utilities Beat --- upstream context wrong}
 
-000685, 2026-01-31, beat. Context concludes ``volume-price resonance $\to$ up''; actual continuous decline (car\_t7 $-$3.2\%, car\_t30 $-$17.3\%). Model extrapolates weak stock $\to$ weak market (bm\_ret wrong). pre20 CAR +8.06\% used as significance support, not mean-reversion warning. \textbf{Garbage-in upstream; features reinforce priors, don't test them.}
+000685, 2026-01-31, beat. Context concludes ``volume-price resonance $\to$ up''; actual decline (car\_t7 $-$3.2\%, car\_t30 $-$17.3\%). Model extrapolates weak stock $\to$ weak market (bm\_ret wrong), and reads pre20 CAR +8.06\% as significance, not a mean-reversion warning. \textbf{Garbage-in upstream; features reinforce priors, don't test them.}
 
 \subsection*{Cross-Case Synthesis}
 
 \begin{enumerate}
-    \item Failures concentrate in ``bullish text + T0 positive reaction'': prior = momentum, A-share reality = mean reversion.
-    \item Risk paragraphs ``cognitively correct, behaviorally inert'': no hedging claims---prompt/reward design fix.
-    \item Benchmark family $\approx$ coin flip: individual-stock weakness extrapolated to market weakness.
-    \item Upstream context with strong priors contaminates downstream---context should output self-confidence + counterparty evidence.
-    \item Cross-indicator claims silently dropped---wastes expression, underestimates coverage.
+    \item Failures concentrate in ``bullish text + T0 positive reaction'': prior = momentum, A-share = mean reversion.
+    \item Risk paragraphs cognitively right, behaviorally inert: no hedging claims---a prompt/reward fix.
+    \item Benchmark family $\approx$ coin flip: stock weakness extrapolated to market weakness.
+    \item Strong-prior upstream context contaminates downstream---emit self-confidence + counter-evidence.
+    \item Cross-indicator claims silently dropped---wastes expression, understates coverage.
 \end{enumerate}
 
 \section{Reproducibility}
@@ -831,53 +851,23 @@ PRONOIA is open-source under MIT license:
 \begin{itemize}
     \item \textbf{Repository:} anonymous copy available for review (Python 3.10+, React 18); public release upon acceptance
     \item \textbf{Training data:} 4,965 events (akshare/yfinance), structured ETP format
-    \item \textbf{OOS data:} 1,034 events, labels.jsonl with all 30 indicator ground truths
-    \item \textbf{Backtest data:} 33 events, 27 blue chips + 8 sector ETFs, CSI300 benchmark
+    \item \textbf{OOS/backtest data:} 1,034 OOS events with 30 indicator labels; 33 backtest events (27 blue chips + 8 sector ETFs, CSI300).
 \end{itemize}
 
 \subsection{Training Configuration}
 
-\begin{table}[h]
-\centering\small
-\caption{RLVR training hyperparameters.}
-\begin{tabular}{@{}ll@{}}
-\toprule
-Parameter & Value \\
-\midrule
-Base model & Qwen3-8B (bf16) \\
-Adapter & LoRA rank 16, $\alpha$=32, dropout 0.05 \\
-Optimizer & AdamW, LR 1e-5, cosine annealing \\
-Batch size & 8/device $\times$ grad-accum 2 = 16 completions/step \\
-Sampling & $G$=4 candidates/event, temperature 0.7 \\
-Epochs & 1 (1,241 steps $\approx$ 4,965 events) \\
-Hardware & Single RTX 4090 (48GB) \\
-Training time & 10--12 hours/condition \\
-Seed & 42 \\
-\bottomrule
-\end{tabular}
-\end{table}
+Training uses Qwen3-8B (bf16, seed 42) with LoRA (rank 16, $\alpha$=32, dropout 0.05), AdamW at LR 1e-5 with cosine annealing; batch $8/{\times}2$ grad-accum $=16$/step, $G$=4, temp 0.7, one epoch (1,241 steps $\approx$ 4,965 events) on a single RTX 4090 (48GB), 10--12 h/condition.
 
-\subsection{Evaluation Protocol}
+\subsection{Evaluation Protocol and Statistical Tests}
 
-\begin{enumerate}
-    \item \textbf{Time-split:} Train on events before 2024-01, evaluate on events after (no shuffling).
-    \item \textbf{Single OOS run:} Each model evaluated exactly once on OOS set (no cherry-picking).
-    \item \textbf{As-of audit:} All features use only pre-event data; audited for lookahead bias.
-    \item \textbf{Paired bootstrap:} 2,000 event-level resamples, weighted by settled-claim count.
-    \item \textbf{Calibration:} Brier score + 10-bin ECE + confidence-bin actual accuracy.
-\end{enumerate}
-
-\subsection{Statistical Tests}
-
-All comparisons use paired bootstrap (event-level resampling) with 2,000 iterations. Confidence intervals are 95\% percentile intervals. Multiple comparisons (where applicable) use FDR correction at $\alpha$=0.05. Effect sizes reported alongside $p$-values.
+Models train on events before 2024-01 and are evaluated once on later events (no shuffling; no cherry-picking). All features use only pre-event data, audited for lookahead bias. Comparisons use paired bootstrap (2,000 event-level resamples, weighted by settled-claim count) with 95\% percentile intervals and FDR control at $\alpha$=0.05; calibration is reported as Brier score, 10-bin ECE, and confidence-bin accuracy.
 
 \subsection{Ethics Statement}
 
 \begin{itemize}
-    \item All data from public sources (akshare, yfinance); market data anonymized.
-    \item No live trading based on this research; all evaluation on historical data.
-    \item Full transparency: reward hacking, overconfidence bias, systematic failure modes documented as negative results for research community, not hidden.
-    \item US events comprise only 7 of 1,034 OOS events; all conclusions limited to A-share market.
+    \item All data from public sources (akshare, yfinance); market data anonymized. No live trading; all evaluation is on historical data.
+    \item Full transparency: reward hacking, overconfidence bias, and systematic failure modes are documented as negative results, not hidden.
+    \item US events comprise only 7 of 1,034 main-OOS events; the separate 44-event US panel (Table~\ref{tab:usext}) is exploratory, and headline conclusions remain limited to A-shares.
     \item LLM API keys stored only in backend \texttt{.env}, never transmitted to browser or logged.
 \end{itemize}
 
