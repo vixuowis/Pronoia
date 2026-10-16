@@ -647,22 +647,13 @@ Figure~\ref{fig:divergence} visualizes the divergence: the variant with the high
 \textbf{Reasoning failures.} Claim-level tracing of OOS events (three representative cases in Appendix~\ref{app:cases}; full synthesis there) reveals two recurring patterns: (i)~failures concentrate in ``bullish text + T0 positive reaction'' configurations, where the model's prior is momentum but A-share reality is mean reversion---risk paragraphs are \emph{cognitively correct but behaviorally inert}, never converting into hedging claims; and (ii)~upstream context with strong priors contaminates downstream reasoning (individual-stock weakness extrapolated to benchmark direction, near coin-flip), while cross-indicator claims are silently dropped. The success case shows the complementary mechanism: context absorption, claim diversity, and willingness to bet FALSE.
 
 \section{Discussion}
-
-\subsection{Unified Interpretation}
-
-Two experiments validate one proposition at three levels:
-\begin{itemize}
-    \item \textbf{Priors can't trade:} S1 51.6\% + base 0.573 confirm priors need purification.
-    \item \textbf{Market confirmation purifies:} Rule-side +18.7pp and RL-side +5.9pt are the same mechanism.
-    \item \textbf{Environment requires online reasoning:} ``Graph once'' motivates model-based learning; reward hacking shows even reward functions need OOS adjudication.
-\end{itemize}
-
-\subsection{Limitations}
-
-Single seed; US OOS = 7 events; 33 rule events + 4,965 RL events insufficient for larger structures; single sampling; TRUE-side weakness in A-shares (short mechanisms incomplete).
-
-\subsection{Validity Audit}
 \label{sec:audit}
+
+The two experiments validate one proposition at three levels. First, priors cannot trade: the rule backtest's unconfirmed step S1 (51.6\%) and the untuned base model (0.573) agree that type-level priors carry no exploitable signal. Second, market confirmation purifies: the +18.7pp jump when sector confirmation enters the rule pipeline and the +5.9pt jump when market settlement enters training are the same mechanism---a verifiable filter that removes the reasoning steps the environment can refute---applied at two different sites. Third, the environment demands online reasoning: ``graph once'' cannot anticipate indirect effects, which is why we learn propagation rather than hard-code it, and reward hacking shows that even the reward function itself requires OOS adjudication.
+
+\textbf{Limitations.} The OOS split contains only seven US events, so all US-side conclusions are unusable; the 33 rule events and 4,965 RL events support the claim-level analyses reported but not larger structures, such as an isolated propagation-graph ablation. Each event is sampled once, leaving sampling variance unquantified. TRUE-side claims remain weak in A-shares, where incomplete short-selling mechanisms make bullish reasoning easier to verify than bearish hedging. Seed robustness rests on two concordant seeds at submission time, with the third completing.
+
+\textbf{Validity audit.} Table~\ref{tab:audit} grades each headline conclusion by evidence strength---the RLVR gain and the structure findings are High, the confidence-band improvement is Verify-grade (self-selected at $n(0.90)$), and US conclusions are Unusable. The grading also disciplines how the PAVR-C result should be read: ``corrections are harmful'' overstates a single-seed comparison with three confounders (CI lower bound +0.78); ``corrections did not produce expected benefits'' is what the data license. Three methodological risks remain open: single-sampling variance (5$\times$ resampling on 200 events recommended), multiple comparisons across trading-filter slices (FDR/Bonferroni plus a holdout), and un-audited as\_of strictness---the one risk that, if violated, would overturn every conclusion.
 
 \begin{table}[t]
 \centering\footnotesize
@@ -681,10 +672,6 @@ US conclusions & Unusable & OOS US = 7 events \\
 \bottomrule
 \end{tabular}
 \end{table}
-
-\textbf{Recommendation:} ``Corrections harmful'' $\to$ ``corrections did not produce expected benefits.'' Supporting the former requires 3-seed $\times$ 2-condition matrix.
-
-\textbf{Three methodological risks:} (1)~Single-sampling variance unquantified---recommend 5$\times$ on 200 events; (2)~Multiple comparisons---FDR/Bonferroni + holdout needed for trading filters; (3)~as\_of strictness unaudited---single risk that could overturn all conclusions.
 
 \section{Conclusion and Future Work}
 \label{sec:conclusion}
