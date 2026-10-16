@@ -69,9 +69,10 @@
 \newlabel{sec:experiments}{{4}{5}{Experiments}{section.4}{}}
 \@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Dataset statistics (time-split).}}{5}{table.caption.10}\protected@file@percent }
 \newlabel{tab:dataset}{{2}{5}{Dataset statistics (time-split)}{table.caption.10}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces Judge-vs-market validity on sampled settled claims (judge sees the same information as the evaluatee). \emph  {Data pending; populated upon completion of the evaluation runs.}}}{5}{table.caption.11}\protected@file@percent }
-\newlabel{tab:judge}{{3}{5}{Judge-vs-market validity on sampled settled claims (judge sees the same information as the evaluatee). \emph {Data pending; populated upon completion of the evaluation runs.}}{table.caption.11}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces Judge-vs-market validity. An independent judge (GLM-5.3), given the same pre-event information as the evaluatee (zero leakage), rules on 500 sampled settled claims (432 parse into valid verdicts); verdicts are scored against market ground truth.}}{5}{table.caption.11}\protected@file@percent }
+\newlabel{tab:judge}{{3}{5}{Judge-vs-market validity. An independent judge (GLM-5.3), given the same pre-event information as the evaluatee (zero leakage), rules on 500 sampled settled claims (432 parse into valid verdicts); verdicts are scored against market ground truth}{table.caption.11}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Dataset and Protocol}{5}{subsection.4.1}\protected@file@percent }
+\newlabel{sec:judgevalidity}{{4.1.1}{5}{Settlement Validity: LLM-as-Judge vs. Market}{subsubsection.4.1.1}{}}
 \@writefile{toc}{\contentsline {subsubsection}{\numberline {4.1.1}Settlement Validity: LLM-as-Judge vs. Market}{5}{subsubsection.4.1.1}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {4.2}RQ1: Signal Validation via Rule-Driven Backtest}{5}{subsection.4.2}\protected@file@percent }
 \newlabel{sec:backtest}{{4.2}{5}{RQ1: Signal Validation via Rule-Driven Backtest}{subsection.4.2}{}}
@@ -93,15 +94,15 @@
 \newlabel{sec:analysis}{{4.4}{6}{RQ3: Where Do the Gains Concentrate?}{subsection.4.4}{}}
 \@writefile{toc}{\contentsline {subsubsection}{\numberline {4.4.1}Hard-Negative Subset}{6}{subsubsection.4.4.1}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsubsection}{\numberline {4.4.2}By Event Type}{6}{table.caption.17}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.4.3}By Indicator Family $\times $ Horizon}{6}{table.caption.18}\protected@file@percent }
-\newlabel{sec:conditional}{{4.4.4}{6}{Conditional Analysis}{subsubsection.4.4.4}{}}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.4.4}Conditional Analysis}{6}{subsubsection.4.4.4}\protected@file@percent }
 \@writefile{lot}{\contentsline {table}{\numberline {9}{\ignorespaces Accuracy by indicator family and horizon.}}{7}{table.caption.18}\protected@file@percent }
 \newlabel{tab:byfamily}{{9}{7}{Accuracy by indicator family and horizon}{table.caption.18}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {6}{\ignorespaces Reward--performance divergence. PAVR-C attains higher training reward (0.90 vs 0.69) yet lower OOS claim accuracy (0.609 vs 0.632)---the model optimizes proxy reward signals instead of claim quality.}}{7}{figure.caption.19}\protected@file@percent }
-\newlabel{fig:divergence}{{6}{7}{Reward--performance divergence. PAVR-C attains higher training reward (0.90 vs 0.69) yet lower OOS claim accuracy (0.609 vs 0.632)---the model optimizes proxy reward signals instead of claim quality}{figure.caption.19}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.4.3}By Indicator Family $\times $ Horizon}{7}{table.caption.18}\protected@file@percent }
+\newlabel{sec:conditional}{{4.4.4}{7}{Conditional Analysis}{subsubsection.4.4.4}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.4.4}Conditional Analysis}{7}{subsubsection.4.4.4}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {4.5}RQ4: Reward Hacking and Failure Modes}{7}{subsection.4.5}\protected@file@percent }
 \newlabel{sec:cases}{{4.5}{7}{RQ4: Reward Hacking and Failure Modes}{subsection.4.5}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {6}{\ignorespaces Reward--performance divergence. PAVR-C attains higher training reward (0.90 vs 0.69) yet lower OOS claim accuracy (0.609 vs 0.632)---the model optimizes proxy reward signals instead of claim quality.}}{7}{figure.caption.19}\protected@file@percent }
+\newlabel{fig:divergence}{{6}{7}{Reward--performance divergence. PAVR-C attains higher training reward (0.90 vs 0.69) yet lower OOS claim accuracy (0.609 vs 0.632)---the model optimizes proxy reward signals instead of claim quality}{figure.caption.19}{}}
 \@writefile{lot}{\contentsline {table}{\numberline {10}{\ignorespaces Conclusion credibility grading.}}{7}{table.caption.20}\protected@file@percent }
 \newlabel{tab:audit}{{10}{7}{Conclusion credibility grading}{table.caption.20}{}}
 \@writefile{toc}{\contentsline {section}{\numberline {5}Discussion}{7}{section.5}\protected@file@percent }
@@ -109,8 +110,6 @@
 \@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Limitations}{7}{subsection.5.2}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {5.3}Validity Audit}{7}{subsection.5.3}\protected@file@percent }
 \newlabel{sec:audit}{{5.3}{7}{Validity Audit}{subsection.5.3}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {6}Conclusion and Future Work}{7}{section.6}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}Takeaways}{7}{subsection.6.1}\protected@file@percent }
 \bibstyle{ACM-Reference-Format}
 \bibcite{ball1968}{{1}{}{{}}{{}}}
 \bibcite{fama1969}{{2}{}{{}}{{}}}
@@ -147,6 +146,8 @@
 \bibcite{rag2020}{{33}{}{{}}{{}}}
 \bibcite{toolbench2023}{{34}{}{{}}{{}}}
 \bibcite{api2023}{{35}{}{{}}{{}}}
+\@writefile{toc}{\contentsline {section}{\numberline {6}Conclusion and Future Work}{8}{section.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}Takeaways}{8}{subsection.6.1}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {6.2}Immediate Next Steps}{8}{subsection.6.2}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {6.3}Mid-Term Evolution}{8}{subsection.6.3}\protected@file@percent }
 \@writefile{toc}{\contentsline {section}{References}{8}{section*.23}\protected@file@percent }
