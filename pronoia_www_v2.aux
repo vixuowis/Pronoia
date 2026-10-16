@@ -78,14 +78,14 @@
 \newlabel{sec:backtest}{{4.2}{5}{RQ1: Signal Validation via Rule-Driven Backtest}{subsection.4.2}{}}
 \@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces Rule-driven backtest results. S1--S5 implement prior $\to $ market confirmation $\to $ noise removal $\to $ strong-signal focus.}}{6}{table.caption.12}\protected@file@percent }
 \newlabel{tab:backtest}{{4}{6}{Rule-driven backtest results. S1--S5 implement prior $\to $ market confirmation $\to $ noise removal $\to $ strong-signal focus}{table.caption.12}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {5}{\ignorespaces PAV-RLVR main results (1,034 OOS events, $t=0.6$).}}{6}{table.caption.13}\protected@file@percent }
-\newlabel{tab:main}{{5}{6}{PAV-RLVR main results (1,034 OOS events, $t=0.6$)}{table.caption.13}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {6}{\ignorespaces Zero-shot API baselines on the same 1,034 OOS events, identical PAV prompt and settlement machinery (temperature 0.6). \emph  {Data pending; populated upon completion of the evaluation runs.}}}{6}{table.caption.14}\protected@file@percent }
-\newlabel{tab:external}{{6}{6}{Zero-shot API baselines on the same 1,034 OOS events, identical PAV prompt and settlement machinery (temperature 0.6). \emph {Data pending; populated upon completion of the evaluation runs.}}{table.caption.14}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {5}{\ignorespaces PAV-RLVR main results (1,034 OOS events, $t=0.6$). $\uparrow $/$\downarrow $: higher/lower is better; bold marks the better value per row.}}{6}{table.caption.13}\protected@file@percent }
+\newlabel{tab:main}{{5}{6}{PAV-RLVR main results (1,034 OOS events, $t=0.6$). $\uparrow $/$\downarrow $: higher/lower is better; bold marks the better value per row}{table.caption.13}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {6}{\ignorespaces Zero-shot API baselines on the same 1,034 OOS events, identical PAV prompt and settlement machinery (temperature 0.6). $\uparrow $/$\downarrow $: higher/lower is better. \emph  {Data pending; populated upon completion of the evaluation runs.}}}{6}{table.caption.14}\protected@file@percent }
+\newlabel{tab:external}{{6}{6}{Zero-shot API baselines on the same 1,034 OOS events, identical PAV prompt and settlement machinery (temperature 0.6). $\uparrow $/$\downarrow $: higher/lower is better. \emph {Data pending; populated upon completion of the evaluation runs.}}{table.caption.14}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {4.3}RQ2: PAV-RLVR Main Results and Reward Ablation}{6}{subsection.4.3}\protected@file@percent }
 \newlabel{sec:ablation}{{4.3}{6}{RQ2: PAV-RLVR Main Results and Reward Ablation}{subsection.4.3}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {7}{\ignorespaces PAVR robustness across random seeds (identical pipeline and OOS set). Seed 44 pending; seeds 42--43 already agree closely.}}{6}{table.caption.15}\protected@file@percent }
-\newlabel{tab:seeds}{{7}{6}{PAVR robustness across random seeds (identical pipeline and OOS set). Seed 44 pending; seeds 42--43 already agree closely}{table.caption.15}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {7}{\ignorespaces PAVR robustness across random seeds (identical pipeline and OOS set). $\uparrow $/$\downarrow $: higher/lower is better. Seed 44 pending; seeds 42--43 already agree closely.}}{6}{table.caption.15}\protected@file@percent }
+\newlabel{tab:seeds}{{7}{6}{PAVR robustness across random seeds (identical pipeline and OOS set). $\uparrow $/$\downarrow $: higher/lower is better. Seed 44 pending; seeds 42--43 already agree closely}{table.caption.15}{}}
 \@writefile{lof}{\contentsline {figure}{\numberline {5}{\ignorespaces Claim accuracy comparison: full OOS set vs. hard-negative subset. PAVR achieves best performance on both, with larger margin on hard negatives (+7.6pt vs. base).}}{6}{figure.caption.16}\protected@file@percent }
 \newlabel{fig:results}{{5}{6}{Claim accuracy comparison: full OOS set vs. hard-negative subset. PAVR achieves best performance on both, with larger margin on hard negatives (+7.6pt vs. base)}{figure.caption.16}{}}
 \@writefile{lot}{\contentsline {table}{\numberline {8}{\ignorespaces Accuracy by event type (CN market).}}{6}{table.caption.17}\protected@file@percent }
@@ -93,20 +93,18 @@
 \@writefile{toc}{\contentsline {subsection}{\numberline {4.4}RQ3: Where Do the Gains Concentrate?}{6}{subsection.4.4}\protected@file@percent }
 \newlabel{sec:analysis}{{4.4}{6}{RQ3: Where Do the Gains Concentrate?}{subsection.4.4}{}}
 \@writefile{toc}{\contentsline {subsubsection}{\numberline {4.4.1}Hard-Negative Subset}{6}{subsubsection.4.4.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.4.2}By Event Type}{6}{table.caption.17}\protected@file@percent }
 \@writefile{lot}{\contentsline {table}{\numberline {9}{\ignorespaces Accuracy by indicator family and horizon.}}{7}{table.caption.18}\protected@file@percent }
 \newlabel{tab:byfamily}{{9}{7}{Accuracy by indicator family and horizon}{table.caption.18}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {10}{\ignorespaces Reward-correction ablation (seed 42, identical pipeline and OOS set). $\Delta $ column: effect of adding the corrections (PAVR-C minus PAVR). The corrections win every training- and format-side metric yet lose the only out-of-sample-adjudicated one.}}{7}{table.caption.19}\protected@file@percent }
-\newlabel{tab:ablation}{{10}{7}{Reward-correction ablation (seed 42, identical pipeline and OOS set). $\Delta $ column: effect of adding the corrections (PAVR-C minus PAVR). The corrections win every training- and format-side metric yet lose the only out-of-sample-adjudicated one}{table.caption.19}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.4.2}By Event Type}{7}{table.caption.17}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsubsection}{\numberline {4.4.3}By Indicator Family $\times $ Horizon}{7}{table.caption.18}\protected@file@percent }
 \newlabel{sec:conditional}{{4.4.4}{7}{Conditional Analysis}{subsubsection.4.4.4}{}}
 \@writefile{toc}{\contentsline {subsubsection}{\numberline {4.4.4}Conditional Analysis}{7}{subsubsection.4.4.4}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {4.5}RQ4: Reward Hacking and Failure Modes}{7}{subsection.4.5}\protected@file@percent }
 \newlabel{sec:cases}{{4.5}{7}{RQ4: Reward Hacking and Failure Modes}{subsection.4.5}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {10}{\ignorespaces Reward-correction ablation (seed 42, identical pipeline and OOS set). $\uparrow $/$\downarrow $: higher/lower is better; bold marks the better value per arrowed row (ECE equivalent). Training reward is a proxy diagnostic, hence no arrow. $\Delta $: PAVR-C minus PAVR. The corrections win every training- and format-side metric yet lose the only out-of-sample-adjudicated one.}}{7}{table.caption.19}\protected@file@percent }
+\newlabel{tab:ablation}{{10}{7}{Reward-correction ablation (seed 42, identical pipeline and OOS set). $\uparrow $/$\downarrow $: higher/lower is better; bold marks the better value per arrowed row (ECE equivalent). Training reward is a proxy diagnostic, hence no arrow. $\Delta $: PAVR-C minus PAVR. The corrections win every training- and format-side metric yet lose the only out-of-sample-adjudicated one}{table.caption.19}{}}
 \@writefile{toc}{\contentsline {section}{\numberline {5}Discussion}{7}{section.5}\protected@file@percent }
 \newlabel{sec:audit}{{5}{7}{Discussion}{section.5}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {6}Conclusion and Future Work}{7}{section.6}\protected@file@percent }
-\newlabel{sec:conclusion}{{6}{7}{Conclusion and Future Work}{section.6}{}}
 \bibstyle{ACM-Reference-Format}
 \bibcite{ball1968}{{1}{}{{}}{{}}}
 \bibcite{fama1969}{{2}{}{{}}{{}}}
@@ -145,19 +143,21 @@
 \bibcite{api2023}{{35}{}{{}}{{}}}
 \@writefile{lot}{\contentsline {table}{\numberline {11}{\ignorespaces Conclusion credibility grading.}}{8}{table.caption.20}\protected@file@percent }
 \newlabel{tab:audit}{{11}{8}{Conclusion credibility grading}{table.caption.20}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {6}Conclusion and Future Work}{8}{section.6}\protected@file@percent }
+\newlabel{sec:conclusion}{{6}{8}{Conclusion and Future Work}{section.6}{}}
 \@writefile{toc}{\contentsline {section}{References}{8}{section*.23}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {A}Case Studies}{8}{appendix.A}\protected@file@percent }
-\newlabel{app:cases}{{A}{8}{Case Studies}{appendix.A}{}}
 \newlabel{tocindent-1}{0pt}
 \newlabel{tocindent0}{0pt}
 \newlabel{tocindent1}{6.25499pt}
 \newlabel{tocindent2}{12.41998pt}
 \newlabel{tocindent3}{18.198pt}
 \providecommand\NAT@force@numbers{}\NAT@force@numbers
+\@writefile{toc}{\contentsline {section}{\numberline {A}Case Studies}{9}{appendix.A}\protected@file@percent }
+\newlabel{app:cases}{{A}{9}{Case Studies}{appendix.A}{}}
 \@writefile{toc}{\contentsline {section}{\numberline {B}Reproducibility}{9}{appendix.B}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {B.1}Code and Data}{9}{subsection.B.1}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {12}{\ignorespaces RLVR training hyperparameters.}}{9}{table.caption.28}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {B.2}Training Configuration}{9}{subsection.B.2}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {12}{\ignorespaces RLVR training hyperparameters.}}{9}{table.caption.28}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {B.3}Evaluation Protocol}{9}{subsection.B.3}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {B.4}Statistical Tests}{9}{subsection.B.4}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {B.5}Ethics Statement}{9}{subsection.B.5}\protected@file@percent }
