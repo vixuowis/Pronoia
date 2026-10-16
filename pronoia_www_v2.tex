@@ -465,17 +465,17 @@ Key findings: (1)~S1 51.6\% $\approx$ random---priors alone cannot trade; (2)~Se
 
 \begin{table}[t]
 \centering\small
-\caption{PAV-RLVR main results (1,034 OOS events, $t=0.6$).}
+\caption{PAV-RLVR main results (1,034 OOS events, $t=0.6$). $\uparrow$/$\downarrow$: higher/lower is better; bold marks the better value per row.}
 \label{tab:main}
 \begin{tabular}{@{}lcc@{}}
 \toprule
 Metric & Base & PAVR \\
 \midrule
-\textbf{Claim ACC} & 0.5729 & \textbf{0.6322} \\
-Brier & 0.2826 & \textbf{0.2539} \\
-ECE & 0.1632 & \textbf{0.1070} \\
-Format & 0.775 & 0.842 \\
-Settled claims & 2,978 & 3,154 \\
+\textbf{Claim ACC} $\uparrow$ & 0.5729 & \textbf{0.6322} \\
+Brier $\downarrow$ & 0.2826 & \textbf{0.2539} \\
+ECE $\downarrow$ & 0.1632 & \textbf{0.1070} \\
+Format compliance $\uparrow$ & 0.775 & \textbf{0.842} \\
+Settled claims $\uparrow$ & 2,978 & \textbf{3,154} \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -484,12 +484,12 @@ Paired bootstrap: $\Delta$(PAVR $-$ base) = +5.93pt (95\% CI [+3.79, +8.07])---C
 
 \begin{table}[t]
 \centering\small
-\caption{Zero-shot API baselines on the same 1,034 OOS events, identical PAV prompt and settlement machinery (temperature 0.6). \emph{Data pending; populated upon completion of the evaluation runs.}}
+\caption{Zero-shot API baselines on the same 1,034 OOS events, identical PAV prompt and settlement machinery (temperature 0.6). $\uparrow$/$\downarrow$: higher/lower is better. \emph{Data pending; populated upon completion of the evaluation runs.}}
 \label{tab:external}
 \setlength{\tabcolsep}{5pt}
 \begin{tabular}{@{}lccccc@{}}
 \toprule
-Model & Params & ACC & Brier & ECE & Format \\
+Model & Params & ACC $\uparrow$ & Brier $\downarrow$ & ECE $\downarrow$ & Format $\uparrow$ \\
 \midrule
 Base (Qwen3-8B) & 8B & 0.573 & 0.283 & 0.163 & 0.775 \\
 PAVR (ours) & 8B+LoRA & \textbf{0.632} & \textbf{0.254} & \textbf{0.107} & 0.842 \\
@@ -507,15 +507,15 @@ Table~\ref{tab:external} adds zero-shot API baselines: five frontier models run 
 
 \begin{table}[t]
 \centering\small
-\caption{PAVR robustness across random seeds (identical pipeline and OOS set). Seed 44 pending; seeds 42--43 already agree closely.}
+\caption{PAVR robustness across random seeds (identical pipeline and OOS set). $\uparrow$/$\downarrow$: higher/lower is better. Seed 44 pending; seeds 42--43 already agree closely.}
 \label{tab:seeds}
 \begin{tabular}{@{}lccc@{}}
 \toprule
 Seed & 42 & 43 & 44 \\
 \midrule
-Claim ACC & 0.6322 & 0.6437 & -- \\
-Brier & 0.2539 & 0.2493 & -- \\
-ECE & 0.1070 & 0.1008 & -- \\
+Claim ACC $\uparrow$ & 0.6322 & 0.6437 & -- \\
+Brier $\downarrow$ & 0.2539 & 0.2493 & -- \\
+ECE $\downarrow$ & 0.1070 & 0.1008 & -- \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -619,18 +619,18 @@ RQ4 asks what failure modes reward design and event reasoning expose. Two are do
 
 \begin{table}[t]
 \centering\small
-\caption{Reward-correction ablation (seed 42, identical pipeline and OOS set). $\Delta$ column: effect of adding the corrections (PAVR-C minus PAVR). The corrections win every training- and format-side metric yet lose the only out-of-sample-adjudicated one.}
+\caption{Reward-correction ablation (seed 42, identical pipeline and OOS set). $\uparrow$/$\downarrow$: higher/lower is better; bold marks the better value per arrowed row (ECE equivalent). Training reward is a proxy diagnostic, hence no arrow. $\Delta$: PAVR-C minus PAVR. The corrections win every training- and format-side metric yet lose the only out-of-sample-adjudicated one.}
 \label{tab:ablation}
 \setlength{\tabcolsep}{5pt}
 \begin{tabular}{@{}lccc@{}}
 \toprule
  & PAVR & PAVR-C & $\Delta$ \\
 \midrule
-OOS claim ACC & \textbf{0.632} & 0.609 & $-$2.29pt \\
-Training reward (last 200 steps) & 0.69 & \textbf{0.90} & +0.21 \\
-Format compliance & 0.842 & \textbf{0.997} & +15.5pt \\
-Settled claims & 3,154 & 4,056 & +902 \\
-ECE & 0.1070 & 0.1064 & $-$0.0006 \\
+OOS claim ACC $\uparrow$ & \textbf{0.632} & 0.609 & $-$2.29pt \\
+Training reward (last 200 steps, proxy) & 0.69 & 0.90 & +0.21 \\
+Format compliance $\uparrow$ & 0.842 & \textbf{0.997} & +15.5pt \\
+Settled claims $\uparrow$ & 3,154 & \textbf{4,056} & +902 \\
+ECE $\downarrow$ & 0.1070 & 0.1064 & $-$0.0006 \\
 \bottomrule
 \end{tabular}
 \end{table}
