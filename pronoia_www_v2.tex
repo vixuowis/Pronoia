@@ -522,7 +522,7 @@ ECE & 0.1070 & 0.1008 & -- \\
 
 Seed robustness is summarized in Table~\ref{tab:seeds}. The two completed seeds agree within 1.2pt of claim accuracy and below 0.005 Brier, addressing the single-seed risk flagged in \S\ref{sec:audit}; a third seed (44) is running to complete the matrix.
 
-\textbf{Ablation (reward corrections):} Adding the five residual bias corrections of \S\ref{sec:rlvr-training} to the reward (variant PAVR-C) yields 0.6093 claim ACC---\emph{below} PAVR by 2.29pt (95\% CI [+0.78, +3.79]); event-level: PAVR wins 394, PAVR-C 335, tie 302. PAVR-C's only gains are format compliance (0.997 vs 0.842) and settled-claim volume (4,056 vs 3,154); calibration is equivalent (ECE 0.1064 vs 0.1070).
+\textbf{Ablation (reward corrections):} Adding the five residual bias corrections of \S\ref{sec:rlvr-training} to the reward (variant PAVR-C) yields 0.609 claim ACC---\emph{below} PAVR by 2.29pt (95\% CI [+0.78, +3.79]). PAVR-C's gains are confined to format compliance and settled-claim volume; calibration is equivalent. Table~\ref{tab:ablation} consolidates the full comparison.
 
 \subsection{RQ3: Where Do the Gains Concentrate?}
 \label{sec:analysis}
@@ -614,35 +614,27 @@ Significance family strongest (+17.7pt to 79.1\%): most A-share CARs insignifica
 
 RQ4 asks what failure modes reward design and event reasoning expose. Two are documented.
 
-\textbf{Reward hacking.} Corrections' format benefit (+15.5pt) is recoverable by inference-time re-sampling. Training reward (PAVR-C 0.90 vs PAVR 0.69) \emph{inversely correlates} with OOS accuracy (0.609 vs 0.632)---the model optimizes proxy signals over claim quality. KL, length, and truncation diagnostics are healthy and comparable, ruling out instability. \textbf{Implication: training reward trend cannot validate reward components; OOS adjudication is the only mechanism.}
+\textbf{Reward hacking.} Corrections' format benefit (+15.5pt, Table~\ref{tab:ablation}) is recoverable by inference-time re-sampling. Training reward \emph{inversely correlates} with OOS accuracy---the model optimizes proxy signals over claim quality. KL, length, and truncation diagnostics are healthy and comparable, ruling out instability. \textbf{Implication: training reward trend cannot validate reward components; OOS adjudication is the only mechanism.}
 
-\begin{figure}[t]
-\centering
-\begin{tikzpicture}
-\begin{axis}[
-    ybar=2pt,
-    bar width=0.55cm,
-    width=7.6cm,
-    height=4.6cm,
-    ymin=0, ymax=1.0,
-    ylabel={Score},
-    symbolic x coords={PAVR-C, PAVR},
-    xtick=data,
-    nodes near coords,
-    every node near coord/.append style={font=\footnotesize},
-    legend style={at={(0.5,-0.16)}, anchor=north, legend columns=-1},
-    ymajorgrids
-]
-\addplot[fill=orange!50] coordinates {(PAVR-C,0.90) (PAVR,0.69)};
-\addplot[fill=blue!40] coordinates {(PAVR-C,0.609) (PAVR,0.632)};
-\legend{Training reward, OOS claim ACC}
-\end{axis}
-\end{tikzpicture}
-\caption{Reward--performance divergence. PAVR-C attains higher training reward (0.90 vs 0.69) yet lower OOS claim accuracy (0.609 vs 0.632)---the model optimizes proxy reward signals instead of claim quality.}
-\label{fig:divergence}
-\end{figure}
+\begin{table}[t]
+\centering\small
+\caption{Reward-correction ablation (seed 42, identical pipeline and OOS set). $\Delta$ column: effect of adding the corrections (PAVR-C minus PAVR). The corrections win every training- and format-side metric yet lose the only out-of-sample-adjudicated one.}
+\label{tab:ablation}
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+ & PAVR & PAVR-C & $\Delta$ \\
+\midrule
+OOS claim ACC & \textbf{0.632} & 0.609 & $-$2.29pt \\
+Training reward (last 200 steps) & 0.69 & \textbf{0.90} & +0.21 \\
+Format compliance & 0.842 & \textbf{0.997} & +15.5pt \\
+Settled claims & 3,154 & 4,056 & +902 \\
+ECE & 0.1070 & 0.1064 & $-$0.0006 \\
+\bottomrule
+\end{tabular}
+\end{table}
 
-Figure~\ref{fig:divergence} visualizes the divergence: the variant with the higher training reward delivers the lower OOS accuracy.
+Table~\ref{tab:ablation} consolidates the ablation: the corrected reward wins every training-side and format-side metric---higher training reward, near-perfect format compliance, more settled claims---yet loses the only metric adjudicated out of sample. The ACC gap is significant (95\% CI [+0.78, +3.79], paired event-level bootstrap; event-level win/tie/loss 394/302/335 in PAVR's favor). The variant with the higher training reward delivers the lower OOS accuracy.
 
 \textbf{Reasoning failures.} Claim-level tracing of OOS events (three representative cases in Appendix~\ref{app:cases}; full synthesis there) reveals two recurring patterns: (i)~failures concentrate in ``bullish text + T0 positive reaction'' configurations, where the model's prior is momentum but A-share reality is mean reversion---risk paragraphs are \emph{cognitively correct but behaviorally inert}, never converting into hedging claims; and (ii)~upstream context with strong priors contaminates downstream reasoning (individual-stock weakness extrapolated to benchmark direction, near coin-flip), while cross-indicator claims are silently dropped. The success case shows the complementary mechanism: context absorption, claim diversity, and willingness to bet FALSE.
 
