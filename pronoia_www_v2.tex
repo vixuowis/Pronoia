@@ -121,7 +121,7 @@ Two gaps separate the current state from paradigm~(c).
 
 \textbf{Ch1: events are stripped of structure and studied in isolation.} The five-step event-study pipeline~\cite{fama1969}---define event, estimation window, market model, AR/CAR, significance test---has remained structurally unchanged for over half a century~\cite{ball1968}. It collapses announcements into 0/1 dummies, discarding magnitude, wording, and the market-surprise component that actually moves prices~\cite{kuttner2001}; and it treats events as independent~\cite{kolari2010}, although markets react through multi-layer channels (``rate cut $\to$ developer financing improves $\to$ building-material demand rises'') and systematically underreact to indirect effects~\cite{cohen2008}. The pipeline has no slot for either.
 
-\textbf{Ch2: LLM reasoning has no external ground truth.} LLM analyses address Ch1 but validate with LLM-as-judge: evaluator and evaluatee share error modes, plausible wording games the judge, and ``sounds reasonable'' $\neq$ ``is correct.'' Without an objective settlement signal, reasoning quality can be neither measured nor improved by training.
+\textbf{Ch2: LLM reasoning has no external ground truth.} LLM analyses address Ch1 but validate with LLM-as-judge: evaluator and evaluatee share error modes, plausible wording games the judge, and ``sounds reasonable'' $\neq$ ``is correct.'' We measure this gap directly in \S\ref{sec:judgevalidity}: given identical information, an independent judge agrees with the evaluatee on 87.7\% of claims yet reaches only $\kappa = 0.199$ against market truth. Without an objective settlement signal, reasoning quality can be neither measured nor improved by training.
 
 These gaps motivate four research questions, answered in \S\ref{sec:experiments}:
 \begin{itemize}
@@ -412,26 +412,28 @@ Known biases: US near-absent in OOS; no macro events in OOS; scope limited to CN
 \textbf{Integrity protocol:} (1)~Strict as\_of: features use only pre-event data, audited; (2)~Time split only, OOS once; (3)~Event-level paired bootstrap (2,000 resamples, weighted); (4)~Claim accuracy weighted by n\_settleable; (5)~Calibration: Brier + 10-bin ECE + confidence-bin actual accuracy.
 
 \subsubsection{Settlement Validity: LLM-as-Judge vs. Market}
+\label{sec:judgevalidity}
 
 PAV's premise (Ch2) is that market settlement cannot be replaced by LLM-as-judge. We test this premise directly: an independent judge model, given exactly the same pre-event information as the evaluatee (zero leakage), rules on a sample of already-settled claims; its verdicts are scored against market ground truth.
 
 \begin{table}[t]
 \centering\small
-\caption{Judge-vs-market validity on sampled settled claims (judge sees the same information as the evaluatee). \emph{Data pending; populated upon completion of the evaluation runs.}}
+\caption{Judge-vs-market validity. An independent judge (GLM-5.3), given the same pre-event information as the evaluatee (zero leakage), rules on 500 sampled settled claims (432 parse into valid verdicts); verdicts are scored against market ground truth.}
 \label{tab:judge}
 \begin{tabular}{@{}lc@{}}
 \toprule
 Metric & Value \\
 \midrule
-Judge accuracy (vs.\ market truth) & -- \\
-Cohen's $\kappa$ (judge vs.\ truth) & -- \\
-Agreement (judge vs.\ evaluatee) & -- \\
-Settled claims judged & -- \\
+Judge accuracy (vs.\ market truth) & 0.625 \\
+Cohen's $\kappa$ (judge vs.\ truth) & 0.199 \\
+Agreement (judge vs.\ evaluatee) & 0.877 \\
+Evaluatee accuracy (same claims) & 0.613 \\
+Settled claims judged & 432 / 500 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Table~\ref{tab:judge} will report judge accuracy, judge--truth agreement, and judge--evaluatee agreement. The motivating hypothesis: if the judge agrees with the evaluatee far more than with the market, then judge verdicts measure \emph{plausibility}, not correctness---and only market settlement provides the training signal RLVR requires.
+Table~\ref{tab:judge} confirms the premise quantitatively: the judge agrees with the evaluatee on 87.7\% of claims, yet its agreement with market truth is weak ($\kappa = 0.199$) and its accuracy (62.5\%) barely exceeds the evaluatee's own (61.3\% on the same claims). Given identical information, the judge tracks the evaluatee far more closely than it tracks the market---its verdicts measure \emph{plausibility}, not correctness. Only settlement by the market itself supplies the objective signal that RLVR requires.
 
 \subsection{RQ1: Signal Validation via Rule-Driven Backtest}
 \label{sec:backtest}
