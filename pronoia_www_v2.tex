@@ -629,7 +629,7 @@ Significance family strongest (+17.7pt to 79.1\%): most A-share CARs insignifica
 \textbf{Claim count:} 2--3 best (0.690/0.656); 4 drops to 0.569. Constraint should narrow to 3--4.
 \textbf{Direction:} FALSE-side \textbf{0.709} (n=1,812) vs TRUE-side \textbf{0.530} (n=1,342). Training reduces TRUE ratio 0.525$\to$0.425---beneficial RL product matching task asymmetry.
 \textbf{Extremes:} 293 all-correct (28.3\%, M\&A/earnings); 55 all-wrong (5.3\%, beat/turnaround).
-\textbf{Calibration:} Non-monotonic---0.75--0.85 bin actual accuracy only 0.53--0.59 (main ECE contributor); 0.80/0.90 ends reliable (0.777/0.926). Platt post-hoc: ECE 0.085$\to$0.036.
+\textbf{Calibration:} Non-monotonic---0.75--0.85 bin actual accuracy only 0.53--0.59 (main ECE contributor); 0.80/0.90 ends reliable (0.777/0.926). Platt post-hoc: ECE 0.085$\to$0.036. \textbf{Threshold--coverage:} sweeping the confidence gate, Base accuracy is flat (0.55--0.56) while PAVR rises to 0.646 at $t\!=\!0.80$ and 0.886 at $t\!=\!0.90$ (1.1\% coverage)---RLVR yields discriminative confidence despite the miscalibrated mid-band.
 
 \textbf{Profile:} Excels at FALSE, long-horizon t30, significance, M\&A/guidance, 2--3 claims, confidence 0.80/0.90. Struggles with TRUE momentum, benchmark direction, hard-negatives, 4+ claims, 0.75--0.85 confidence.
 
@@ -667,7 +667,7 @@ Table~\ref{tab:ablation} consolidates the ablation: the corrected reward wins ev
 
 The two experiments validate one proposition at three levels. First, priors cannot trade: the rule backtest's unconfirmed step S1 (51.6\%) and the untuned base model (0.573) agree that type-level priors carry no exploitable signal. Second, market confirmation purifies: the +18.7pp jump when sector confirmation enters the rule pipeline and the +5.9pt jump when market settlement enters training are the same mechanism---a verifiable filter that removes the reasoning steps the environment can refute---applied at two different sites. Third, the environment demands online reasoning: ``graph once'' cannot anticipate indirect effects, which is why we learn propagation rather than hard-code it, and reward hacking shows that even the reward function itself requires OOS adjudication.
 
-\textbf{Limitations.} The main OOS split contains only seven US events, so we report the separate 44-event US panel of Table~\ref{tab:usext} as an exploratory out-of-market probe; being small, it corroborates claim-level accuracy only and does not license headline US conclusions. The 33 rule events and 4,965 RL events support the claim-level analyses reported but not larger structures, such as an isolated propagation-graph ablation. Each event is sampled once, leaving sampling variance unquantified. TRUE-side claims remain weak in A-shares, where incomplete short-selling mechanisms make bullish reasoning easier to verify than bearish hedging. Seed robustness rests on two concordant seeds at submission time, with the third completing.
+\textbf{Limitations.} The main OOS split contains only seven US events, so we report the separate 44-event US panel of Table~\ref{tab:usext} as an exploratory out-of-market probe; being small, it corroborates claim-level accuracy only and does not license headline US conclusions. The 33 rule events and 4,965 RL events support the claim-level analyses reported but not larger structures, such as an isolated propagation-graph ablation. Each event is sampled once, leaving sampling variance unquantified. TRUE-side claims remain weak in A-shares, where incomplete short-selling mechanisms make bullish reasoning easier to verify than bearish hedging. Seed robustness holds across three seeds (Table~\ref{tab:seeds}): ACC within 1.2pt, Brier within 0.008.
 
 \textbf{Validity audit.} Table~\ref{tab:audit} grades each headline conclusion by evidence strength---the RLVR gain and the structure findings are High, the confidence-band improvement is Verify-grade (self-selected at $n(0.90)$), and US conclusions are Unusable. The grading also disciplines how the PAVR-C result should be read: ``corrections are harmful'' overstates a single-seed comparison with three confounders (CI lower bound +0.78); ``corrections did not produce expected benefits'' is what the data license. Three methodological risks remain open: single-sampling variance (5$\times$ resampling on 200 events recommended), multiple comparisons across trading-filter slices (FDR/Bonferroni plus a holdout), and un-audited as\_of strictness---the one risk that, if violated, would overturn every conclusion.
 
@@ -859,19 +859,14 @@ PRONOIA is open-source under MIT license:
 
 \subsection{Training Configuration}
 
-Training uses Qwen3-8B (bf16, seed 42) with LoRA (rank 16, $\alpha$=32, dropout 0.05), AdamW at LR 1e-5 with cosine annealing; batch $8/{\times}2$ grad-accum $=16$/step, $G$=4, temp 0.7, one epoch (1,241 steps $\approx$ 4,965 events) on a single RTX 4090 (48GB), 10--12 h/condition.
+Qwen3-8B (bf16, seed 42), LoRA (rank 16, $\alpha$=32, dropout 0.05), AdamW LR 1e-5 cosine, batch 8$\times$2 accum$=$16, $G$=4, temp 0.7, 1 epoch (1,241 steps) on one RTX 4090 (48GB), 10--12\,h/condition.
 
 \subsection{Evaluation Protocol and Statistical Tests}
 
-Models train on events before 2024-01 and are evaluated once on later events (no shuffling; no cherry-picking). All features use only pre-event data, audited for lookahead bias. Comparisons use paired bootstrap (2,000 event-level resamples, weighted by settled-claim count) with 95\% percentile intervals and FDR control at $\alpha$=0.05; calibration is reported as Brier score, 10-bin ECE, and confidence-bin accuracy.
+Train on pre-2024-01 events, evaluate once on later events; no shuffling or cherry-picking; pre-event features only (lookahead-audited). Paired bootstrap (2,000 event-level resamples, settled-claim weighted), 95\% percentile intervals, FDR $\alpha$=0.05; calibration via Brier, 10-bin ECE, confidence-bin accuracy.
 
 \subsection{Ethics Statement}
 
-\begin{itemize}
-    \item All data from public sources (akshare, yfinance); market data anonymized. No live trading; all evaluation is on historical data.
-    \item Full transparency: reward hacking, overconfidence bias, and systematic failure modes are documented as negative results, not hidden.
-    \item US events comprise only 7 of 1,034 main-OOS events; the separate 44-event US panel (Table~\ref{tab:usext}) is exploratory, and headline conclusions remain limited to A-shares.
-    \item LLM API keys stored only in backend \texttt{.env}, never transmitted to browser or logged.
-\end{itemize}
+All data from public sources (akshare, yfinance), anonymized; no live trading, historical evaluation only. Reward hacking and failure modes are documented as negative results. The 44-event US panel is exploratory; headline conclusions are limited to A-shares (Limitation). API keys stay in backend \texttt{.env}, never exposed.
 
 \end{document}
