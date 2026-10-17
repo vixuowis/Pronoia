@@ -484,7 +484,7 @@ Paired bootstrap: $\Delta$(PAVR $-$ base) = +5.93pt (95\% CI [+3.79, +8.07])---C
 
 \begin{table}[t]
 \centering\small
-\caption{Zero-shot API baselines on the same 1,034 OOS events, identical PAV prompt and settlement machinery (temperature 0.6). $\uparrow$/$\downarrow$: higher/lower is better; bold marks the best value per column. GLM and DeepSeek-V4-Pro rows from completed runs; DeepSeek-V4-Flash and Kimi-K3 rows pending.}
+\caption{Zero-shot API baselines on the same 1,034 OOS events, identical PAV prompt and settlement machinery (temperature 0.6). $\uparrow$/$\downarrow$: higher/lower is better; bold marks the best value per column. All rows from completed runs.}
 \label{tab:external}
 \setlength{\tabcolsep}{5pt}
 \begin{tabular}{@{}lccccc@{}}
@@ -495,10 +495,10 @@ Base (Qwen3-8B) & 8B & 0.573 & 0.283 & 0.163 & 0.775 \\
 PAVR (ours) & 8B+LoRA & 0.632 & 0.254 & 0.107 & 0.842 \\
 \midrule
 GLM-5.3 & -- & \textbf{0.643} & \textbf{0.228} & 0.033 & 0.972 \\
-GLM-5.3-Flash & -- & 0.621 & 0.232 & \textbf{0.015} & \textbf{0.991} \\
+GLM-5.3-Flash & -- & 0.621 & 0.232 & \textbf{0.015} & 0.991 \\
 DeepSeek-V4-Pro & -- & 0.593 & 0.239 & 0.018 & 0.995 \\
-DeepSeek-V4-Flash & -- & -- & -- & -- & -- \\
-Kimi-K3 & -- & -- & -- & -- & -- \\
+DeepSeek-V4-Flash & -- & 0.570 & 0.244 & 0.052 & 0.999 \\
+Kimi-K3 & -- & 0.615 & 0.235 & 0.019 & \textbf{1.000} \\
 \bottomrule
 \end{tabular}
 \end{table}
